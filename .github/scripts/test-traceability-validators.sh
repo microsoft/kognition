@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMMIT_VALIDATOR="${ROOT_DIR}/.github/scripts/validate-commit-messages.sh"
 PR_VALIDATOR="${ROOT_DIR}/.github/scripts/validate-pr-description.sh"
+IMPORT_SHA="adb7304760be417da048ec211c207bef8e6ab5c8"
 
 fail() {
   echo "traceability validator test failed: $1"
@@ -15,6 +16,10 @@ fail() {
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
+
+if ! (cd "${ROOT_DIR}" && bash "${COMMIT_VALIDATOR}" "${IMPORT_SHA}^!" >/dev/null); then
+  fail "expected the historical repository import to pass"
+fi
 
 pushd "${TMP_DIR}" >/dev/null
 
@@ -30,8 +35,9 @@ VALID_SHA="$(git rev-parse HEAD)"
 
 printf "changed\n" >> sample.txt
 git add sample.txt
-git commit -q -m "fix stuff"
+git commit -q -m "chore: initialize Kognition repository"
 INVALID_SHA="$(git rev-parse HEAD)"
+INVALID_ROOT_SHA="$(git commit-tree "${VALID_SHA}^{tree}" -m "chore: initialize Kognition repository")"
 
 if ! bash "${COMMIT_VALIDATOR}" "${VALID_SHA}^!" >/dev/null; then
   fail "expected valid commit subject to pass"
@@ -46,6 +52,12 @@ if [[ ${STATUS} -eq 0 ]]; then
 fi
 if [[ "${OUTPUT}" != *"Invalid commit message"* ]]; then
   fail "expected actionable invalid commit message output"
+fi
+if bash "${COMMIT_VALIDATOR}" "${INVALID_ROOT_SHA}^!" >/dev/null; then
+  fail "expected an unrelated invalid root commit to fail"
+fi
+if bash "${COMMIT_VALIDATOR}" "${INVALID_SHA}" >/dev/null; then
+  fail "expected an invalid commit in a range to fail"
 fi
 
 popd >/dev/null
