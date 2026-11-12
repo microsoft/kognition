@@ -366,7 +366,9 @@ func (h *Host) discover() error {
 
 		h.mu.Lock()
 		connected, exists := h.plugins[socketPath]
-		replaced := exists && connected.socketFile != nil && !os.SameFile(connected.socketFile, socketFile)
+		// A replacement can reuse the previous socket's inode.
+		replaced := exists && connected.socketFile != nil &&
+			(!os.SameFile(connected.socketFile, socketFile) || !connected.socketFile.ModTime().Equal(socketFile.ModTime()))
 		var candidate *PluginConnection
 		var staleConn *grpc.ClientConn
 		if !exists || replaced {
