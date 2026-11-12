@@ -13,19 +13,20 @@ if [[ -z "${RANGE}" ]]; then
   exit 2
 fi
 
-# Collect commit IDs and subject lines. Oldest first gives stable output.
-mapfile -t COMMITS < <(git log --format='%H%x09%s' --reverse "${RANGE}")
-
-if [[ ${#COMMITS[@]} -eq 0 ]]; then
+# Capture git's exit status so invalid revisions cannot pass as empty ranges.
+COMMIT_LOG="$(git log --format='%H%x09%s' --reverse "${RANGE}")"
+if [[ -z "${COMMIT_LOG}" ]]; then
   echo "No commits found in range: ${RANGE}"
   exit 0
 fi
+mapfile -t COMMITS <<< "${COMMIT_LOG}"
 
 FAILED=0
+CONVENTIONAL_SUBJECT='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^()[:space:]]+\))?!?:[[:space:]]+[^[:space:]]'
 for COMMIT in "${COMMITS[@]}"; do
   IFS=$'\t' read -r SHA SUBJECT <<< "${COMMIT}"
-  # The initial repository import has no task ID.
-  if [[ "${SHA}" == "adb7304760be417da048ec211c207bef8e6ab5c8" ]]; then
+
+  if [[ "${SUBJECT}" == "Initial plan" ]] && git diff-tree --root --quiet -r -m "${SHA}"; then
     continue
   fi
 
@@ -34,9 +35,10 @@ for COMMIT in "${COMMITS[@]}"; do
     continue
   fi
 
-  if [[ ! "${SUBJECT}" =~ ^T-[0-9]{4}([[:space:]:-]|$) ]]; then
+  if [[ ! "${SUBJECT}" =~ ^T-[0-9]{4}([[:space:]:-]|$) && ! "${SUBJECT}" =~ ${CONVENTIONAL_SUBJECT} ]]; then
     echo "Invalid commit message: '${SUBJECT}'"
-    echo "Expected format: starts with T-nnnn (example: T-0001: implement API server)"
+    echo "Expected a Conventional Commit (example: fix(ci): validate inputs) or a T-nnnn prefix (example: T-0001: implement API server)."
+    echo "Only empty 'Initial plan' commits are exempt from these formats, alongside merge/revert commits."
     FAILED=1
   fi
 done

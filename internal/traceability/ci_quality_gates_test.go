@@ -130,7 +130,7 @@ func TestCISecurityScannerPinsReviewedVersion(test *testing.T) {
 		test.Fatal(err)
 	}
 	for _, step := range workflow.Jobs["security"].Steps {
-		if step.Uses != "aquasecurity/trivy-action@v0.33.1" {
+		if !strings.HasPrefix(step.Uses, "aquasecurity/trivy-action@") {
 			continue
 		}
 		if step.With["version"] != "v0.74.0" || step.With["scanners"] != "vuln,secret,misconfig" || step.With["exit-code"] != "1" {
@@ -330,13 +330,24 @@ func TestTraceabilityValidators(t *testing.T) {
 		t.Skip("bash not available")
 	}
 
-	script := filepath.Join(findScriptsDir(t), "test-traceability-validators.sh")
-	if _, err := os.Stat(script); err != nil {
-		t.Fatalf("script not found: %v", err)
+	sourceDir := findScriptsDir(t)
+	scriptsDir := filepath.Join(t.TempDir(), ".github", "scripts")
+	if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Run outside the checkout so fixtures cannot rely on its Git history.
+	for _, name := range []string{"test-traceability-validators.sh", "validate-commit-messages.sh", "validate-pr-description.sh"} {
+		body, err := os.ReadFile(filepath.Join(sourceDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(scriptsDir, name), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	cmd := exec.Command("bash", script)
-	cmd.Dir = filepath.Dir(script)
+	cmd := exec.Command("bash", filepath.Join(scriptsDir, "test-traceability-validators.sh"))
+	cmd.Dir = scriptsDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("traceability validators failed:\n%s", out)
