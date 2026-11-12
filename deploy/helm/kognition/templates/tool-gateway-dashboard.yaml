@@ -1,0 +1,59 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- $toolGateway := default (dict) .Values.toolGateway }}
+{{- $monitoring := default (dict) $toolGateway.monitoring }}
+{{- $dashboard := default (dict) $monitoring.grafanaDashboard }}
+{{- if and (eq .Values.mode "kubernetes") $toolGateway.enabled $dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kognition.fullname" . }}-tool-gateway-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    {{- with $dashboard.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  tool-gateway.json: |
+    {
+      "title": "Tool Gateway Operations",
+      "uid": "tool-gateway-operations",
+      "schemaVersion": 39,
+      "refresh": "5s",
+      "time": {"from": "now-15m", "to": "now"},
+      "panels": [
+        {
+          "title": "Invocations (15m)",
+          "type": "stat",
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+          "targets": [{"expr": "sum(increase(kognition_tool_gateway_invocations_total[15m]))"}]
+        },
+        {
+          "title": "Invocation Outcome Mix",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 6, "y": 0},
+          "targets": [{"expr": "sum by (outcome) (rate(kognition_tool_gateway_invocations_total[5m]))"}]
+        },
+        {
+          "title": "P95 Invocation Latency",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+          "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(kognition_tool_gateway_invocation_duration_seconds_bucket[5m])))"}]
+        },
+        {
+          "title": "Resilience Events (15m)",
+          "type": "stat",
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 8},
+          "targets": [{"expr": "sum(increase(kognition_tool_gateway_resilience_events_total[15m]))"}]
+        },
+        {
+          "title": "Resilience Event Mix",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 18, "x": 6, "y": 8},
+          "targets": [{"expr": "sum by (reason) (rate(kognition_tool_gateway_resilience_events_total[5m]))"}]
+        }
+      ]
+    }
+{{- end }}

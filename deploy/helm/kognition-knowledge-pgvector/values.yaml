@@ -1,0 +1,23 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+adapter:
+  enabled: false
+  image: ""
+  imagePullPolicy: IfNotPresent
+  watchNamespace: default
+  tlsSecretName: ""
+  clientPeerURI: ""
+  databaseAddress: ""
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+  networkPolicy:
+    enabled: true
+    ciliumApiServerEgress: false
+    kubernetesApiEgressCIDRs: []
+    clients: []
+    kubeletProbeIngressCIDRs: []
+    databaseNamespace: kognition-system
+    databasePodSelector: {}
+    databasePort: 5432

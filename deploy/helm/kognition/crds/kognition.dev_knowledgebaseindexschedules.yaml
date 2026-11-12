@@ -1,0 +1,202 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: knowledgebaseindexschedules.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: KnowledgeBaseIndexSchedule
+    listKind: KnowledgeBaseIndexScheduleList
+    plural: knowledgebaseindexschedules
+    shortNames: [kbsched]
+    singular: knowledgebaseindexschedule
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.knowledgeBaseName
+      name: KnowledgeBase
+      type: string
+    - jsonPath: .spec.schedule
+      name: Schedule
+      type: string
+    - jsonPath: .spec.suspend
+      name: Suspend
+      type: boolean
+    - jsonPath: .status.lastScheduleTime
+      name: LastRun
+      type: string
+    - jsonPath: .status.lastSuccessfulTime
+      name: LastSuccess
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        required: [spec]
+        description: |-
+          KnowledgeBaseIndexSchedule declares a cron schedule that produces
+          KnowledgeBaseIndexRun objects on each tick.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KnowledgeBaseIndexScheduleSpec defines the desired scheduling
+              behaviour.
+            properties:
+              concurrencyPolicy:
+                description: |-
+                  ConcurrencyPolicy controls what happens when the previous run has not
+                  finished. One of Allow, Forbid (default), or Replace.
+                enum:
+                - Allow
+                - Forbid
+                - Replace
+                type: string
+              failedRunsHistoryLimit:
+                minimum: 0
+                description: FailedRunsHistoryLimit caps retained failed runs. Defaults
+                  to 1.
+                format: int32
+                type: integer
+              knowledgeBaseName:
+                description: |-
+                  KnowledgeBaseName references the target KnowledgeBase in the same
+                  namespace.
+                type: string
+              runTemplate:
+                description: |-
+                  RunTemplate is the KnowledgeBaseIndexRunSpec used to instantiate each
+                  child IndexRun. Its knowledgeBaseName is ignored.
+                properties:
+                  knowledgeBaseName:
+                    description: |-
+                      KnowledgeBaseName references the KnowledgeBase in the same namespace to
+                      reindex.
+                    type: string
+                  ttlSecondsAfterFinished:
+                    minimum: 0
+                    description: |-
+                      TTLSecondsAfterFinished, when set, causes the reconciler to delete the
+                      IndexRun this many seconds after it enters a terminal phase.
+                    format: int32
+                    type: integer
+                type: object
+              schedule:
+                description: |-
+                  Schedule is a standard 5-field cron expression or a supported descriptor
+                  such as @every 6h, evaluated in UTC.
+                type: string
+              startingDeadlineSeconds:
+                minimum: 0
+                description: StartingDeadlineSeconds, when set, skips ticks older
+                  than this.
+                format: int64
+                type: integer
+              successfulRunsHistoryLimit:
+                minimum: 0
+                description: SuccessfulRunsHistoryLimit caps retained successful runs.
+                  Defaults to 3.
+                format: int32
+                type: integer
+              suspend:
+                description: Suspend, when true, prevents new runs from being created.
+                type: boolean
+            required:
+            - knowledgeBaseName
+            - schedule
+            type: object
+          status:
+            description: KnowledgeBaseIndexScheduleStatus reports the observed state
+              of a schedule.
+            properties:
+              active:
+                description: |-
+                  Active lists IndexRuns owned by this Schedule that have not reached a
+                  terminal phase.
+                items:
+                  description: LocalObjectReference references a resource by name
+                    within the same namespace.
+                  properties:
+                    name:
+                      description: Name is the name of the referenced resource.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+              conditions:
+                items:
+                  properties:
+                    lastTransitionTime:
+                      format: date-time
+                      type: string
+                    message:
+                      type: string
+                    observedGeneration:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      type: string
+                    status:
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastScheduleTime:
+                description: |-
+                  LastScheduleTime is the RFC 3339 timestamp of the most recent tick
+                  this reconciler acted on.
+                type: string
+              lastSuccessfulTime:
+                description: |-
+                  LastSuccessfulTime is the completion time of the most recent successful
+                  run.
+                type: string
+              nextScheduleTime:
+                description: NextScheduleTime is the RFC 3339 timestamp of the next
+                  planned tick.
+                type: string
+              phase:
+                description: Phase is Pending | Ready | Suspended | Failed.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

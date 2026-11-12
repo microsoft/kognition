@@ -1,0 +1,192 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: runtimeapprovalquotatickets.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: RuntimeApprovalQuotaTicket
+    listKind: RuntimeApprovalQuotaTicketList
+    plural: runtimeapprovalquotatickets
+    singular: runtimeapprovalquotaticket
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.chargedBytes
+      name: Bytes
+      type: integer
+    - jsonPath: .spec.retentionDeadline
+      name: Retain Until
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          RuntimeApprovalQuotaTicket is the bounded per-logical-invocation accounting
+          object for the Kubernetes RuntimeApproval quota ledger. It is created under
+          a workspace Lease before the RuntimeApproval it charges, covers the live
+          record and its tombstone with a single charge, and is retired only after
+          the orphan reconciler proves both are gone.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              RuntimeApprovalQuotaTicketSpec is intentionally small: the ADR bounds a
+              ticket to at most 2 KiB serialized. The binding descriptor is copied so a
+              retention pass can validate the associated binding key is still retained.
+            properties:
+              agentRef:
+                properties:
+                  kind:
+                    enum: [Agent]
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                  name:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  namespace:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  resourceVersion:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  scope:
+                    enum:
+                    - Namespaced
+                    type: string
+                  uid:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - kind
+                - name
+                - resourceVersion
+                - scope
+                - uid
+                type: object
+              binding:
+                properties:
+                  algorithm:
+                    enum:
+                    - HMAC-SHA-256
+                    type: string
+                  domain:
+                    enum:
+                    - kognition.dev/runtime-approval/action/v1
+                    type: string
+                  epoch:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  format:
+                    enum:
+                    - kognition-runtime-action-v1
+                    type: string
+                  keyVersion:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  tag:
+                    maxLength: 64
+                    minLength: 43
+                    type: string
+                required:
+                - algorithm
+                - domain
+                - epoch
+                - format
+                - keyVersion
+                - tag
+                type: object
+              chargedBytes:
+                format: int64
+                minimum: 1
+                type: integer
+              compactedAt:
+                format: date-time
+                type: string
+              createdAt:
+                format: date-time
+                type: string
+              invocationID:
+                maxLength: 128
+                minLength: 1
+                type: string
+              phase:
+                description: |-
+                  RuntimeApprovalQuotaTicketPhase names whether the underlying record is still
+                  a live RuntimeApproval or has already been compacted into a
+                  RuntimeApprovalTombstone. The same ticket covers both phases: quota is
+                  charged exactly once for the logical invocation.
+                enum:
+                - Live
+                - Compacted
+                type: string
+              retentionDeadline:
+                format: date-time
+                type: string
+              runtimeApprovalUID:
+                maxLength: 128
+                type: string
+              workspace:
+                maxLength: 253
+                minLength: 1
+                type: string
+            required:
+            - agentRef
+            - binding
+            - chargedBytes
+            - createdAt
+            - invocationID
+            - phase
+            - workspace
+            type: object
+            x-kubernetes-validations:
+            - message: agentRef must identify an Agent namespaced to the RuntimeApprovalQuotaTicket
+                workspace
+              rule: self.agentRef.kind == 'Agent' && self.agentRef.scope == 'Namespaced'
+                && self.agentRef.__namespace__ == self.workspace
+            - message: compacted tickets require compaction and retention timestamps
+              rule: 'self.phase == ''Compacted'' ? (has(self.compactedAt) && has(self.retentionDeadline))
+                : true'
+            - message: live tickets cannot have a compaction timestamp
+              rule: 'self.phase == ''Live'' ? !has(self.compactedAt) : true'
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

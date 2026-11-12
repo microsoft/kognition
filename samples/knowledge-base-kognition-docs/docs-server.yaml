@@ -1,0 +1,85 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# In-cluster HTTP server that publishes this repo's top-level documentation
+# so a KnowledgeBase can fetch it via `type: url`. The ConfigMap
+# `kognition-docs` is created by `apply.ps1` from the actual repo files;
+# this manifest mounts it and exposes port 8080 through the Service on port 80.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: samples-kognition-docs-services
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kognition-docs
+  namespace: samples-kognition-docs-services
+  labels:
+    app.kubernetes.io/name: kognition-docs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kognition-docs
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kognition-docs
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: docs
+          image: python:3.12-alpine
+          command: ["python", "-m", "http.server", "8080", "--directory", "/docs"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: "20m"
+              memory: "32Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: docs
+              mountPath: /docs
+              readOnly: true
+      volumes:
+        - name: docs
+          configMap:
+            name: kognition-docs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kognition-docs
+  namespace: samples-kognition-docs-services
+  labels:
+    app.kubernetes.io/name: kognition-docs
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kognition-docs
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

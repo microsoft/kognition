@@ -1,0 +1,185 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Disposable Artifacts
+test-results/
+/playwright-report/
+/blob-report/
+$*
+
+# Node Modules
+node_modules/
+
+# Binaries
+bin/
+dist/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# IDE
+.idea/
+.memory/
+/.hackaton2026/
+/.local/
+/mentoring/
+/docs/release-preparation/
+/.vscode/PROJECT_BOOTSTRAP.md
+/.github/instructions/postman-*.instructions.md
+*.swp
+*.swo
+*~
+
+# Hackathon preparation documents; runnable samples and tests remain versioned.
+/docs/development-plans/tutorials/
+/tools/recording/README.md
+/samples/hackathon-trustworthiness/storyboard-v1.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated
+gen/
+api/v1alpha1/gen/
+/foundation.parameters.json
+/infra/main.json
+/.azure/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python (agent + ingester runtimes and local venvs)
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local test manifests with secrets
+foundry-creds.yaml
+body.json
+trigger-agent.yaml
+
+# Build artifacts
+coverage.out
+coverage.html
+/.kognition-jaeger-port-forward.pid
+/.tmp/
+/$check
+cov.txt
+cover
+cover-*
+cover_*
+ctrlcover_*
+coverage
+task_summary.md
+a.txt
+/helm_render_*.yaml
+/quality-findings.txt
+/logs/
+/*.log
+/*.prof
+/*.pprof
+/*.trace
+
+# Raw historical run output is retained locally, not in the published source tree.
+/docs/features/knowledge-provider-execution/sg07-deployed-acceptance.txt
+/docs/features/knowledge-provider-execution/sg08-deployed-acceptance.txt
+/docs/features/knowledge-provider-execution/sg08-deployed-cleanup-regression.txt
+/docs/features/knowledge-provider-execution/sg08-provider-final-acceptance.txt
+/docs/features/knowledge-provider-execution/sg08-scoped-lint.txt
+
+# Compiled binaries (project root)
+/controller
+
+# Legal files copied by tools/distribution_notices.py charts before packaging
+/deploy/helm/*/LICENSE.TXT
+/deploy/helm/*/NOTICE
+/deploy/helm/*/PRIVACY
+/samples/helm-*/LICENSE.TXT
+/samples/helm-*/NOTICE
+/samples/helm-*/PRIVACY
+
+# Dev-only Dockerfiles
+Dockerfile.dev
+Dockerfile.apiserver.dev
+
+# E2E local scripts and generated manifests; parity contracts are versioned.
+e2e/*
+!e2e/sg07-kind.yaml
+!e2e/sg08-provider.Dockerfile
+!e2e/fixtures/
+e2e/fixtures/*
+!e2e/fixtures/sg08-provider/
+e2e/fixtures/sg08-provider/*
+!e2e/fixtures/sg08-provider/main.go
+!e2e/azure-blob-preflight.ps1
+!e2e/kubernetes-resource-parity.ps1
+!e2e/standalone-kb-ingestion.ps1
+!e2e/standalone-resource-parity.ps1
+!e2e/intent-gateway-e2e-test.ps1
+!e2e/kubernetes-tool-gateway-tc0171-e2e.ps1
+!e2e/kubernetes-tool-gateway-tc0172-e2e.ps1
+!e2e/kubernetes-memory-policy-gateway-gate3-e2e.ps1
+!e2e/kubernetes-agent-communication-gateway-gate3-e2e.ps1
+!e2e/kubernetes-runtime-approval-compaction-e2e.ps1
+!e2e/gateway-authority-acceptance.ps1
+!e2e/gateway-authority-acceptance-test.ps1
+!e2e/fixtures/Dockerfile.gateway-authority
+!e2e/hackathon-trustworthiness-parity-test.ps1
+!e2e/hackathon-trustworthiness-parity-gate-test.ps1
+!e2e/hackathon-trustworthiness-publication-test.ps1
+!e2e/hackathon-trustworthiness-session-test.ps1
+!e2e/hackathon-trust-profile-phases.ps1
+!e2e/hackathon-trustworthiness-cleanup-test.ps1
+!e2e/hackathon-trustworthiness-correlation-test.ps1
+!e2e/capability-mint.ps1
+!e2e/gateway-client-tracing.ps1
+!e2e/hackathon-trustworthiness-browser-rehearsal.js
+!e2e/hackathon-trustworthiness-demo.ps1
+!e2e/hackathon-trustworthiness-e2e.ps1
+!e2e/hackathon-trustworthiness-fallback-e2e.ps1
+!e2e/hackathon-trustworthiness-readiness-test.ps1
+!e2e/hackathon-trustworthiness-storyboard-e2e.ps1
+!e2e/kb-e2e-test.ps1
+!e2e/kubernetes-audit-e2e.ps1
+!e2e/kubernetes-capability-key-rotation-e2e.ps1
+!e2e/kubernetes-memory-boundary-e2e.ps1
+!e2e/kubernetes-model-gateway-e2e.ps1
+!e2e/kubernetes-runtime-tool-gateway-e2e.ps1
+!e2e/kubernetes-tool-exec-probe-e2e.ps1
+!e2e/kubernetes-tool-gateway-e2e.ps1
+!e2e/kubernetes-tool-gateway-monitoring-e2e.ps1
+!e2e/kubernetes-tool-gateway-network-policy-e2e.ps1
+!e2e/kubernetes-tool-gateway-resilience-e2e.ps1
+!e2e/kubernetes-tool-stdio-invocation-e2e.ps1
+!e2e/mint-memory-capability.go
+!e2e/mint-model-session-capability.go
+!e2e/mint-tool-session-capability.go
+!e2e/mvp1-five-agent-workflow-e2e.ps1
+!e2e/sg08-provider.Dockerfile.dockerignore
+!e2e/workload-identity-acceptance.ps1
+!e2e/fixtures/Dockerfile.model-candidate
+!e2e/fixtures/Dockerfile.workload-identity
+!e2e/fixtures/workload-identity-platform.yaml
+
+# Proto generated
+!proto/gen/
+proto/gen/*
+!proto/gen/kognition/
+proto/gen/kognition/*
+!proto/gen/kognition/v1alpha1/
+proto/gen/kognition/v1alpha1/*
+!proto/gen/kognition/v1alpha1/*.pb.go

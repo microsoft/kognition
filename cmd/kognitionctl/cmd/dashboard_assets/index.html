@@ -1,0 +1,154 @@
+<!-- Copyright (c) Microsoft Corporation.
+     Licensed under the MIT License. -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kognition Dashboard</title>
+  <link rel="icon" href="/kognition-mark.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <button id="catalog-toggle" class="catalog-toggle" type="button" aria-controls="sidebar" aria-expanded="false" aria-label="Toggle resource catalog">☰</button>
+      <img class="logo" src="/kognition-mark.svg" alt="" width="28" height="28" />
+      <span class="title">Kognition</span>
+      <span class="subtitle">Dashboard</span>
+    </div>
+    <div class="controls">
+      <label class="ns">
+        Namespace
+        <select id="namespace" autocomplete="off"></select>
+      </label>
+      <label id="resource-filter" class="filter">
+        Filter
+        <input id="filter" type="text" placeholder="name contains…" autocomplete="off" spellcheck="false" />
+      </label>
+      <label class="auto">
+        <input id="auto-refresh" type="checkbox" />
+        Auto&#8209;refresh
+      </label>
+      <a id="trust-open-focus" class="dashboard-mode-link" href="/?view=trust&amp;focus=1">Trust Focus</a>
+      <button id="refresh" type="button" title="Refresh now">Refresh</button>
+      <span id="mode-badge" class="mode-badge">mode: …</span>
+    </div>
+  </header>
+
+  <button id="catalog-backdrop" class="overlay-backdrop catalog-backdrop" type="button" aria-label="Close resource catalog" tabindex="-1" hidden></button>
+
+  <main class="layout">
+    <nav id="sidebar" class="sidebar" aria-label="Resource catalog">
+      <div class="sidebar-loading">Loading…</div>
+    </nav>
+    <section class="content">
+      <div id="content-header" class="content-header">
+        <h2 id="kind-title">Select a resource</h2>
+        <span id="kind-count" class="count"></span>
+      </div>
+      <section id="trust-focus" class="trust-focus" aria-label="Trust Focus" hidden>
+        <header class="trust-focus-header">
+          <div>
+            <p class="trust-focus-kicker">Trust Focus</p>
+            <h1>Runtime protection</h1>
+            <p id="trust-focus-run" class="muted"></p>
+          </div>
+          <div class="trust-focus-actions">
+            <a id="trust-open-control-plane" class="dashboard-mode-link" href="/">Control Plane</a>
+            <a id="trust-open-trace" class="dashboard-mode-link" target="_blank" rel="noopener noreferrer" hidden>Open trace</a>
+            <a id="trust-open-metrics" class="dashboard-mode-link" target="_blank" rel="noopener noreferrer" hidden>Open metrics</a>
+            <p id="trust-focus-connection" class="trust-focus-connection" role="status" aria-live="polite">Connecting</p>
+          </div>
+        </header>
+        <details id="trust-focus-filter-panel" class="trust-focus-filter-panel">
+          <summary>Filters</summary>
+          <div id="trust-focus-filter-host"></div>
+        </details>
+        <section id="trust-plane-strip" class="trust-plane-strip" aria-label="Protection planes">
+          <div data-plane="tool"><span>Tool</span><strong>0</strong><small>decisions</small></div>
+          <div data-plane="memory"><span>Memory</span><strong>0</strong><small>decisions</small></div>
+          <div data-plane="model"><span>Model</span><strong>0</strong><small>decisions</small></div>
+          <div data-plane="communication"><span>Communication</span><strong>0</strong><small>decisions</small></div>
+        </section>
+        <section id="trust-outcome-summary" class="trust-outcome-summary" aria-label="Outcome summary">
+          <div><span>Evidence events</span><strong id="trust-total">0</strong></div>
+          <div><span>Reached target</span><strong id="trust-reached-target">0</strong></div>
+          <div><span>Stopped before target</span><strong id="trust-stopped-before-target">0</strong></div>
+          <div><span>Awaiting approval</span><strong id="trust-awaiting-approval">0</strong></div>
+        </section>
+        <section id="trust-run-proof" class="trust-run-proof" aria-label="Run proof" hidden>
+          <header>
+            <div><p class="trust-focus-kicker">Run proof</p><strong id="trust-run-proof-scenario"></strong></div>
+            <span id="trust-run-proof-status" class="decision-outcome"></span>
+          </header>
+          <dl>
+            <div><dt>Protected action</dt><dd id="trust-run-proof-action"></dd></div>
+            <div><dt>Mode</dt><dd id="trust-run-proof-mode"></dd></div>
+            <div><dt>Assertions</dt><dd id="trust-run-proof-assertions"></dd></div>
+            <div id="trust-run-proof-reference-wrap"><dt>Report</dt><dd id="trust-run-proof-reference"></dd></div>
+          </dl>
+        </section>
+        <div class="trust-focus-workspace">
+          <section id="trust-focus-stream" class="trust-focus-stream" aria-label="Live decision stream">
+            <header><h2>Live decision stream</h2><span id="trust-stream-count" class="count"></span></header>
+            <div id="trust-focus-stream-body" class="trust-focus-stream-body"></div>
+          </section>
+          <section id="trust-focus-evidence" class="trust-focus-evidence" aria-label="Selected evidence detail">
+            <header><h2>Selected evidence</h2><span id="trust-evidence-state" class="trust-evidence-state"></span></header>
+            <div id="trust-focus-evidence-body" class="trust-focus-evidence-body"></div>
+          </section>
+        </div>
+      </section>
+      <form id="trust-filters" class="trust-filters" hidden>
+        <label>Agent identity<input id="trust-agent" type="text" autocomplete="off" spellcheck="false" /></label>
+        <label>Session ID<input id="trust-session" type="text" autocomplete="off" spellcheck="false" /></label>
+        <label>Plane<select id="trust-plane"><option value="">All planes</option><option value="tool">Tool</option><option value="memory">Memory</option><option value="model">Model</option><option value="communication">Communication</option></select></label>
+        <label>Outcome<select id="trust-outcome"><option value="">All outcomes</option><option value="allowed">Allowed</option><option value="denied">Denied</option><option value="revoked">Revoked</option><option value="replayed">Replayed</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="completed">Completed</option><option value="failed">Failed</option></select></label>
+        <label>Since<input id="trust-since" type="datetime-local" /></label>
+        <label>Until<input id="trust-until" type="datetime-local" /></label>
+        <label>Limit<input id="trust-limit" type="number" min="1" max="500" value="100" inputmode="numeric" /></label>
+        <div class="trust-filter-actions">
+          <button type="submit">Apply filters</button>
+          <button id="trust-filter-reset" type="button">Reset</button>
+        </div>
+      </form>
+      <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+      <div id="trust-overflow" class="trust-overflow" role="status" hidden></div>
+      <div id="table-wrap" class="table-wrap" aria-live="polite">
+        <p class="empty">Choose a resource type from the sidebar.</p>
+      </div>
+    </section>
+  </main>
+
+  <button id="detail-backdrop" class="overlay-backdrop detail-backdrop" type="button" aria-label="Close resource detail" tabindex="-1" hidden></button>
+  <aside id="detail" class="detail" hidden role="dialog" aria-modal="true" aria-labelledby="detail-title">
+    <header class="detail-header">
+      <div>
+        <h3 id="detail-title">—</h3>
+        <p id="detail-subtitle" class="muted"></p>
+      </div>
+      <div class="detail-tabs">
+        <button class="tab" data-tab="results" type="button">Results</button>
+        <button class="tab active" data-tab="yaml" type="button">YAML</button>
+        <button class="tab" data-tab="json" type="button">JSON</button>
+        <button class="tab" data-tab="events" type="button">Events</button>
+      </div>
+      <div class="detail-actions">
+        <button id="detail-edit" class="action" type="button">Edit</button>
+        <button id="detail-save" class="action primary" type="button" hidden>Save</button>
+        <button id="detail-cancel" class="action" type="button" hidden>Cancel</button>
+      </div>
+      <button id="detail-close" class="close" type="button" aria-label="Close">✕</button>
+    </header>
+    <div id="detail-body" class="detail-body"><pre id="detail-pre">loading…</pre></div>
+  </aside>
+
+  <footer class="footer">
+    <span id="footer-status">ready</span>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

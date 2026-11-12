@@ -1,0 +1,781 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Default values for kognition.
+
+# -- Deployment mode: "standalone" (API server + PostgreSQL) or "kubernetes" (CRD-based with k8s-controller).
+mode: standalone
+
+artifactSigning:
+  existingSecret: ""
+  publicKeysKey: public-keys.json
+
+runtimeRecovery:
+  existingSecret: ""
+  secretKey: keys.json
+  retention: 168h
+
+# -- Duration completed canary operations remain active before immutable
+# tombstone compaction. Uses Go duration syntax. Set to "0" to disable.
+canaryOperationRetention: "720h"
+
+# -- Minimum retention for compacted Kubernetes RuntimeApproval replay fences.
+# Uses Go duration syntax and must be at least 2160h (90 days).
+runtimeApprovalTombstoneRetention: "2160h"
+
+global:
+  imageRegistry: ""
+  # -- Optional registry containing verified mirrors of chart-owned third-party
+  # images. Keep empty for direct upstream pulls; AKS production values set it
+  # only after the import workflow verifies every expected manifest digest.
+  thirdPartyImageRegistry: ""
+  # -- Labels every Kognition webhook configuration admissions.enforcer/disabled
+  # so the AKS Admissions Enforcer does not rewrite their namespaceSelector. Set
+  # true on AKS: otherwise a namespace labelled control-plane=true or
+  # kubernetes.azure.com/managedby=aks silently escapes the guard, and reviewed
+  # manifests no longer match the live objects. Leave false everywhere else.
+  aksAdmissionsEnforcerOptOut: false
+  imagePullSecrets: []
+
+thirdPartyImages:
+  busybox:
+    repository: docker.io/library/busybox
+    mirrorRepository: third-party/busybox
+    digest: sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+    pullPolicy: IfNotPresent
+
+# -- Runtime control token and RuntimeApproval binding keys. For GitOps and
+# production installs, create this Secret out of band and set existingSecret;
+# it must contain runtime-control-token and runtime-approval-binding-keys.json.
+runtimeAuth:
+  # -- Generate a Secret for local development. Keep false for deterministic
+  # GitOps renders and provision the standard or existingSecret name externally.
+  create: false
+  existingSecret: ""
+  # -- Conservative Kubernetes expiry allowance. May only be increased.
+  maximumClockSkew: "30s"
+
+# -- Security hardening for control-plane workloads (apiserver,
+# controller-manager, k8s-controller, memory-service). Their images are
+# distroless static (nonroot), so the strict profile below — including
+# readOnlyRootFilesystem — is safe.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop: ["ALL"]
+
+# -- Security hardening for the bundled PostgreSQL StatefulSets (postgres,
+# kb-pgvector). Writable database, socket, and temporary paths are volume-backed.
+dbPodSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+dbContainerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# -- PodDisruptionBudgets for control-plane workloads. Opt-in and only
+# meaningful for multi-replica (HA) deployments: a PDB is created for each
+# control-plane workload whose replicaCount > 1.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# -- Ingress for the standalone API server. Off by default. When enabled,
+# exposes the apiserver Service through an Ingress with optional TLS. Only
+# rendered in standalone mode (kubernetes mode uses the Kubernetes API).
+#
+# NOTE: the API server does not yet authenticate requests, so terminate TLS
+# and enforce authentication at this Ingress (or a gateway in front of it)
+# before exposing it to untrusted networks.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # nginx.ingress.kubernetes.io/auth-url: https://oauth2-proxy.example.com/oauth2/auth
+  hosts:
+    - host: kognition.local
+      paths:
+        - path: /
+          pathType: Prefix
+  # TLS blocks: list of {secretName, hosts:[...]}. With cert-manager, set the
+  # issuer annotation above and the secret is provisioned automatically.
+  tls: []
+    # - secretName: kognition-apiserver-tls
+    #   hosts:
+    #     - kognition.local
+
+# -- NetworkPolicies. Off by default (requires a CNI that enforces them,
+# e.g. Calico/Cilium). When enabled, per-component policies lock down ingress
+# to the databases and control plane and constrain egress to DNS, the database,
+# and external HTTPS (for model-provider and mem0 calls). Policies select only
+# named components, so dynamically created agent/ingester pods are unaffected.
+networkPolicy:
+  enabled: false
+  # Reviewed API Service and backing endpoint CIDRs. Include both when the CNI
+  # evaluates policy after Service translation (for example, kind on Cilium).
+  # Grants only control-plane API consumers TCP 443 and 6443 in this namespace.
+  kubernetesApiEgressCIDRs: []
+  # Explicit Cilium entity-based API access for these control-plane consumers.
+  # Required when a local API endpoint has Cilium's reserved host identity.
+  # Requires admissionGuard.stdioIsolationProfile=cilium; never selects workers.
+  ciliumApiServerEgress: false
+  # Required when enabled on an enforcing CNI. Native NetworkPolicy cannot
+  # select kubelet hosts, so list the node-source CIDRs permitted to perform
+  # port-scoped HTTP/TCP readiness and liveness probes.
+  kubeletProbeIngressCIDRs: []
+    # - 10.0.0.0/16
+  # Enable only on Cilium clusters. It adds CiliumNetworkPolicies that permit
+  # kubelet probe traffic by host/health entity instead of broadly allowing a
+  # Pod CIDR through native NetworkPolicy.
+  ciliumHostProbeIngress: false
+  # Extra ingress peers allowed to reach the API server on its HTTP port
+  # (e.g. your ingress-controller). Rendered verbatim into the apiserver
+  # policy's ingress.from list.
+  apiServerExtraIngress: []
+    # - namespaceSelector:
+    #     matchLabels:
+    #       kubernetes.io/metadata.name: ingress-nginx
+
+# -- OpenTelemetry trace export for Kognition control-plane workloads. When
+# enabled, Kognition exports traces to an OTLP Collector-compatible endpoint.
+observability:
+  openTelemetry:
+    enabled: false
+    endpoint: ""
+    protocol: grpc
+    sampleRate: 1.0
+    serviceName: kognition
+    serviceVersion: ""
+    environment: ""
+    headers: {}
+    resourceAttributes: {}
+  metrics:
+    serviceMonitor:
+      enabled: false
+      labels: {}
+      interval: 30s
+  grafanaDashboards:
+    enabled: false
+    labels:
+      grafana_dashboard: "1"
+
+# -- PostgreSQL settings
+postgres:
+  # Use external PostgreSQL (set enabled=false and provide host/credentials)
+  enabled: true
+  image:
+    repository: docker.io/pgvector/pgvector
+    mirrorRepository: third-party/pgvector
+    tag: pg16
+    digest: sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
+    pullPolicy: IfNotPresent
+  auth:
+    existingSecret: ""
+    username: kognition
+    password: kognition
+    database: kognition
+  storage:
+    size: 5Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  # For external postgres (when enabled=false)
+  external:
+    host: ""
+    port: 5432
+    sslmode: disable
+
+# -- API Server
+apiserver:
+  replicaCount: 1
+  image:
+    repository: kognition-apiserver
+    tag: ""  # defaults to appVersion
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  # Authentication (OIDC). Disabled by default. When enabled, all API requests
+  # except health checks must present a valid bearer token from the configured
+  # OIDC provider (Microsoft Entra ID, Google, Auth0, Keycloak/Dex, ...).
+  auth:
+    enabled: false
+    oidc:
+      # Issuer URL, e.g. https://login.microsoftonline.com/<tenant-id>/v2.0
+      issuer: ""
+      # Expected audience (the app/client id).
+      audience: ""
+      # Claim mapped to the caller's username (default: email).
+      usernameClaim: ""
+      # Claim mapped to the caller's groups (default: groups).
+      groupsClaim: ""
+      # Optional: require the caller to belong to at least one of these groups.
+      requiredGroups: []
+    # OIDC groups allowed to create, update, and delete standalone control-plane
+    # authorization policy. RuntimeApproval grants never imply this authority.
+    controlPlaneAdminGroups: []
+    # Optional bootstrap static token (service-to-service / admin) read from an
+    # existing Secret. Leave secretName empty to disable.
+    bootstrapToken:
+      secretName: ""
+      secretKey: token
+  # TLS termination at the API server. Provide a Secret of type
+  # kubernetes.io/tls (e.g. issued by cert-manager) with tls.crt / tls.key.
+  # For ingress-terminated TLS, leave this disabled and configure `ingress.tls`.
+  tls:
+    enabled: false
+    secretName: ""
+  waitForPostgres:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 100m
+        memory: 32Mi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Controller Manager
+controllerManager:
+  replicaCount: 1
+  image:
+    repository: kognition-controller-manager
+    tag: ""  # defaults to appVersion
+    pullPolicy: IfNotPresent
+  waitForPostgres:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 100m
+        memory: 32Mi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Service Account
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# -- K8s Controller (used in kubernetes mode)
+workloadIdentityStatus:
+  enabled: false
+  trustDomain: ""
+  controllerID: ""
+  existingRegistryConfigMap: ""
+  registryKey: registry.json
+  runtimeNamespace: ""
+  managedWorkloads:
+    enabled: false
+    proxyImage: ""
+    gateways: {}
+
+k8sController:
+  activated: false
+  replicaCount: 1
+  managedNamespaces: []
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  # -- Experimental gRPC sidecar plugin discovery. Disabled until a workload
+  # explicitly packages compatible sidecars into the controller Pod.
+  pluginHost:
+    enabled: false
+    socketDir: /var/run/kognition/plugins
+    hostVersion: "0.1.0"
+    discoveryInterval: 10s
+    probeInterval: 10s
+    probeTimeout: 5s
+    connectTimeout: 10s
+    reconnectBackoff: 1s
+    maxReconnectBackoff: 30s
+    # Plugin containers inherit containerSecurityContext and share socketDir
+    # with the controller. Each plugin must create a distinct socket file.
+    sidecars: []
+      # - name: custom-runtime
+      #   image: example.com/kognition/custom-runtime-plugin:v1
+      #   imagePullPolicy: IfNotPresent
+      #   command: []
+      #   args:
+      #     - --socket=/var/run/kognition/plugins/custom-runtime.sock
+      #   env: []
+      #   resources: {}
+      #   securityContext: {}
+  # Native/default agent runtime image. External runtime classes must have a
+  # corresponding image configured under runtimeImages.
+  agentImage: ""
+  # Optional namespace for all runtime Deployments and Services. When empty,
+  # runtime resources are colocated with their source Agent.
+  agentNamespace: ""
+  runtimeImages:
+    autogen: ""
+    mcp: ""
+  runtimeControlTLS:
+    workerSecretName: ""
+    existingCASecret: ""
+  image:
+    repository: kognition-k8s-controller
+    tag: ""  # defaults to appVersion
+    digest: ""  # optional sha256 pin; takes precedence over tag for controller and admission guard
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  leaderElection:
+    enabled: true
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- IntentGateway HTTP server (Kubernetes mode only). The dedicated workload
+# publishes goal submission after its Deployment becomes Available.
+intentGateway:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: kognition-intent-gateway
+    tag: ""  # defaults to appVersion
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  auth:
+    enabled: false
+    oidc:
+      issuer: ""
+      audience: ""
+      usernameClaim: ""
+      groupsClaim: ""
+      requiredGroups: []
+    bootstrapToken:
+      secretName: ""
+      secretKey: token
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  monitoring:
+    serviceMonitor:
+      enabled: false
+      labels: {}
+      interval: 30s
+    prometheusRule:
+      enabled: false
+      labels: {}
+      for: 5m
+    grafanaDashboard:
+      enabled: false
+      labels:
+        grafana_dashboard: "1"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Admission Webhooks
+webhook:
+  # Enable admission webhooks (requires cert-manager for TLS).
+  enabled: true
+  # failurePolicy for webhook configurations: Fail or Ignore.
+  failurePolicy: Fail
+  # reinvocationPolicy for the mutating webhook: Never or IfNeeded.
+  reinvocationPolicy: Never
+  # timeoutSeconds for webhook calls.
+  timeoutSeconds: 10
+  # Port the webhook server listens on inside the controller-manager pod.
+  port: 9443
+  # Optional base64 CA for deterministic operator-provisioned TLS when
+  # cert-manager is disabled. Private serving keys remain in Kubernetes Secrets.
+  caBundle: ""
+  # cert-manager settings for webhook TLS.
+  certManager:
+    # Use cert-manager to provision webhook TLS certificates.
+    enabled: true
+    # Issuer kind: Issuer or ClusterIssuer.
+    issuerKind: Issuer
+    # Duration of the certificate (default: 8760h = 1 year).
+    duration: 8760h
+    # Renew before expiry.
+    renewBefore: 720h
+
+admissionGuard:
+  stdioIsolationProfile: network-policy
+  tls:
+    existingSecret: ""
+    caBundle: ""
+
+migrations:
+  # Preserve content-addressed Kubernetes Job completion evidence for GitOps.
+  # Ordinary installs retain the existing ten-minute cleanup.
+  retainCompletedJobs: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  waitForPostgres:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 100m
+        memory: 32Mi
+
+# -- Built-in Memory Service (zero-config, in-memory backend by default)
+memoryService:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: kognition-memory-service
+    tag: ""  # defaults to appVersion
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8090
+  # Backend type: "in-memory" (built-in, zero-config) or "pgvector" (requires postgres)
+  backendType: in-memory
+  # Optional server-side embedding. When provider, endpoint, and model are all
+  # set, the memory service embeds records on write and text queries on search,
+  # so agent runtimes need no embedder. Leave all three empty to use BM25 text
+  # search. Partial configuration fails service startup. Supported providers:
+  # "openai-compatible", "foundry", "ollama".
+  embedding:
+    provider: ""
+    endpoint: ""
+    model: ""
+    # Optional Azure AI Foundry REST API version. Defaults to "2024-02-01".
+    apiVersion: ""
+    # Reference to an existing Secret holding the embedding API key (optional).
+    apiKeySecret:
+      name: ""
+      key: ""
+    # Optional existing Secret with AZURE_TENANT_ID, AZURE_CLIENT_ID, and
+    # AZURE_CLIENT_SECRET for local Foundry authentication instead of federation.
+    azureIdentitySecret: ""
+  # Approved in-cluster embedding or memory backends. These rules select only
+  # the raw memory service, never Agent runtimes or memory policy gateways.
+  privateEgress: []
+    # - namespaceSelector:
+    #     kubernetes.io/metadata.name: models
+    #   podSelector:
+    #     app.kubernetes.io/name: ollama
+    #   ports: [11434]
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Runtime-facing memory authorization gateway. Kubernetes agent pods send
+# memory requests here with a short-lived capability; it evaluates current
+# grants and proxies authorized calls to the internal memory service.
+memoryPolicyGateway:
+  enabled: true
+  secret:
+    create: true
+  replicaCount: 1
+  image:
+    repository: kognition-memory-policy-gateway
+    tag: ""  # defaults to appVersion
+    pullPolicy: IfNotPresent
+  service:
+    port: 8091
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Runtime Tool Gateway. Agent runtimes exchange a session capability here
+# for an exact, single-invocation Tool capability after model tool selection.
+toolGateway:
+  enabled: true
+  secret:
+    create: true
+  replicaCount: 1
+  image:
+    repository: kognition-tool-gateway
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    port: 8092
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  # Approved in-cluster Tool targets. Each entry becomes a Tool Gateway
+  # NetworkPolicy egress rule when networkPolicy.enabled=true. An empty list
+  # denies private target egress; public HTTPS remains separately allowed.
+  privateEgress: []
+    # - namespaceSelector:
+    #     kubernetes.io/metadata.name: tools
+    #   podSelector:
+    #     app.kubernetes.io/name: ticketing-tool
+    #   ports: [8080]
+  monitoring:
+    serviceMonitor:
+      enabled: false
+      labels: {}
+      interval: 30s
+    prometheusRule:
+      enabled: false
+      labels: {}
+      for: 5m
+    grafanaDashboard:
+      enabled: false
+      labels:
+        grafana_dashboard: "1"
+
+# -- Runtime Model Gateway. Agent runtimes send OpenAI-compatible chat requests
+# here with a per-session model capability; the gateway owns provider access.
+modelGateway:
+  enabled: false
+  secret:
+    create: true
+  replicaCount: 1
+  image:
+    repository: kognition-model-gateway
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    port: 8093
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  # Approved in-cluster OpenAI-compatible provider targets. Each entry becomes
+  # a Model Gateway NetworkPolicy egress rule when networkPolicy.enabled=true.
+  # Public HTTPS remains separately allowed for managed provider endpoints.
+  privateEgress: []
+    # - namespaceSelector:
+    #     kubernetes.io/metadata.name: models
+    #   podSelector:
+    #     app.kubernetes.io/name: vllm
+    #   ports: [8080]
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Provider-neutral Knowledge Gateway. Agent runtimes submit capability-bound
+# queries here; provider routing and mTLS credentials remain installation-owned.
+knowledgeGateway:
+  enabled: false
+  secret:
+    create: true
+  replicaCount: 1
+  image:
+    repository: kognition-knowledge-gateway
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    port: 8095
+  provider:
+    name: azuresearch
+    address: ""
+    serverName: ""
+    peerURI: ""
+    port: 9443
+    configuration:
+      apiGroup: azuresearch.knowledge.kognition.dev
+      apiVersion: v1alpha1
+      kind: AzureSearchBackend
+      resource: azuresearchbackends
+    # CIDRs hosting the Kubernetes API service endpoint. Required when both
+    # the gateway and standard NetworkPolicy enforcement are enabled.
+    kubernetesApiEgressCIDRs: []
+    networkPolicy:
+      namespaceSelector: {}
+      podSelector: {}
+  tls:
+    secretName: ""
+    certificateKey: tls.crt
+    privateKeyKey: tls.key
+    trustBundleKey: ca.crt
+  # TLS identity served to agent runtimes. Keep this separate from the
+  # gateway's client identity used for provider mTLS.
+  runtimeTLS:
+    secretName: ""
+    certificateKey: tls.crt
+    privateKeyKey: tls.key
+    trustBundleKey: ca.crt
+    serverName: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Agent Communication Gateway. Agent runtimes exchange a source-session
+# capability here before invoking a policy-authorized AgentService.
+agentCommunicationGateway:
+  enabled: false
+  secret:
+    create: true
+  replicaCount: 1
+  image:
+    repository: kognition-agent-communication-gateway
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    port: 8094
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Built-in pgvector store for KnowledgeBase ingestion.
+# When enabled, deploys a standalone Postgres+pgvector StatefulSet plus a
+# Secret containing the connection string under key "connectionString".
+# The Secret can be referenced from a KnowledgeBaseClass:
+#   spec:
+#     provisioner: pgvector
+#     vectorStore:
+#       type: pgvector
+#       pgvector:
+#         connectionSecretRef:
+#           name: <release>-kb-pgvector
+# Disable this if you already run pgvector externally and just want to point
+# a KnowledgeBaseClass at your own Secret.
+kbPgvector:
+  enabled: false
+  tls:
+    enabled: false
+    secretName: ""
+    certificateKey: tls.crt
+    privateKeyKey: tls.key
+  providerIngress: []
+  init:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+  image:
+    repository: docker.io/pgvector/pgvector
+    mirrorRepository: third-party/pgvector
+    tag: pg16
+    digest: sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
+    pullPolicy: IfNotPresent
+  auth:
+    username: kognition_kb
+    password: kognition_kb
+    database: kognition_kb
+  storage:
+    size: 5Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# KnowledgeBase ingester
+# Launches a batch/v1 Job per KnowledgeBase generation that pulls data from
+# each source, embeds chunks, and writes them to the configured vector store.
+# Enable this once you want KnowledgeBaseClasses whose vectorStore is set
+# (e.g. pgvector) to actually ingest data — otherwise the KB reconciler falls
+# back to bookkeeping-only status transitions (useful in tests / demos).
+kbIngester:
+  enabled: false
+  image:
+    repository: kognition-kb-ingester
+    tag: ""            # defaults to Chart.AppVersion
+    pullPolicy: IfNotPresent
+  # ServiceAccount the ingester Pod runs as. Leave empty to use the KB
+  # namespace's `default` ServiceAccount.
+  serviceAccount: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

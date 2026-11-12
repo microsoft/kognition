@@ -1,0 +1,97 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# KnowledgeBaseClass — declares an inline provisioner. The runtime exposes
+# inline sources through its built-in `knowledge_search` tool, so this path
+# needs neither an external ingester nor a separate Tool CR.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClass
+metadata:
+  name: inline-kb
+spec:
+  provisioner: inline
+  indexMode: inline
+  reclaimPolicy: Retain
+---
+# KnowledgeBase — carries text that the dispatcher injects into the runtime's
+# keyword-search fallback.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBase
+metadata:
+  name: orbital-notes-kb
+  namespace: default
+spec:
+  knowledgeBaseClassName: inline-kb
+  sources:
+    - type: inline
+      data: |
+        Orbital Mark 7 release schedule: General availability ships on
+        2026-09-15. The public preview opens four weeks earlier on
+        2026-08-18 with a hard cap of 500 tenants.
+
+        Pricing for Mark 7 stays at $0.0012 per 1,000 reasoning tokens for
+        the first 90 days after GA, then steps up to $0.0018. Enterprise
+        committed-use customers keep the launch price until 2027-01-01.
+    - type: inline
+      data: |
+        Mark 7 supported regions at launch: westus3, eastus2, northeurope,
+        and australiaeast. The Brazil South region is targeted for the
+        Mark 7.1 dot-release in November 2026 and is not bookable yet.
+
+        Data residency: customer prompts and completions stay in the
+        region the deployment was created in. Telemetry is replicated to
+        the paired region for disaster recovery only.
+    - type: inline
+      data: |
+        Mark 7 known limitations on day one: no fine-tuning endpoint
+        (planned for Mark 7.2), no JSON-mode for streaming responses, and
+        a 32k-token context window. Function calling, vision, and the
+        embeddings endpoint are all supported.
+---
+# KnowledgeBaseClaim — binds the agent to `orbital-notes-kb`. The
+# KnowledgeBaseClaim reconciler resolves the referenced KnowledgeBase and
+# sets the claim's phase to `Bound` once the KB is `Ready`. The agent
+# references the claim (not the KB) so tenant workloads never touch the
+# KB directly — the claim is the granted, namespace-scoped handle.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClaim
+metadata:
+  name: orbital-notes-claim
+  namespace: default
+spec:
+  knowledgeBaseName: orbital-notes-kb
+  accessMode: ReadOnly
+---
+# Agent that consumes the KnowledgeBase through the built-in search tool.
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: orbital-docs-agent
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a product knowledge assistant for the "Orbital Mark 7" platform.
+      You have exactly one knowledge tool available:
+
+        - knowledge_search(query, k): search the attached
+          knowledge base for passages relevant to the user's question.
+          Always call this BEFORE answering any factual question about
+          Orbital Mark 7 (dates, pricing, regions, limitations, features).
+
+      Rules:
+        - Never invent facts. If the search returns nothing relevant, say
+          "I don't have that in my knowledge base." and stop.
+        - Quote the relevant passage verbatim when you answer, then add a
+          one-sentence summary.
+        - Be concise.
+  knowledgeBaseClaims:
+    - name: orbital-notes-claim
+      required: true
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 1024

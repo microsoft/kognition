@@ -1,0 +1,52 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+version: "2"
+run:
+  modules-download-mode: readonly
+  tests: true
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - errcheck
+    - errorlint
+    - govet
+    - ineffassign
+    - noctx
+    - staticcheck
+    - unused
+  settings:
+    dupl:
+      threshold: 150
+    errcheck:
+      check-type-assertions: true
+    gocognit:
+      min-complexity: 40
+    gocyclo:
+      min-complexity: 30
+    staticcheck:
+      checks:
+        - all
+        - -QF*
+        - -ST*
+  exclusions:
+    generated: lax
+    rules:
+      # Fixture construction in tests may intentionally ignore setup errors.
+      # The other correctness analyzers continue to inspect test code.
+      - linters:
+          - errcheck
+          - noctx
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

@@ -1,0 +1,18 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+**
+!go.mod
+!go.sum
+!api/
+!api/**
+!pkg/
+!pkg/**
+!proto/
+!proto/**
+!internal/
+!internal/**
+!e2e/
+!e2e/fixtures/
+!e2e/fixtures/sg08-provider/
+!e2e/fixtures/sg08-provider/*.go

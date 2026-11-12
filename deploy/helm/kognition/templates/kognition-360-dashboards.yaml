@@ -1,0 +1,728 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- $observability := default (dict) .Values.observability }}
+{{- $dashboards := default (dict) $observability.grafanaDashboards }}
+{{- if and (eq .Values.mode "kubernetes") $dashboards.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kognition.fullname" . }}-agents-360-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    {{- with $dashboards.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  kognition-agents-360.json: |
+    {
+      "annotations": {"list": []},
+      "description": "Operational health, capacity, reliability, durable model economics, and shared gateway activity for Kognition agent runtimes.",
+      "editable": true,
+      "graphTooltip": 1,
+      "links": [{"title": "Workflow 360", "type": "dashboard", "dashboard": "Kognition / Workflow 360", "includeVars": true, "keepTime": true}],
+      "panels": [
+        {
+          "title": "Runtime Health",
+          "type": "row",
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+          "panels": []
+        },
+        {
+          "title": "Running Instances",
+          "description": "Agent runtime pods currently in the Running phase for the selected agent scope.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 0, "y": 1},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+          "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(kube_pod_status_phase{phase=\"Running\"} * on(namespace, pod) group_left(label_kognition_dev_agent_name, label_kognition_dev_agent_instance) kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\",label_kognition_dev_agent_name=~\"$agent\",label_kognition_dev_agent_instance=~\"$instance\"}) or vector(0)", "refId": "A"}]
+        },
+        {
+          "title": "Ready Instances",
+          "description": "Percentage of selected agent runtime pods reporting Ready.",
+          "type": "gauge",
+          "gridPos": {"h": 5, "w": 6, "x": 6, "y": 1},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 80}, {"color": "green", "value": 95}]}}, "overrides": []},
+          "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true},
+          "targets": [{"expr": "100 * sum(kube_pod_status_ready{condition=\"true\"} * on(namespace, pod) group_left(label_kognition_dev_agent_name, label_kognition_dev_agent_instance) kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\",label_kognition_dev_agent_name=~\"$agent\",label_kognition_dev_agent_instance=~\"$instance\"}) / clamp_min(count(kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\",label_kognition_dev_agent_name=~\"$agent\",label_kognition_dev_agent_instance=~\"$instance\"}), 1)", "refId": "A"}]
+        },
+        {
+          "title": "Restarts in Range",
+          "description": "Container restarts across selected agent runtime pods in the dashboard time range.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 12, "y": 1},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(increase(kube_pod_container_status_restarts_total[$__range]) * on(namespace, pod) group_left(label_kognition_dev_agent_name, label_kognition_dev_agent_instance) kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\",label_kognition_dev_agent_name=~\"$agent\",label_kognition_dev_agent_instance=~\"$instance\"}) or vector(0)", "refId": "A"}]
+        },
+        {
+          "title": "Selected Instances",
+          "description": "Number of runtime pods matching the namespace, agent, and instance selectors.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 18, "y": 1},
+          "fieldConfig": {"defaults": {"color": {"mode": "continuous-GrYlRd"}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "count(kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\",label_kognition_dev_agent_name=~\"$agent\",label_kognition_dev_agent_instance=~\"$instance\"})", "refId": "A"}]
+        },
+        {
+          "title": "Instance Phase",
+          "description": "Current Kubernetes phase by logical Kognition agent instance.",
+          "type": "table",
+          "gridPos": {"h": 8, "w": 14, "x": 0, "y": 6},
+          "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "dark-red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+          "options": {"cellHeight": "sm", "showHeader": true, "footer": {"show": false}},
+          "targets": [{"expr": "max by (label_kognition_dev_agent_name, label_kognition_dev_agent_instance, phase) (kube_pod_status_phase * on(namespace, pod) group_left(label_kognition_dev_agent_name, label_kognition_dev_agent_instance) kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\",label_kognition_dev_agent_name=~\"$agent\",label_kognition_dev_agent_instance=~\"$instance\"})", "format": "table", "instant": true, "legendFormat": "{{`{{label_kognition_dev_agent_name}}`}} / {{`{{label_kognition_dev_agent_instance}}`}} / {{`{{phase}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Restarts by Instance",
+          "description": "Restart rate highlights unstable runtime instances.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 10, "x": 14, "y": 6},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "fillOpacity": 12, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}}, "overrides": []},
+          "options": {"legend": {"calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (label_kognition_dev_agent_name, label_kognition_dev_agent_instance) (rate(kube_pod_container_status_restarts_total[$__rate_interval]) * on(namespace, pod) group_left(label_kognition_dev_agent_name, label_kognition_dev_agent_instance) kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\",label_kognition_dev_agent_name=~\"$agent\",label_kognition_dev_agent_instance=~\"$instance\"})", "legendFormat": "{{`{{label_kognition_dev_agent_name}}`}} / {{`{{label_kognition_dev_agent_instance}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Runtime Capacity",
+          "type": "row",
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 14},
+          "panels": []
+        },
+        {
+          "title": "CPU by Agent",
+          "description": "CPU cores consumed by selected agent runtime containers.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 15},
+          "fieldConfig": {"defaults": {"unit": "cores", "custom": {"drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (label_kognition_dev_agent_name) (rate(container_cpu_usage_seconds_total{container!=\"\",container!=\"POD\",image!=\"\",pod!=\"\"}[$__rate_interval]) * on(namespace, pod) group_left(label_kognition_dev_agent_name) kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\",label_kognition_dev_agent_name=~\"$agent\",label_kognition_dev_agent_instance=~\"$instance\"})", "legendFormat": "{{`{{label_kognition_dev_agent_name}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Memory by Agent",
+          "description": "Working-set memory consumed by selected agent runtime containers.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 15},
+          "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (label_kognition_dev_agent_name) (container_memory_working_set_bytes{container!=\"\",container!=\"POD\",image!=\"\",pod!=\"\"} * on(namespace, pod) group_left(label_kognition_dev_agent_name) kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\",label_kognition_dev_agent_name=~\"$agent\",label_kognition_dev_agent_instance=~\"$instance\"})", "legendFormat": "{{`{{label_kognition_dev_agent_name}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Network Throughput by Agent",
+          "description": "Receive and transmit throughput across selected agent runtime pods.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 23},
+          "fieldConfig": {"defaults": {"unit": "Bps", "custom": {"drawStyle": "line", "fillOpacity": 12, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}}, "overrides": []},
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [
+            {"expr": "sum by (label_kognition_dev_agent_name) (rate(container_network_receive_bytes_total{pod!=\"\"}[$__rate_interval]) * on(namespace, pod) group_left(label_kognition_dev_agent_name) kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\",label_kognition_dev_agent_name=~\"$agent\",label_kognition_dev_agent_instance=~\"$instance\"})", "legendFormat": "RX {{`{{label_kognition_dev_agent_name}}`}}", "refId": "A"},
+            {"expr": "sum by (label_kognition_dev_agent_name) (rate(container_network_transmit_bytes_total{pod!=\"\"}[$__rate_interval]) * on(namespace, pod) group_left(label_kognition_dev_agent_name) kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\",label_kognition_dev_agent_name=~\"$agent\",label_kognition_dev_agent_instance=~\"$instance\"})", "legendFormat": "TX {{`{{label_kognition_dev_agent_name}}`}}", "refId": "B"}
+          ]
+        },
+        {
+          "title": "Shared Gateway Activity",
+          "type": "row",
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 31},
+          "panels": []
+        },
+        {
+          "title": "Delegation Outcomes (Platform-wide)",
+          "description": "Agent Communication Gateway request rate. These low-cardinality metrics are shared platform totals and are not filtered by the agent selectors.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32},
+          "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"drawStyle": "line", "fillOpacity": 12, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}}, "overrides": []},
+          "options": {"legend": {"calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (operation, outcome) (rate(kognition_agent_communication_gateway_requests_total[$__rate_interval]))", "legendFormat": "{{`{{operation}}`}} / {{`{{outcome}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Tool Outcomes (Platform-wide)",
+          "description": "Tool Gateway invocation rate. These low-cardinality metrics are shared platform totals and are not filtered by the agent selectors.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "fillOpacity": 12, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}}, "overrides": []},
+          "options": {"legend": {"calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (outcome) (rate(kognition_tool_gateway_invocations_total[$__rate_interval]))", "legendFormat": "{{`{{outcome}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Model Economics",
+          "type": "row",
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 40},
+          "panels": []
+        },
+        {
+          "title": "Model Cost in Range",
+          "description": "Durably applied model cost. Cost units are normalized micro-dollars and converted to USD here.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 0, "y": 41},
+          "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 4, "color": {"mode": "continuous-GrYlRd"}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(increase(kognition_model_usage_cost_units_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\",cost_tier=~\"$cost_tier\"}[$__range])) / 1000000 or vector(0)", "refId": "A"}]
+        },
+        {
+          "title": "Model Tokens in Range",
+          "description": "Prompt and completion tokens from durably applied usage events in the selected economic scope.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 6, "y": 41},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "continuous-GrYlRd"}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(increase(kognition_model_usage_tokens_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\",cost_tier=~\"$cost_tier\"}[$__range])) or vector(0)", "refId": "A"}]
+        },
+        {
+          "title": "Provider-Reported Usage",
+          "description": "Share of model operations with explicit provider-reported usage. Estimated and not-reported operations remain outside the numerator.",
+          "type": "gauge",
+          "gridPos": {"h": 5, "w": 6, "x": 12, "y": 41},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 80}, {"color": "green", "value": 95}]}}, "overrides": []},
+          "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true},
+          "targets": [{"expr": "100 * sum(increase(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=\"reported\",cost_tier=~\"$cost_tier\"}[$__range])) / clamp_min(sum(increase(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",cost_tier=~\"$cost_tier\"}[$__range])), 1)", "refId": "A"}]
+        },
+        {
+          "title": "Pricing Coverage",
+          "description": "Share of model operations with configured pricing. Unpriced operations remain explicit and count only in the denominator.",
+          "type": "gauge",
+          "gridPos": {"h": 5, "w": 6, "x": 18, "y": 41},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 80}, {"color": "green", "value": 95}]}}, "overrides": []},
+          "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true},
+          "targets": [{"expr": "100 * sum(increase(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",pricing_state=\"priced\",cost_tier=~\"$cost_tier\"}[$__range])) / clamp_min(sum(increase(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",cost_tier=~\"$cost_tier\"}[$__range])), 1)", "refId": "A"}]
+        },
+        {
+          "title": "Cost by Agent",
+          "description": "Durable model cost rate grouped by stable agent attribution. not_attributed remains visible when no agent attribution was recorded.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 46},
+          "fieldConfig": {"defaults": {"unit": "currencyUSD", "custom": {"drawStyle": "line", "fillOpacity": 18, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (agent) (rate(kognition_model_usage_cost_units_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\",cost_tier=~\"$cost_tier\"}[$__rate_interval])) / 1000000", "legendFormat": "{{`{{agent}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Tokens by Agent and Type",
+          "description": "Prompt and completion token rate grouped by stable agent attribution.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 46},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 45, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (agent, token_type) (rate(kognition_model_usage_tokens_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\",cost_tier=~\"$cost_tier\"}[$__rate_interval]))", "legendFormat": "{{`{{agent}}`}} / {{`{{token_type}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Usage Evidence State",
+          "description": "Durably applied operations split into reported, estimated, and not_reported states. Numeric zero is never treated as reporting evidence.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 8, "x": 0, "y": 54},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (usage_state) (rate(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\",cost_tier=~\"$cost_tier\"}[$__rate_interval]))", "legendFormat": "{{`{{usage_state}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Pricing State",
+          "description": "Operation rate split into priced and unpriced states; unpriced activity is not silently represented as zero cost.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 8, "x": 8, "y": 54},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (pricing_state) (rate(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\",cost_tier=~\"$cost_tier\"}[$__rate_interval]))", "legendFormat": "{{`{{pricing_state}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Attribution State",
+          "description": "Operation rate split into attributed and unattributed states using the durable accounting record.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 8, "x": 16, "y": 54},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (attribution_state) (rate(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\",cost_tier=~\"$cost_tier\"}[$__rate_interval]))", "legendFormat": "{{`{{attribution_state}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Average Provider Latency",
+          "description": "Total provider duration divided by durable model operation count. This is an arithmetic average, not a latency percentile.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 62},
+          "fieldConfig": {"defaults": {"unit": "ms", "custom": {"drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}}, "overrides": []},
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (agent) (rate(kognition_model_usage_provider_duration_milliseconds_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\",cost_tier=~\"$cost_tier\"}[$__rate_interval])) / clamp_min(sum by (agent) (rate(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\",cost_tier=~\"$cost_tier\"}[$__rate_interval])), 1e-9)", "legendFormat": "{{`{{agent}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Operations by Cost Tier",
+          "description": "Durable model operation rate by bounded cost tier. not_configured remains visible when no tier was recorded.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 62},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (cost_tier) (rate(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\",cost_tier=~\"$cost_tier\"}[$__rate_interval]))", "legendFormat": "{{`{{cost_tier}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Governance & Trust",
+          "type": "row",
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 70},
+          "panels": []
+        },
+        {
+          "title": "Durable Trust Decisions",
+          "description": "Newly and durably applied TrustDecision v1 records in the selected workspace scope. No series is shown when decision telemetry is unavailable.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 0, "y": 71},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "continuous-GrYlRd"}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(increase(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__range]))", "refId": "A"}]
+        },
+        {
+          "title": "Denied or Revoked",
+          "description": "Durable decisions whose bounded outcome is denied or revoked.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 6, "y": 71},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(increase(kognition_trust_decisions_total{namespace=~\"$namespace\",outcome=~\"denied|revoked\"}[$__range]))", "refId": "A"}]
+        },
+        {
+          "title": "Pending Approvals",
+          "description": "Durable decisions that report a pending approval state. not_reported remains distinct from pending.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 12, "y": 71},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(increase(kognition_trust_decisions_total{namespace=~\"$namespace\",approval_state=\"pending\"}[$__range]))", "refId": "A"}]
+        },
+        {
+          "title": "Target Reached (Reported)",
+          "description": "Share of decisions with targetReached=true among records that explicitly reported true or false. not_reported records are excluded rather than treated as false.",
+          "type": "gauge",
+          "gridPos": {"h": 5, "w": 6, "x": 18, "y": 71},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 80}, {"color": "green", "value": 95}]}}, "overrides": []},
+          "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true},
+          "targets": [{"expr": "100 * sum(increase(kognition_trust_decisions_total{namespace=~\"$namespace\",target_reached_state=\"true\"}[$__range])) / clamp_min(sum(increase(kognition_trust_decisions_total{namespace=~\"$namespace\",target_reached_state=~\"true|false\"}[$__range])), 1)", "refId": "A"}]
+        },
+        {
+          "title": "Decisions by Plane and Outcome",
+          "description": "Durable governance decision rate across the bounded tool, memory, model, and communication planes.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 76},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 45, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (plane, outcome) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "{{`{{plane}}`}} / {{`{{outcome}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Governance Reason Codes",
+          "description": "Decision rate by bounded reason code. unknown and not_reported remain visible instead of being inferred.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 76},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 45, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (reason_code) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "{{`{{reason_code}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Authorization Evidence",
+          "description": "Identity, role, grant, and policy evidence remain separate. not_evaluated, unavailable, not_reported, and unknown are retained as evidence states.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 84},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 40, "lineWidth": 1, "showPoints": "never"}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [
+            {"expr": "sum by (identity_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "identity / {{`{{identity_state}}`}}", "refId": "A"},
+            {"expr": "sum by (role_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "role / {{`{{role_state}}`}}", "refId": "B"},
+            {"expr": "sum by (grant_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "grant / {{`{{grant_state}}`}}", "refId": "C"},
+            {"expr": "sum by (policy_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "policy / {{`{{policy_state}}`}}", "refId": "D"}
+          ]
+        },
+        {
+          "title": "Approval State",
+          "description": "Approval evidence by explicit bounded state; not_reported is not treated as not_required.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 84},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (approval_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "{{`{{approval_state}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Execution State",
+          "description": "Durable execution evidence split by bounded state, preserving unavailable, not_reported, and unknown.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 92},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (execution_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "{{`{{execution_state}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Target-Reached Evidence",
+          "description": "Target evidence volume split into true, false, and not_reported without inventing a result.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 92},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (target_reached_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "{{`{{target_reached_state}}`}}", "refId": "A"}]
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "tags": ["kognition", "agents", "operations"],
+      "templating": {
+        "list": [
+          {"name": "namespace", "label": "Agent namespace", "type": "query", "query": {"query": "label_values(kube_pod_labels{label_kognition_dev_agent_name!=\"\"}, label_kognition_dev_agent_namespace)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kube_pod_labels{label_kognition_dev_agent_name!=\"\"}, label_kognition_dev_agent_namespace)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1},
+          {"name": "agent", "label": "Agent", "type": "query", "query": {"query": "label_values(kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\"}, label_kognition_dev_agent_name)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\"}, label_kognition_dev_agent_name)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1},
+          {"name": "instance", "label": "Instance", "type": "query", "query": {"query": "label_values(kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\",label_kognition_dev_agent_name=~\"$agent\"}, label_kognition_dev_agent_instance)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kube_pod_labels{label_kognition_dev_agent_namespace=~\"$namespace\",label_kognition_dev_agent_name=~\"$agent\"}, label_kognition_dev_agent_instance)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1},
+          {"name": "purpose", "label": "Usage purpose", "type": "query", "query": {"query": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\"}, purpose)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\"}, purpose)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1},
+          {"name": "usage_state", "label": "Usage evidence", "type": "query", "query": {"query": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\"}, usage_state)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\"}, usage_state)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1},
+          {"name": "pricing_state", "label": "Pricing state", "type": "query", "query": {"query": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\"}, pricing_state)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\"}, pricing_state)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1},
+          {"name": "cost_tier", "label": "Cost tier", "type": "query", "query": {"query": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}, cost_tier)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$agent\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}, cost_tier)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1}
+        ]
+      },
+      "time": {"from": "now-1h", "to": "now"},
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "Kognition / Agents 360",
+      "uid": "kognition-agents-360",
+      "version": 1
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kognition.fullname" . }}-workflow-360-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    {{- with $dashboards.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  kognition-workflow-360.json: |
+    {
+      "annotations": {"list": []},
+      "description": "Workflow run health, step performance, durable model economics, participant attribution, and evidence coverage for Kognition.",
+      "editable": true,
+      "graphTooltip": 1,
+      "links": [{"title": "Agents 360", "type": "dashboard", "dashboard": "Kognition / Agents 360", "includeVars": false, "keepTime": true}],
+      "panels": [
+        {
+          "title": "Run Health",
+          "type": "row",
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+          "panels": []
+        },
+        {
+          "title": "Active Runs",
+          "description": "WorkflowRuns currently executing across this Kognition controller.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 0, "y": 1},
+          "fieldConfig": {"defaults": {"color": {"mode": "continuous-GrYlRd"}}, "overrides": []},
+          "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(max by (namespace, workflow) (kognition_workflow_active_runs{namespace=~\"$namespace\",workflow=~\"$workflow\"}))", "refId": "A"}]
+        },
+        {
+          "title": "Retained Completed Runs",
+          "description": "Terminal WorkflowRuns still in storage at each scrape. Counts can decrease under retention; these are not lifetime or time-range event totals.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 6, "y": 1},
+          "fieldConfig": {"defaults": {"color": {"mode": "continuous-GrYlRd"}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(max by (namespace, workflow, phase) (kognition_workflow_retained_runs{namespace=~\"$namespace\",workflow=~\"$workflow\"})) or (0 * sum(max by (namespace, workflow) (kognition_workflow_active_runs{namespace=~\"$namespace\",workflow=~\"$workflow\"})))", "refId": "A"}]
+        },
+        {
+          "title": "Retained Success",
+          "description": "Ready runs as a share of retained terminal runs. No value is shown when no terminal runs are retained.",
+          "type": "gauge",
+          "gridPos": {"h": 5, "w": 6, "x": 12, "y": 1},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 80}, {"color": "green", "value": 95}]}}, "overrides": []},
+          "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true},
+          "targets": [{"expr": "100 * (sum(max by (namespace, workflow, phase) (kognition_workflow_retained_runs{namespace=~\"$namespace\",workflow=~\"$workflow\",phase=\"Ready\"})) or (0 * sum(max by (namespace, workflow, phase) (kognition_workflow_retained_runs{namespace=~\"$namespace\",workflow=~\"$workflow\"})))) / sum(max by (namespace, workflow, phase) (kognition_workflow_retained_runs{namespace=~\"$namespace\",workflow=~\"$workflow\"}))", "refId": "A"}]
+        },
+        {
+          "title": "Mean Retained Step Duration",
+          "description": "Weighted mean of retained terminal steps with valid start and owned AgentJob completion timestamps. Missing evidence is omitted, not counted as zero.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 18, "y": 1},
+          "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 5}, {"color": "red", "value": 30}]}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(max by (namespace, workflow, step, phase) (kognition_workflow_retained_step_duration_seconds_sum{namespace=~\"$namespace\",workflow=~\"$workflow\",step=~\"$step\",phase=~\"$phase\"})) / sum(max by (namespace, workflow, step, phase) (kognition_workflow_retained_step_duration_observations{namespace=~\"$namespace\",workflow=~\"$workflow\",step=~\"$step\",phase=~\"$phase\"}))", "refId": "A"}]
+        },
+        {
+          "title": "Terminal Outcomes",
+          "description": "Retained terminal population by phase, deduplicated across controller replicas. Counts can decrease under retention.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (phase) (max by (namespace, workflow, phase) (kognition_workflow_retained_runs{namespace=~\"$namespace\",workflow=~\"$workflow\"}))", "legendFormat": "{{`{{phase}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Retained Terminal Population",
+          "description": "Terminal runs retained at each scrape, not completion throughput. Retention can reduce this population.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 18, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}}, "overrides": []},
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+          "targets": [{"expr": "sum(max by (namespace, workflow, phase) (kognition_workflow_retained_runs{namespace=~\"$namespace\",workflow=~\"$workflow\"}))", "legendFormat": "retained terminal runs", "refId": "A"}]
+        },
+        {
+          "title": "Step Performance",
+          "type": "row",
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 14},
+          "panels": []
+        },
+        {
+          "title": "Mean Retained Step Durations",
+          "description": "Weighted mean duration by step using retained owned-job evidence. This projection does not provide percentiles.",
+          "type": "timeseries",
+          "gridPos": {"h": 9, "w": 14, "x": 0, "y": 15},
+          "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}}, "overrides": []},
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [
+            {"expr": "sum by (workflow, step) (max by (namespace, workflow, step, phase) (kognition_workflow_retained_step_duration_seconds_sum{namespace=~\"$namespace\",workflow=~\"$workflow\",step=~\"$step\",phase=~\"$phase\"})) / sum by (workflow, step) (max by (namespace, workflow, step, phase) (kognition_workflow_retained_step_duration_observations{namespace=~\"$namespace\",workflow=~\"$workflow\",step=~\"$step\",phase=~\"$phase\"}))", "legendFormat": "mean {{`{{workflow}}`}} / {{`{{step}}`}}", "refId": "A"}
+          ]
+        },
+        {
+          "title": "Retained Mean Duration by Step",
+          "description": "Current mean duration by workflow step with retained completion evidence.",
+          "type": "bargauge",
+          "gridPos": {"h": 9, "w": 10, "x": 14, "y": 15},
+          "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "continuous-GrYlRd"}}, "overrides": []},
+          "options": {"displayMode": "gradient", "minVizHeight": 10, "minVizWidth": 0, "namePlacement": "auto", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showUnfilled": true, "sizing": "auto", "valueMode": "color"},
+          "targets": [{"expr": "sum by (workflow, step) (max by (namespace, workflow, step, phase) (kognition_workflow_retained_step_duration_seconds_sum{namespace=~\"$namespace\",workflow=~\"$workflow\",step=~\"$step\",phase=~\"$phase\"})) / sum by (workflow, step) (max by (namespace, workflow, step, phase) (kognition_workflow_retained_step_duration_observations{namespace=~\"$namespace\",workflow=~\"$workflow\",step=~\"$step\",phase=~\"$phase\"}))", "instant": true, "legendFormat": "{{`{{workflow}}`}} / {{`{{step}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Retained Step Observations",
+          "description": "Retained terminal steps with duration evidence by workflow, step, and phase. Removing runs or owned jobs reduces the count.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "fillOpacity": 45, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (workflow, step, phase) (max by (namespace, workflow, step, phase) (kognition_workflow_retained_step_duration_observations{namespace=~\"$namespace\",workflow=~\"$workflow\",step=~\"$step\",phase=~\"$phase\"}))", "legendFormat": "{{`{{workflow}}`}} / {{`{{step}}`}} / {{`{{phase}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Model Economics",
+          "type": "row",
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 32},
+          "panels": []
+        },
+        {
+          "title": "Workflow Model Cost",
+          "description": "Durably applied model cost in the selected Workflow and Step scope, converted from normalized micro-dollars to USD.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 0, "y": 33},
+          "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 4, "color": {"mode": "continuous-GrYlRd"}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(increase(kognition_model_usage_cost_units_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}[$__range])) / 1000000 or vector(0)", "refId": "A"}]
+        },
+        {
+          "title": "Workflow Model Tokens",
+          "description": "Prompt and completion tokens from durably applied model usage events.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 6, "y": 33},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "continuous-GrYlRd"}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(increase(kognition_model_usage_tokens_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}[$__range])) or vector(0)", "refId": "A"}]
+        },
+        {
+          "title": "Workflow Model Operations",
+          "description": "Count of durably applied model operations in the selected scope.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 12, "y": 33},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "continuous-GrYlRd"}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(increase(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}[$__range])) or vector(0)", "refId": "A"}]
+        },
+        {
+          "title": "Average Provider Latency",
+          "description": "Total provider duration divided by durable model operation count. This is an arithmetic average, not a latency percentile.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 18, "y": 33},
+          "fieldConfig": {"defaults": {"unit": "ms", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 2000}, {"color": "red", "value": 10000}]}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(increase(kognition_model_usage_provider_duration_milliseconds_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}[$__range])) / clamp_min(sum(increase(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}[$__range])), 1)", "refId": "A"}]
+        },
+        {
+          "title": "Cost by Workflow and Step",
+          "description": "Durable model cost rate by stable Workflow and Step attribution.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 38},
+          "fieldConfig": {"defaults": {"unit": "currencyUSD", "custom": {"drawStyle": "line", "fillOpacity": 18, "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (workflow, step) (rate(kognition_model_usage_cost_units_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}[$__rate_interval])) / 1000000", "legendFormat": "{{`{{workflow}}`}} / {{`{{step}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Tokens by Workflow Step",
+          "description": "Token rate by stable Workflow, Step, and token type.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 38},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 45, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (workflow, step, token_type) (rate(kognition_model_usage_tokens_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}[$__rate_interval]))", "legendFormat": "{{`{{workflow}}`}} / {{`{{step}}`}} / {{`{{token_type}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Workflow Participants by Agent",
+          "description": "Durable model operation volume by stable Agent attribution. not_attributed remains visible when participant evidence is absent.",
+          "type": "bargauge",
+          "gridPos": {"h": 8, "w": 8, "x": 0, "y": 46},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "continuous-GrYlRd"}}, "overrides": []},
+          "options": {"displayMode": "gradient", "minVizHeight": 10, "minVizWidth": 0, "namePlacement": "auto", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showUnfilled": true, "sizing": "auto", "valueMode": "color"},
+          "targets": [{"expr": "sum by (agent) (increase(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}[$__range]))", "instant": true, "legendFormat": "{{`{{agent}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Workflow Usage Evidence State",
+          "description": "Operations split into reported, estimated, and not_reported states. Numeric zero does not prove provider reporting.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 8, "x": 8, "y": 46},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (usage_state) (rate(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}[$__rate_interval]))", "legendFormat": "{{`{{usage_state}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Workflow Pricing State",
+          "description": "Operations split into priced and unpriced states so missing pricing is not rendered as zero cost.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 8, "x": 16, "y": 46},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (pricing_state) (rate(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}[$__rate_interval]))", "legendFormat": "{{`{{pricing_state}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Workflow Attribution State",
+          "description": "Durable operation rate split into attributed and unattributed states.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 54},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (attribution_state) (rate(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}[$__rate_interval]))", "legendFormat": "{{`{{attribution_state}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Operations by Purpose",
+          "description": "Durable operation rate by bounded purpose, including runtime and reasoning-probe activity.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 54},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (purpose) (rate(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\",pricing_state=~\"$pricing_state\"}[$__rate_interval]))", "legendFormat": "{{`{{purpose}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Workspace Governance & Trust",
+          "description": "TrustDecision metrics are intentionally bounded to workspace and governance states; they are not attributed to workflow runs, steps, participants, identities, or resource references.",
+          "type": "row",
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 62},
+          "panels": []
+        },
+        {
+          "title": "Workspace Trust Decisions",
+          "description": "Newly and durably applied TrustDecision v1 records in the selected workspace. This value is intentionally not filtered by Workflow, Step, or participant.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 0, "y": 63},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "continuous-GrYlRd"}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(increase(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__range]))", "refId": "A"}]
+        },
+        {
+          "title": "Workspace Denied or Revoked",
+          "description": "Workspace-scoped durable decisions whose bounded outcome is denied or revoked.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 6, "y": 63},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(increase(kognition_trust_decisions_total{namespace=~\"$namespace\",outcome=~\"denied|revoked\"}[$__range]))", "refId": "A"}]
+        },
+        {
+          "title": "Workspace Pending Approvals",
+          "description": "Workspace-scoped durable decisions that explicitly report pending approval; not_reported remains distinct.",
+          "type": "stat",
+          "gridPos": {"h": 5, "w": 6, "x": 12, "y": 63},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}}, "overrides": []},
+          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+          "targets": [{"expr": "sum(increase(kognition_trust_decisions_total{namespace=~\"$namespace\",approval_state=\"pending\"}[$__range]))", "refId": "A"}]
+        },
+        {
+          "title": "Workspace Target Reached (Reported)",
+          "description": "Share of records with targetReached=true among explicit true or false evidence. not_reported records are excluded rather than treated as false.",
+          "type": "gauge",
+          "gridPos": {"h": 5, "w": 6, "x": 18, "y": 63},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 80}, {"color": "green", "value": 95}]}}, "overrides": []},
+          "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true},
+          "targets": [{"expr": "100 * sum(increase(kognition_trust_decisions_total{namespace=~\"$namespace\",target_reached_state=\"true\"}[$__range])) / clamp_min(sum(increase(kognition_trust_decisions_total{namespace=~\"$namespace\",target_reached_state=~\"true|false\"}[$__range])), 1)", "refId": "A"}]
+        },
+        {
+          "title": "Workspace Decisions by Plane and Outcome",
+          "description": "Workspace decision rate across bounded planes and outcomes. It does not imply per-Workflow attribution.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 68},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 45, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (plane, outcome) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "{{`{{plane}}`}} / {{`{{outcome}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Workspace Governance Reason Codes",
+          "description": "Workspace decision rate by bounded reason code, preserving unknown and not_reported rather than inferring a reason.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 68},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 45, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (reason_code) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "{{`{{reason_code}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Workspace Authorization Evidence",
+          "description": "Identity, role, grant, and policy evidence remain separate. not_evaluated, unavailable, not_reported, and unknown remain visible.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 76},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 40, "lineWidth": 1, "showPoints": "never"}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [
+            {"expr": "sum by (identity_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "identity / {{`{{identity_state}}`}}", "refId": "A"},
+            {"expr": "sum by (role_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "role / {{`{{role_state}}`}}", "refId": "B"},
+            {"expr": "sum by (grant_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "grant / {{`{{grant_state}}`}}", "refId": "C"},
+            {"expr": "sum by (policy_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "policy / {{`{{policy_state}}`}}", "refId": "D"}
+          ]
+        },
+        {
+          "title": "Workspace Approval State",
+          "description": "Approval evidence by bounded state; not_reported is not treated as not_required.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 76},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (approval_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "{{`{{approval_state}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Workspace Execution State",
+          "description": "Durable execution evidence by bounded state, preserving unavailable, not_reported, and unknown.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 84},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (execution_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "{{`{{execution_state}}`}}", "refId": "A"}]
+        },
+        {
+          "title": "Workspace Target-Reached Evidence",
+          "description": "Workspace target evidence split into true, false, and not_reported without inventing a per-Workflow result.",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 84},
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "bars", "fillOpacity": 55, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}}, "overrides": []},
+          "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "sum by (target_reached_state) (rate(kognition_trust_decisions_total{namespace=~\"$namespace\"}[$__rate_interval]))", "legendFormat": "{{`{{target_reached_state}}`}}", "refId": "A"}]
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "tags": ["kognition", "workflows", "operations"],
+      "templating": {
+        "list": [
+          {"name": "namespace", "label": "Namespace", "type": "query", "query": {"query": "label_values({__name__=~\"kognition_workflow_active_runs|kognition_model_usage_operations_total|kognition_trust_decisions_total\"}, namespace)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values({__name__=~\"kognition_workflow_active_runs|kognition_model_usage_operations_total|kognition_trust_decisions_total\"}, namespace)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1},
+          {"name": "workflow", "label": "Workflow", "type": "query", "query": {"query": "label_values(kognition_workflow_active_runs{namespace=~\"$namespace\"}, workflow)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kognition_workflow_active_runs{namespace=~\"$namespace\"}, workflow)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1},
+          {"name": "step", "label": "Step", "type": "query", "query": {"query": "label_values(kognition_workflow_retained_step_duration_observations{namespace=~\"$namespace\",workflow=~\"$workflow\"}, step)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kognition_workflow_retained_step_duration_observations{namespace=~\"$namespace\",workflow=~\"$workflow\"}, step)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1},
+          {"name": "phase", "label": "Step phase", "type": "query", "query": {"query": "label_values(kognition_workflow_retained_step_duration_observations{namespace=~\"$namespace\",workflow=~\"$workflow\",step=~\"$step\"}, phase)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kognition_workflow_retained_step_duration_observations{namespace=~\"$namespace\",workflow=~\"$workflow\",step=~\"$step\"}, phase)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1},
+          {"name": "participant", "label": "Agent participant", "type": "query", "query": {"query": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",workflow=~\"$workflow\",step=~\"$step\"}, agent)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",workflow=~\"$workflow\",step=~\"$step\"}, agent)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1},
+          {"name": "purpose", "label": "Usage purpose", "type": "query", "query": {"query": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\"}, purpose)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\"}, purpose)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1},
+          {"name": "usage_state", "label": "Usage evidence", "type": "query", "query": {"query": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\"}, usage_state)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\"}, usage_state)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1},
+          {"name": "pricing_state", "label": "Pricing state", "type": "query", "query": {"query": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\"}, pricing_state)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "definition": "label_values(kognition_model_usage_operations_total{namespace=~\"$namespace\",agent=~\"$participant\",workflow=~\"$workflow\",step=~\"$step\",purpose=~\"$purpose\",usage_state=~\"$usage_state\"}, pricing_state)", "includeAll": true, "allValue": ".*", "multi": true, "refresh": 2, "sort": 1}
+        ]
+      },
+      "time": {"from": "now-6h", "to": "now"},
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "Kognition / Workflow 360",
+      "uid": "kognition-workflow-360",
+      "version": 1
+    }
+{{- end }}

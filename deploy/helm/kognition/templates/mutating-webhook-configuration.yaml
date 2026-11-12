@@ -1,0 +1,48 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if and (eq .Values.mode "kubernetes") .Values.webhook.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "kognition.fullname" . }}-mutating
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+    {{- if .Values.global.aksAdmissionsEnforcerOptOut }}
+    admissions.enforcer/disabled: "true"
+    {{- end }}
+  {{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "kognition.fullname" . }}-webhook-cert
+  {{- end }}
+webhooks:
+  - name: mutate.kognition.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    reinvocationPolicy: {{ .Values.webhook.reinvocationPolicy }}
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    clientConfig:
+      {{- include "kognition.resourceWebhookCABundle" . | nindent 6 }}
+      service:
+        name: {{ include "kognition.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 443
+    rules:
+      - apiGroups: ["kognition.dev"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources:
+          - agents
+          - agentinstances
+          - tools
+        scope: Namespaced
+      - apiGroups: ["kognition.dev"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources:
+          - toolclasses
+        scope: Cluster
+{{- end }}

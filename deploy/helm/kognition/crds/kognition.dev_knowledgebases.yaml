@@ -1,0 +1,396 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: knowledgebases.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: KnowledgeBase
+    listKind: KnowledgeBaseList
+    plural: knowledgebases
+    singular: knowledgebase
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.knowledgeBaseClassName
+      name: Class
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.documentCount
+      name: Docs
+      type: integer
+    - jsonPath: .status.indexedChunks
+      name: Chunks
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        required: [spec]
+        description: KnowledgeBase declares a queryable knowledge store (namespace-scoped).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KnowledgeBaseSpec defines the desired state of a KnowledgeBase.
+            properties:
+              indexConfig:
+                description: IndexConfig overrides class-level chunking and embedding
+                  settings.
+                properties:
+                  chunkOverlap:
+                    description: ChunkOverlap is the number of overlapping tokens
+                      between adjacent chunks.
+                    format: int32
+                    type: integer
+                  chunkSize:
+                    description: ChunkSize is the target chunk size in tokens.
+                    format: int32
+                    type: integer
+                  embeddingModelRef:
+                    description: EmbeddingModelRef overrides the class-level embedding
+                      model.
+                    properties:
+                      name:
+                        description: Name is the name of the referenced resource.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                type: object
+              knowledgeBaseClassName:
+                description: |-
+                  KnowledgeBaseClassName references the KnowledgeBaseClass that provisions
+                  the backing index for this knowledge base.
+                type: string
+              refreshPolicy:
+                description: RefreshPolicy controls when and how the index is rebuilt.
+                properties:
+                  interval:
+                    description: Interval is the refresh cadence for "periodic" mode
+                      (e.g. "24h", "6h").
+                    type: string
+                  mode:
+                    description: Mode selects the trigger mechanism.
+                    enum:
+                    - periodic
+                    - onDemand
+                    - webhook
+                    type: string
+                  webhookPath:
+                    description: WebhookPath is the API path that triggers a refresh
+                      in "webhook" mode.
+                    type: string
+                required:
+                - mode
+                type: object
+              sources:
+                description: Sources lists the data sources to ingest into this knowledge
+                  base.
+                items:
+                  description: KBSource defines a single data source for ingestion.
+                  properties:
+                    blob:
+                      description: |-
+                        Blob configures an object-storage source (when Type is "blob").
+                        Supports Azure Blob Storage and S3-compatible providers.
+                      properties:
+                        bucket:
+                          description: Bucket is the container name (for "azure")
+                            or bucket name (for "s3").
+                          type: string
+                        credentialSecretRef:
+                          description: |-
+                            CredentialSecretRef points at a Secret in the same namespace holding
+                            provider credentials. Expected keys per provider:
+                              azure: "connectionString", or ("accountName", "accountKey"),
+                                     or ("accountName", "sasToken").
+                              s3:    "accessKeyId" and "secretAccessKey", plus optional
+                                     "sessionToken" for temporary credentials.
+                            May be omitted only when the provisioner uses workload identity.
+                          properties:
+                            name:
+                              description: Name is the name of the referenced resource.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        endpoint:
+                          description: |-
+                            Endpoint overrides the default service URL. Used for S3-compatible
+                            services (MinIO, Ceph, R2) or Azure sovereign clouds.
+                          type: string
+                        exclude:
+                          description: Exclude is a list of glob patterns; matching
+                            objects are skipped.
+                          items:
+                            type: string
+                          type: array
+                        include:
+                          description: Include is a list of glob patterns; only matching
+                            objects are ingested.
+                          items:
+                            type: string
+                          type: array
+                        prefix:
+                          description: Prefix restricts ingestion to objects whose
+                            key starts with this prefix.
+                          type: string
+                        provider:
+                          description: Provider selects the object-storage backend.
+                          enum:
+                          - azure
+                          - s3
+                          type: string
+                        region:
+                          description: |-
+                            Region is the storage region. Required for "s3" unless Endpoint is set.
+                            Ignored for "azure".
+                          type: string
+                      required:
+                      - bucket
+                      - provider
+                      type: object
+                    configMap:
+                      description: |-
+                        ConfigMap references a ConfigMap whose data values are ingested
+                        (when Type is "configMap").
+                      properties:
+                        name:
+                          description: Name is the name of the referenced resource.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    data:
+                      description: Data holds inline document content (when Type is
+                        "inline").
+                      type: string
+                    directory:
+                      description: Directory is a filesystem path to ingest recursively
+                        (when Type is "directory").
+                      type: string
+                    git:
+                      description: Git configures a Git repository source (when Type
+                        is "git").
+                      properties:
+                        branch:
+                          description: 'Branch is the branch, tag, or SHA to check
+                            out (default: "main").'
+                          type: string
+                        path:
+                          description: Path restricts ingestion to the given sub-directory
+                            within the repo.
+                          type: string
+                        url:
+                          description: URL is the HTTPS or SSH clone URL.
+                          type: string
+                      required:
+                      - url
+                      type: object
+                    type:
+                      description: Type discriminates the source variant.
+                      enum:
+                      - inline
+                      - url
+                      - file
+                      - directory
+                      - git
+                      - configMap
+                      - blob
+                      type: string
+                    uri:
+                      description: URI is the URL or file path (when Type is "url"
+                        or "file").
+                      type: string
+                  required:
+                  - type
+                  type: object
+                type: array
+            required:
+            - knowledgeBaseClassName
+            type: object
+          status:
+            description: KnowledgeBaseStatus describes the observed state of a KnowledgeBase.
+            properties:
+              backendBinding:
+                properties:
+                  backendOperationID:
+                    maxLength: 1024
+                    minLength: 1
+                    type: string
+                  classGeneration:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  classUID:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  configurationAPIGroup:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  configurationDigest:
+                    pattern: ^[a-f0-9]{64}$
+                    type: string
+                  configurationKind:
+                    maxLength: 63
+                    minLength: 1
+                    type: string
+                  configurationName:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  configurationUID:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  embeddingModelBinding:
+                    type: object
+                    properties:
+                      namespace:
+                        type: string
+                        minLength: 1
+                      modelName:
+                        type: string
+                        minLength: 1
+                      modelUID:
+                        type: string
+                        minLength: 1
+                      modelResourceVersion:
+                        type: integer
+                        format: int64
+                        minimum: 1
+                      specDigest:
+                        type: string
+                        pattern: ^sha256:[a-f0-9]{64}$
+                      invocationProfileUID:
+                        type: string
+                      invocationProfileDigest:
+                        type: string
+                    required:
+                    - namespace
+                    - modelName
+                    - modelUID
+                    - modelResourceVersion
+                    - specDigest
+                  generation:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  operationID:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  providerName:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  reclaimPolicy:
+                    description: ReclaimPolicy defines what happens to memory data
+                      when the claim is deleted.
+                    enum:
+                    - Delete
+                    - Retain
+                    - Archive
+                    type: string
+                required:
+                - backendOperationID
+                - classGeneration
+                - classUID
+                - configurationAPIGroup
+                - configurationDigest
+                - configurationKind
+                - configurationName
+                - configurationUID
+                - generation
+                - operationID
+                - providerName
+                type: object
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  properties:
+                    lastTransitionTime:
+                      format: date-time
+                      type: string
+                    message:
+                      type: string
+                    observedGeneration:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      type: string
+                    status:
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              documentCount:
+                description: DocumentCount is the number of source documents successfully
+                  ingested.
+                format: int64
+                type: integer
+              generation:
+                description: |-
+                  Generation is a monotonically increasing counter that increments each
+                  time the index is successfully rebuilt.
+                format: int64
+                type: integer
+              indexedChunks:
+                description: IndexedChunks is the total number of chunks written to
+                  the index.
+                format: int64
+                type: integer
+              lastRefresh:
+                description: |-
+                  LastRefresh is the RFC 3339 timestamp of the most recent successful
+                  index build.
+                type: string
+              phase:
+                description: Phase is the lifecycle phase (Pending|Indexing|Ready|Refreshing|Failed).
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

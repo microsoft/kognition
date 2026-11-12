@@ -1,0 +1,15 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelClass
+metadata:
+  name: foundry
+spec:
+  provisioner: foundry
+  latencyClass: low
+  costTier: standard
+  contextWindow: 128000
+  modalities:
+    - text

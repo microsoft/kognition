@@ -1,0 +1,350 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: identity-spire
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: server
+  namespace: identity-spire
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent
+  namespace: identity-spire
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: identity-spire-server
+rules:
+  - apiGroups: [""]
+    resources: [nodes, pods]
+    verbs: [get]
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: identity-spire-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: identity-spire-server
+subjects:
+  - kind: ServiceAccount
+    name: server
+    namespace: identity-spire
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bundle-publisher
+  namespace: identity-spire
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [bundle]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bundle-publisher
+  namespace: identity-spire
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: bundle-publisher
+subjects:
+  - kind: ServiceAccount
+    name: server
+    namespace: identity-spire
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: identity-spire-agent
+rules:
+  - apiGroups: [""]
+    resources: [nodes, pods, nodes/proxy]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: identity-spire-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: identity-spire-agent
+subjects:
+  - kind: ServiceAccount
+    name: agent
+    namespace: identity-spire
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bundle
+  namespace: identity-spire
+data:
+  bundle.crt: ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: server
+  namespace: identity-spire
+data:
+  server.conf: |
+    server {
+      bind_address = "0.0.0.0"
+      bind_port = "8081"
+      trust_domain = "kognition.dev"
+      data_dir = "/run/spire/data"
+      default_x509_svid_ttl = "60s"
+      ca_ttl = "12h"
+      log_level = "INFO"
+    }
+    plugins {
+      DataStore "sql" {
+        plugin_data {
+          database_type = "sqlite3"
+          connection_string = "/run/spire/data/datastore.sqlite3"
+        }
+      }
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          clusters = {
+            "identity-fixture" = {
+              service_account_allow_list = ["identity-spire:agent"]
+            }
+          }
+        }
+      }
+      KeyManager "disk" {
+        plugin_data { keys_path = "/run/spire/data/keys.json" }
+      }
+      Notifier "k8sbundle" {
+        plugin_data {
+          namespace = "identity-spire"
+          config_map = "bundle"
+          config_map_key = "bundle.crt"
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: server
+  namespace: identity-spire
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: identity-spire-server}
+  template:
+    metadata:
+      labels: {app: identity-spire-server}
+    spec:
+      serviceAccountName: server
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: server
+          image: ghcr.io/spiffe/spire-server:1.15.3
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: "1", memory: 256Mi}}
+          args: [-config, /run/spire/config/server.conf]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: config, mountPath: /run/spire/config, readOnly: true}
+            - {name: data, mountPath: /run/spire/data}
+      volumes:
+        - name: config
+          configMap: {name: server}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: server
+  namespace: identity-spire
+spec:
+  selector: {app: identity-spire-server}
+  ports:
+    - {name: grpc, port: 8081, targetPort: 8081}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent
+  namespace: identity-spire
+data:
+  agent.conf: |
+    agent {
+      data_dir = "/run/spire/data"
+      log_level = "INFO"
+      server_address = "server.identity-spire.svc"
+      server_port = "8081"
+      socket_path = "/run/spire/sockets/spire-agent.sock"
+      trust_bundle_path = "/run/spire/bundle/bundle.crt"
+      trust_domain = "kognition.dev"
+    }
+    plugins {
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          cluster = "identity-fixture"
+          token_path = "/run/spire/tokens/agent"
+        }
+      }
+      KeyManager "memory" { plugin_data {} }
+      WorkloadAttestor "k8s" {
+        plugin_data {
+          kubelet_ca_path = "/run/spire/kubelet/kubelet.crt"
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: agent
+  namespace: identity-spire
+spec:
+  selector:
+    matchLabels: {app: identity-spire-agent}
+  template:
+    metadata:
+      labels: {app: identity-spire-agent}
+    spec:
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: agent
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile: {type: RuntimeDefault}
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: agent
+          image: ghcr.io/spiffe/spire-agent:1.15.3
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: "1", memory: 256Mi}}
+          args: [-config, /run/spire/config/agent.conf]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          readinessProbe:
+            exec:
+              command: [/opt/spire/bin/spire-agent, healthcheck, -socketPath, /run/spire/sockets/spire-agent.sock]
+            periodSeconds: 2
+            timeoutSeconds: 2
+          env:
+            - name: MY_NODE_NAME
+              valueFrom:
+                fieldRef: {fieldPath: spec.nodeName}
+          volumeMounts:
+            - {name: config, mountPath: /run/spire/config, readOnly: true}
+            - {name: bundle, mountPath: /run/spire/bundle, readOnly: true}
+            - {name: token, mountPath: /run/spire/tokens, readOnly: true}
+            - {name: socket, mountPath: /run/spire/sockets}
+            - {name: data, mountPath: /run/spire/data}
+            - {name: kubelet, mountPath: /run/spire/kubelet, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: agent}
+        - name: bundle
+          configMap: {name: bundle}
+        - name: token
+          projected:
+            sources:
+              - serviceAccountToken: {path: agent, expirationSeconds: 7200, audience: spire-server}
+        - name: socket
+          hostPath: {path: /run/spire/agent-sockets, type: DirectoryOrCreate}
+        - name: kubelet
+          hostPath: {path: /var/lib/kubelet/pki, type: Directory}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.spiffe.io
+spec:
+  attachRequired: false
+  podInfoOnMount: true
+  fsGroupPolicy: None
+  volumeLifecycleModes: [Ephemeral]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: csi
+  namespace: identity-spire
+spec:
+  selector:
+    matchLabels: {app: identity-spiffe-csi}
+  template:
+    metadata:
+      labels: {app: identity-spiffe-csi}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile: {type: RuntimeDefault}
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: driver
+          image: ghcr.io/spiffe/spiffe-csi-driver:0.2.9
+          resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 250m, memory: 128Mi}}
+          args: [-workload-api-socket-dir, /spire-agent-socket, -csi-socket-path, /spiffe-csi/csi.sock]
+          env:
+            - name: MY_NODE_NAME
+              valueFrom:
+                fieldRef: {fieldPath: spec.nodeName}
+          securityContext: {privileged: true, readOnlyRootFilesystem: true}
+          volumeMounts:
+            - {name: socket, mountPath: /spire-agent-socket, readOnly: true}
+            - {name: csi, mountPath: /spiffe-csi}
+            - {name: pods, mountPath: /var/lib/kubelet/pods, mountPropagation: Bidirectional}
+        - name: registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.6.0
+          resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 250m, memory: 64Mi}}
+          args: [-csi-address, /spiffe-csi/csi.sock, -kubelet-registration-path, /var/lib/kubelet/plugins/csi.spiffe.io/csi.sock]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: csi, mountPath: /spiffe-csi}
+            - {name: registration, mountPath: /registration}
+      volumes:
+        - name: socket
+          hostPath: {path: /run/spire/agent-sockets, type: DirectoryOrCreate}
+        - name: csi
+          hostPath: {path: /var/lib/kubelet/plugins/csi.spiffe.io, type: DirectoryOrCreate}
+        - name: pods
+          hostPath: {path: /var/lib/kubelet/pods, type: Directory}
+        - name: registration
+          hostPath: {path: /var/lib/kubelet/plugins_registry, type: Directory}

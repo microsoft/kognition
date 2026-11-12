@@ -1,0 +1,85 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: trustprofileindices.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: TrustProfileIndex
+    listKind: TrustProfileIndexList
+    plural: trustprofileindices
+    singular: trustprofileindex
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.agentUID
+      name: Agent UID
+      type: string
+    - jsonPath: .spec.selectedProfileName
+      name: Profile
+      type: string
+    - jsonPath: .spec.selectedProfileUID
+      name: Profile UID
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          TrustProfileIndex records the one selected TrustProfile for an Agent
+          incarnation. The controller creates it only after the selected profile is
+          durable and attaches an Agent owner reference for orphan collection.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              agentUID:
+                maxLength: 128
+                minLength: 1
+                type: string
+              selectedProfileName:
+                maxLength: 253
+                minLength: 1
+                type: string
+              selectedProfileUID:
+                maxLength: 128
+                minLength: 1
+                type: string
+            required:
+            - agentUID
+            - selectedProfileName
+            - selectedProfileUID
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: TrustProfileIndex agentUID is immutable
+          rule: self.spec.agentUID == oldSelf.spec.agentUID
+    served: true
+    storage: true
+    subresources: {}

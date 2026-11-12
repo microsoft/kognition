@@ -1,0 +1,131 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# Real, pgvector-backed KnowledgeBaseClass for the Azure Blob sample. The KB
+# reconciler launches the kb-ingester Job which fetches each blob, chunks it,
+# embeds it with `text-embedding-3-small`, and writes vectors into the shared
+# pgvector store. The runtime then attaches a `knowledge_search` tool that runs
+# nearest-neighbour queries at answer time.
+#
+# Prereqs (handled by `.\make.ps1 install MODE=kubernetes`):
+#   --set kbPgvector.enabled=true --set kbIngester.enabled=true
+# The pgvector Secret + SecretRef are wired by apply.ps1 (run automatically by
+# `.\make.ps1 samples-install`).
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClass
+metadata:
+  name: azure-blob-kb
+spec:
+  provisioner: pgvector
+  indexMode: dense
+  reclaimPolicy: Delete
+  embeddingModelRef:
+    name: text-embedding-3-small
+  chunkStrategy:
+    mode: recursive
+    size: 512
+    overlap: 64
+  vectorStore:
+    type: pgvector
+    pgvector:
+      connectionSecretRef:
+        name: kognition-kb-pgvector
+      table: azure_docs_chunks
+      dimension: 1536
+---
+# Embedding model backed by the Foundry project. Credentials come from the
+# `foundry-creds` SecretRef (azure-identity client-secret). The SAME
+# credential is what the ingester Job uses to read the blob container
+# passwordless (via DefaultAzureCredential + the injected AZURE_* env), so no
+# storage account key is needed — and the account has key auth disabled.
+apiVersion: kognition.dev/v1alpha1
+kind: Model
+metadata:
+  name: text-embedding-3-small
+  namespace: default
+spec:
+  className: foundry
+  provider: foundry
+  modelID: text-embedding-3-small
+  endpoint: https://ai-foundry-do-titi.cognitiveservices.azure.com
+  credentialRef:
+    name: foundry-creds
+  parameters:
+    apiVersion: "2024-08-01-preview"
+---
+# KnowledgeBase pointing at the Azure Blob container. `bucket` is the container
+# name. Credentials come from the `azurite-blob-creds` SecretRef (a connection
+# string whose BlobEndpoint targets the in-cluster Azurite Service), so the
+# ingester talks to the emulator — no external Azure account needed. To point
+# at a real Azure account instead, drop `credentialSecretRef`, add
+# `endpoint: https://<account>.blob.core.windows.net`, and give the ingester's
+# service principal Storage Blob Data Contributor (see README).
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBase
+metadata:
+  name: azure-docs-kb
+  namespace: default
+  annotations:
+    kognition.dev/ingest-allow-private-networks: "true"
+spec:
+  knowledgeBaseClassName: azure-blob-kb
+  sources:
+    - type: blob
+      blob:
+        provider: azure
+        bucket: product-docs
+        prefix: mark7/
+        credentialSecretRef:
+          name: azurite-blob-creds
+        include:
+          - "**/*.md"
+          - "**/*.txt"
+          - "**/*.pdf"
+        exclude:
+          - "**/drafts/**"
+  refreshPolicy:
+    mode: periodic
+    interval: 1h
+---
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClaim
+metadata:
+  name: azure-docs-claim
+  namespace: default
+spec:
+  knowledgeBaseName: azure-docs-kb
+  accessMode: ReadOnly
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: azure-docs-agent
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are the Orbital Mark 7 product documentation assistant. For any
+      factual question (release dates, pricing, regions, limits), call
+      `knowledge_search` with a focused query before answering, then quote or
+      paraphrase the returned passages and cite the source file. If the tool
+      returns nothing relevant, say so plainly instead of inventing details.
+  knowledgeBaseClaims:
+    - name: azure-docs-claim
+      required: true
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 1024
+---
+# One-shot reindex so the blobs are ingested immediately on apply (otherwise
+# ingestion waits for the periodic refresh).
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseIndexRun
+metadata:
+  name: azure-docs-reindex-now
+  namespace: default
+spec:
+  knowledgeBaseName: azure-docs-kb

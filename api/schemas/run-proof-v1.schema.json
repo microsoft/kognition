@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kognition.dev/schemas/run-proof-v1.schema.json",
+  "title": "Kognition Run Proof v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "runId", "scenario", "protectedAction", "mode", "passed", "assertions"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "runId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "scenario": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "protectedAction": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "mode": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "passed": { "type": "boolean" },
+    "assertions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "passed", "failed"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "reportRef": { "type": "string", "minLength": 1, "maxLength": 256 }
+  }
+}

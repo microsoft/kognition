@@ -1,0 +1,116 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: autonomyreviews.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: AutonomyReview
+    listKind: AutonomyReviewList
+    plural: autonomyreviews
+    singular: autonomyreview
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.agentRef.name
+      name: Agent
+      type: string
+    - jsonPath: .status.decision
+      name: Decision
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: AutonomyReview records a human review of an agent's autonomous
+          actions.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: AutonomyReviewSpec defines what is being reviewed.
+            properties:
+              actionDescription:
+                minLength: 1
+                type: string
+              agentRef:
+                description: LocalObjectReference references a resource by name within
+                  the same namespace.
+                properties:
+                  name:
+                    description: Name is the name of the referenced resource.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+                x-kubernetes-validations:
+                - message: Agent reference name must not be empty
+                  rule: size(self.name) > 0
+              currentClass:
+                type: string
+              evidence:
+                type: string
+              requestedClass:
+                type: string
+              sessionID:
+                type: string
+              trustProfileRef:
+                type: string
+            required:
+            - actionDescription
+            - agentRef
+            type: object
+            x-kubernetes-validations:
+            - message: AutonomyReview spec is immutable after creation
+              rule: self == oldSelf
+          status:
+            description: AutonomyReviewStatus describes the review decision.
+            properties:
+              decidedAt:
+                format: date-time
+                type: string
+              decidedBy:
+                type: string
+              decision:
+                enum:
+                - Pending
+                - Approved
+                - Denied
+                type: string
+              expiresAt:
+                format: date-time
+                type: string
+              reason:
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,26 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# KnowledgeBaseIndexRun is a one-shot, imperative reindex of an existing
+# KnowledgeBase. Analogous to a Kubernetes Job: create it → the reconciler
+# picks up the referenced KnowledgeBaseClass and, if that class has a
+# batch ingester configured, launches an ingest Job → status transitions
+# Pending → Running → Succeeded (or Failed).
+#
+# The `inline` KnowledgeBaseClass used by this sample has no ingester
+# (documents are already embedded in the KnowledgeBase's spec.sources),
+# so the reconciler will short-circuit the run to Succeeded with a
+# "no ingester configured for this KnowledgeBaseClass" message. This is
+# expected and demonstrates that the machinery is wired end-to-end. For
+# a run that actually launches an ingest Job, see
+# samples/knowledge-base-blob-e2e/indexrun.yaml.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseIndexRun
+metadata:
+  name: orbital-notes-reindex-now
+  namespace: default
+spec:
+  knowledgeBaseName: orbital-notes-kb
+  # Keep the record around for 24 hours after completion for audit visibility.
+  ttlSecondsAfterFinished: 86400

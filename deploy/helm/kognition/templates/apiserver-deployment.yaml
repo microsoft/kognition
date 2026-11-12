@@ -1,0 +1,166 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if eq .Values.mode "standalone" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kognition.fullname" . }}-apiserver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: apiserver
+spec:
+  replicas: {{ .Values.apiserver.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: apiserver
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "kognition.labels" . | nindent 8 }}
+        app.kubernetes.io/component: apiserver
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "kognition.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.postgres.enabled }}
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ include "kognition.thirdPartyImage" (dict "global" .Values.global "image" .Values.thirdPartyImages.busybox) }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          command: ['sh', '-c', 'until nc -z {{ include "kognition.fullname" . }}-postgres 5432; do echo waiting for postgres; sleep 2; done']
+          resources:
+            {{- toYaml .Values.apiserver.waitForPostgres.resources | nindent 12 }}
+      {{- end }}
+      containers:
+        - name: apiserver
+          image: {{ include "kognition.image" (dict "global" .Values.global "image" .Values.apiserver.image "defaultTag" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.apiserver.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8081
+              name: grpc
+            - containerPort: 9090
+              name: metrics
+          env:
+            {{- include "kognition.artifactSigningEnv" . | nindent 12 }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.databaseSecretName" . }}
+                  key: DATABASE_URL
+            - name: LISTEN_ADDR
+              value: ":8080"
+            - name: KOGNITION_METRICS_ADDR
+              value: {{ ternary ":9090" "127.0.0.1:9090" .Values.observability.metrics.serviceMonitor.enabled | quote }}
+            - name: KOGNITION_GRPC_ADDR
+              value: ":8081"
+            - name: KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (printf "%s-runtime-auth" (include "kognition.fullname" .)) .Values.runtimeAuth.existingSecret }}
+                  key: runtime-approval-binding-keys.json
+            {{- if .Values.apiserver.auth.enabled }}
+            - name: KOGNITION_AUTH_ENABLED
+              value: "true"
+            {{- with .Values.apiserver.auth.oidc.issuer }}
+            - name: KOGNITION_OIDC_ISSUER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.apiserver.auth.oidc.audience }}
+            - name: KOGNITION_OIDC_AUDIENCE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.apiserver.auth.oidc.usernameClaim }}
+            - name: KOGNITION_OIDC_USERNAME_CLAIM
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.apiserver.auth.oidc.groupsClaim }}
+            - name: KOGNITION_OIDC_GROUPS_CLAIM
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.apiserver.auth.oidc.requiredGroups }}
+            - name: KOGNITION_OIDC_REQUIRED_GROUPS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.apiserver.auth.controlPlaneAdminGroups }}
+            - name: KOGNITION_CONTROL_PLANE_ADMIN_GROUPS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- if .Values.apiserver.auth.bootstrapToken.secretName }}
+            - name: KOGNITION_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apiserver.auth.bootstrapToken.secretName }}
+                  key: {{ .Values.apiserver.auth.bootstrapToken.secretKey }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.apiserver.tls.enabled }}
+            - name: KOGNITION_TLS_CERT_FILE
+              value: /etc/kognition/tls/tls.crt
+            - name: KOGNITION_TLS_KEY_FILE
+              value: /etc/kognition/tls/tls.key
+            {{- end }}
+            {{- include "kognition.openTelemetryEnv" . | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+              {{- if .Values.apiserver.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              {{- if .Values.apiserver.tls.enabled }}
+              scheme: HTTPS
+              {{- end }}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          {{- if or .Values.apiserver.tls.enabled .Values.artifactSigning.existingSecret }}
+          volumeMounts:
+            {{- include "kognition.artifactSigningMount" . | nindent 12 }}
+            {{- if .Values.apiserver.tls.enabled }}
+            - name: tls
+              mountPath: /etc/kognition/tls
+              readOnly: true
+            {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.apiserver.resources | nindent 12 }}
+      {{- if or .Values.apiserver.tls.enabled .Values.artifactSigning.existingSecret }}
+      volumes:
+        {{- include "kognition.artifactSigningVolume" . | nindent 8 }}
+        {{- if .Values.apiserver.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.apiserver.tls.secretName }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.apiserver.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.apiserver.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.apiserver.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,33 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# KnowledgeBase whose sole source is a prefix inside an Azure Blob
+# container. The KB reconciler launches a batch/v1 Job that runs the
+# kb-ingester image, downloads the matching blobs, chunks them, embeds
+# them with the KBClass' embedding model, and writes rows into
+# `kognition_kb_chunks` in the pgvector Deployment.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBase
+metadata:
+  name: azure-docs-kb
+  namespace: default
+spec:
+  knowledgeBaseClassName: pgvector-standard
+  sources:
+    - type: blob
+      blob:
+        provider: azure
+        bucket: product-docs
+        prefix: mark7/
+        credentialSecretRef:
+          name: azure-blob-creds
+        include:
+          - "**/*.md"
+          - "**/*.txt"
+          - "**/*.pdf"
+        exclude:
+          - "**/drafts/**"
+  refreshPolicy:
+    mode: periodic
+    interval: 1h

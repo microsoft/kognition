@@ -1,0 +1,46 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: kognition.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: {{ .Values.workflow.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "kognition-multi-agent.labels" . | nindent 4 }}
+spec:
+  entryPoint: {{ .Values.workflow.entryPoint }}
+  steps:
+    - name: researcher
+      agentRef:
+        name: researcher
+      input: "Research the following topic thoroughly: {{`{{.goal}}`}}"
+      timeout: 90s
+    - name: writer
+      agentRef:
+        name: writer
+      input: "Write an article based on this research:\n{{`{{.steps.researcher.output}}`}}"
+      timeout: 90s
+    - name: reviewer
+      agentRef:
+        name: reviewer
+      input: "Review this article:\n{{`{{.steps.writer.output}}`}}"
+      timeout: 60s
+  edges:
+    - from: researcher
+      to: writer
+    - from: writer
+      to: reviewer
+    {{- if .Values.workflow.revisionLoop.enabled }}
+    - from: reviewer
+      to: writer
+      condition: {{ .Values.workflow.revisionLoop.condition | quote }}
+    {{- end }}
+  {{- if .Values.workflow.approvalGates.enabled }}
+  approvalGates:
+    - from: writer
+      to: reviewer
+  {{- end }}
+  budgets:
+    maxDuration: {{ .Values.workflow.budgets.maxDuration }}
+    maxTokens: {{ .Values.workflow.budgets.maxTokens }}

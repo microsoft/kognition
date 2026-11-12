@@ -1,0 +1,89 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+syntax = "proto3";
+
+package kognition.v1alpha1;
+
+option go_package = "github.com/kognition-ai/kognition/proto/gen/kognition/v1alpha1";
+
+// Plugin is the sidecar-level transport service exposed by every gRPC plugin.
+// The plugin host connects to each sidecar and calls these RPCs
+// for discovery, health monitoring, and lifecycle management.
+// This is analogous to CSI Identity in Kubernetes.
+service Plugin {
+  // GetPluginInfo returns the plugin's identity metadata.
+  rpc GetPluginInfo(GetPluginInfoRequest) returns (GetPluginInfoResponse);
+
+  // GetPluginCapabilities returns the types of services this plugin exposes.
+  rpc GetPluginCapabilities(GetPluginCapabilitiesRequest) returns (GetPluginCapabilitiesResponse);
+
+  // Probe checks if the plugin is alive and ready to serve.
+  rpc Probe(PluginProbeRequest) returns (PluginProbeResponse);
+
+  // NotifyRegistered is called by the host after successful registration,
+  // allowing the plugin to perform post-registration initialization.
+  rpc NotifyRegistered(NotifyRegisteredRequest) returns (NotifyRegisteredResponse);
+}
+
+// --- Plugin Info ---
+
+message GetPluginInfoRequest {}
+
+message GetPluginInfoResponse {
+  // Unique name of this plugin instance (e.g., "autogen-runtime", "pgvector-memory").
+  string name = 1;
+
+  // Semantic version of the plugin.
+  string version = 2;
+
+  // Human-readable description.
+  string description = 3;
+
+  // Plugin author or maintainer.
+  string vendor = 4;
+}
+
+// --- Plugin Capabilities ---
+
+message GetPluginCapabilitiesRequest {}
+
+message GetPluginCapabilitiesResponse {
+  repeated PluginCapability capabilities = 1;
+}
+
+message PluginCapability {
+  // Type indicates which category of service this plugin provides.
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    // RUNTIME: plugin implements the Runtime contract (CreateSession, Step, etc.).
+    RUNTIME = 1;
+    // MEMORY: plugin implements the Memory backend (Store, Search, etc.).
+    MEMORY = 2;
+    // TOOL: plugin implements tool execution (InvokeTool, ListTools, etc.).
+    TOOL = 3;
+    // MODEL: plugin implements model inference (Complete, Embed, etc.).
+    MODEL = 4;
+    KNOWLEDGE = 5;
+  }
+
+  Type type = 1;
+}
+
+// --- Probe ---
+
+message PluginProbeRequest {}
+
+message PluginProbeResponse {
+  // ready indicates whether the plugin is ready to serve requests.
+  bool ready = 1;
+}
+
+// --- Notify Registered ---
+
+message NotifyRegisteredRequest {
+  // host_version is the version of the plugin host.
+  string host_version = 1;
+}
+
+message NotifyRegisteredResponse {}

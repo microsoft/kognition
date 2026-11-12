@@ -1,0 +1,171 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+x-gateway-environment: &gateway-environment
+  KOGNITION_MODE: standalone
+  DATABASE_URL: postgres://kognition:kognition@postgres:5432/kognition?sslmode=disable
+  KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON: ${KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON:?Provide runtime approval binding keys}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: kognition
+      POSTGRES_PASSWORD: kognition
+      POSTGRES_DB: kognition
+    ports:
+      - "127.0.0.1:${KOGNITION_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U kognition -d kognition"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  migrate:
+    build:
+      context: .
+      target: migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://kognition:kognition@postgres:5432/kognition?sslmode=disable
+      KOGNITION_MIGRATION_BASELINE: ${KOGNITION_MIGRATION_BASELINE:-}
+    restart: "no"
+
+  apiserver:
+    build:
+      context: .
+      target: apiserver
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://kognition:kognition@postgres:5432/kognition?sslmode=disable
+      LISTEN_ADDR: ":8080"
+      KOGNITION_AUTH_ENABLED: "true"
+      KOGNITION_BOOTSTRAP_TOKEN: ${KOGNITION_BOOTSTRAP_TOKEN:?Provide an operator token}
+      KOGNITION_AGENT_SERVICE_TOKEN: ${KOGNITION_AGENT_SERVICE_TOKEN:?Provide a separate AgentService token}
+      KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON: ${KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON:?Provide runtime approval binding keys}
+      KOGNITION_OIDC_ISSUER: ${KOGNITION_OIDC_ISSUER:-}
+      KOGNITION_OIDC_AUDIENCE: ${KOGNITION_OIDC_AUDIENCE:-}
+      KOGNITION_OIDC_REQUIRED_GROUPS: ${KOGNITION_OIDC_REQUIRED_GROUPS:-}
+      KOGNITION_CONTROL_PLANE_ADMIN_GROUPS: ${KOGNITION_CONTROL_PLANE_ADMIN_GROUPS:-}
+      KOGNITION_ARTIFACT_SIGNING_KEYS_JSON: ${KOGNITION_ARTIFACT_SIGNING_KEYS_JSON:-}
+    ports:
+      - "127.0.0.1:${KOGNITION_API_PORT:-8080}:8080"
+
+  controller-manager:
+    build:
+      context: .
+      target: controller
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      KOGNITION_DSN: postgres://kognition:kognition@postgres:5432/kognition?sslmode=disable
+      KOGNITION_KB_INGESTER_URL: http://kb-ingester:8082
+      KOGNITION_MEMORY_SERVICE_URL: http://memory-service:8090
+      MEMORY_SERVICE_INTERNAL_TOKEN: ${MEMORY_SERVICE_INTERNAL_TOKEN:?Provide an internal Memory token}
+      DOCKER_HOST: unix:///var/run/docker.sock
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:-0}"
+
+  memory-service:
+    build:
+      context: .
+      target: memory-service
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      MEMORY_SERVICE_ADDR: ":8090"
+      MEMORY_BACKEND_TYPE: pgvector
+      MEMORY_SERVICE_INTERNAL_TOKEN: ${MEMORY_SERVICE_INTERNAL_TOKEN:?Provide an internal Memory token}
+      DATABASE_URL: postgres://kognition:kognition@postgres:5432/kognition?sslmode=disable
+
+  memory-policy-gateway:
+    build:
+      context: .
+      target: memory-policy-gateway
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      memory-service:
+        condition: service_started
+    environment:
+      <<: *gateway-environment
+      MEMORY_CAPABILITY_HMAC_KEY_ID: ${MEMORY_CAPABILITY_HMAC_KEY_ID:-local-v1}
+      MEMORY_CAPABILITY_HMAC_KEY: ${MEMORY_CAPABILITY_HMAC_KEY:?Provide a Memory capability key}
+      KOGNITION_MEMORY_SERVICE_URL: http://memory-service:8090
+      MEMORY_SERVICE_INTERNAL_TOKEN: ${MEMORY_SERVICE_INTERNAL_TOKEN:?Provide an internal Memory token}
+    ports:
+      - "127.0.0.1:${KOGNITION_MEMORY_GATEWAY_PORT:-8091}:8091"
+
+  tool-gateway:
+    build:
+      context: .
+      target: tool-gateway
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *gateway-environment
+      TOOL_CAPABILITY_HMAC_KEY_ID: ${TOOL_CAPABILITY_HMAC_KEY_ID:-local-v1}
+      TOOL_CAPABILITY_HMAC_KEY: ${TOOL_CAPABILITY_HMAC_KEY:?Provide a Tool capability key}
+    ports:
+      - "127.0.0.1:${KOGNITION_TOOL_GATEWAY_PORT:-8092}:8092"
+
+  model-gateway:
+    build:
+      context: .
+      target: model-gateway
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      KOGNITION_MODE: standalone
+      DATABASE_URL: postgres://kognition:kognition@postgres:5432/kognition?sslmode=disable
+      MODEL_CAPABILITY_HMAC_KEY_ID: ${MODEL_CAPABILITY_HMAC_KEY_ID:-local-v1}
+      MODEL_CAPABILITY_HMAC_KEY: ${MODEL_CAPABILITY_HMAC_KEY:?Provide a Model capability key}
+    ports:
+      - "127.0.0.1:${KOGNITION_MODEL_GATEWAY_PORT:-8093}:8093"
+
+  agent-communication-gateway:
+    build:
+      context: .
+      target: agent-communication-gateway
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      apiserver:
+        condition: service_started
+    environment:
+      <<: *gateway-environment
+      AGENT_DELEGATION_CAPABILITY_HMAC_KEY_ID: ${AGENT_DELEGATION_CAPABILITY_HMAC_KEY_ID:-local-v1}
+      AGENT_DELEGATION_CAPABILITY_HMAC_KEY: ${AGENT_DELEGATION_CAPABILITY_HMAC_KEY:?Provide a delegation capability key}
+      KOGNITION_RUNTIME_AUTH_TOKEN: ${KOGNITION_RUNTIME_AUTH_TOKEN:?Provide a separate runtime token}
+      KOGNITION_API_SERVER_URL: http://apiserver:8080
+      KOGNITION_API_SERVER_TOKEN: ${KOGNITION_AGENT_SERVICE_TOKEN:?Provide a separate AgentService token}
+    ports:
+      - "127.0.0.1:${KOGNITION_COMMUNICATION_GATEWAY_PORT:-8094}:8094"
+
+  kb-ingester:
+    build:
+      context: .
+      dockerfile: runtime/ingester/Dockerfile
+    entrypoint: ["python", "service.py"]
+    environment:
+      KOGNITION_INGEST_LISTEN: 0.0.0.0:8082
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:

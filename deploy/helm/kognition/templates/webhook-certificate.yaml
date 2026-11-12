@@ -1,0 +1,37 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if and (eq .Values.mode "kubernetes") .Values.webhook.enabled .Values.webhook.certManager.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "kognition.fullname" . }}-webhook-issuer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "kognition.fullname" . }}-webhook-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  secretName: {{ include "kognition.fullname" . }}-webhook-tls
+  duration: {{ .Values.webhook.certManager.duration }}
+  renewBefore: {{ .Values.webhook.certManager.renewBefore }}
+  issuerRef:
+    name: {{ include "kognition.fullname" . }}-webhook-issuer
+    kind: {{ .Values.webhook.certManager.issuerKind }}
+  dnsNames:
+    - {{ include "kognition.fullname" . }}-webhook
+    - {{ include "kognition.fullname" . }}-webhook.{{ .Release.Namespace }}
+    - {{ include "kognition.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+    - {{ include "kognition.fullname" . }}-webhook.{{ .Release.Namespace }}.svc.cluster.local
+{{- end }}

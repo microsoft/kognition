@@ -1,0 +1,93 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Demo: Quorum Approval Gate
+#
+# Exercises:
+#   - approvalGates with requiredApprovers > 1 (multi-approver quorum)
+#   - Edge-scoped gate that pauses dispatch of the downstream step
+#   - Approval timeout
+#   - Two approval paths: (a) apiserver-backed broker with quorum semantics,
+#     (b) annotation-based grant handled directly by the k8s controller
+#
+# Topology:
+#   drafter ──[gate: requires 2 approvers, 30m timeout]──→ publisher
+#
+# The publisher step is held in Pending phase until the gate is satisfied.
+# If the gate's timeout elapses with no decision, the run is auto-rejected.
+#
+# IMPORTANT — two execution paths, two approval mechanisms:
+#
+#   A) When running against the kognition apiserver (kognition-controller-manager):
+#      The apiserver's in-memory ApprovalBroker enforces requiredApprovers as
+#      a true multi-approver quorum. Approve via:
+#
+#        kognitionctl approve <approval-id> --decision approve --reason "lgtm"
+#
+#      (POSTs to /apis/kognition.dev/v1alpha1/approvals/<id>/decision; there
+#      is no --as flag — caller identity is taken from the kubeconfig context.)
+#
+#   B) When running against a CRD-only cluster with kognition-k8s-controller:
+#      The controller does NOT consume the broker; it grants approval as soon
+#      as a single annotation is present and IGNORES requiredApprovers count.
+#      Grant by annotating the WorkflowRun (the synthetic Workflow aliases the
+#      run's annotation map):
+#
+#        kubectl -n default annotate workflowrun.kognition.dev wfdemo-quorum-1 `
+#          kognition.dev/approved-steps=publisher --overwrite
+#
+#      To reject instead:
+#        kubectl -n default annotate workflowrun.kognition.dev wfdemo-quorum-1 `
+#          kognition.dev/rejected-steps=publisher --overwrite
+#
+# Trigger:
+#   kubectl apply -f - <<'EOF'
+#   apiVersion: kognition.dev/v1alpha1
+#   kind: WorkflowRun
+#   metadata: { name: wfdemo-quorum-1, namespace: default }
+#   spec:
+#     workflowRef: { name: wfdemo-quorum-publish }
+#     input: "Q4 product launch announcement"
+#   EOF
+#
+# Watch:
+#   kubectl -n default get workflowrun wfdemo-quorum-1 -o yaml `
+#     | yq '.status.activeStep, .status.conditions'
+---
+kind: Workflow
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-quorum-publish
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+    workflow.kognition.dev/feature: quorum-approval
+spec:
+  steps:
+    - name: drafter
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        You are drafting a public announcement for: "{{.Input}}".
+        Produce a 3–4 sentence press-release-style draft.
+      timeout: 180s
+    - name: publisher
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        You are the publishing assistant. Format the approved draft below as
+        a release-ready announcement with a headline and a one-line subtitle:
+
+        {{.Steps.drafter.Output}}
+      timeout: 180s
+  edges:
+    - from: drafter
+      to: publisher
+  approvalGates:
+    - from: drafter
+      to: publisher
+      requiredApprovers: 2
+      timeout: 30m
+  budgets:
+    maxDuration: 1h
+    maxTokens: 6000

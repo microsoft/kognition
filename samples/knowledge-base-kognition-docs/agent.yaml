@@ -1,0 +1,42 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClaim
+metadata:
+  name: kognition-docs-claim
+  namespace: default
+spec:
+  knowledgeBaseName: kognition-docs-kb
+  accessMode: ReadOnly
+---
+# Agent that reaches the KB through the claim. The dispatcher expands
+# the claim to a `KOGNITION_KB_RESOLVED` env var carrying the pgvector
+# DSN, table, and embedding model configuration. The chat Model separately
+# projects its `foundry-creds` SecretRef into the runtime, which mints an AAD
+# token via ClientSecretCredential. The runtime auto-attaches a
+# `knowledge_search` StructuredTool.
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: kognition-docs-agent
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are the Kognition project documentation assistant. For any
+      factual question about Kognition (CRDs, architecture, controllers,
+      backlog items, roadmap, manifest), call `knowledge_search` with a
+      focused query before answering. Quote or paraphrase directly from
+      the returned passages and cite the source file. If the tool returns
+      nothing relevant, say so plainly instead of inventing details.
+  knowledgeBaseClaims:
+    - name: kognition-docs-claim
+      required: true
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 1024

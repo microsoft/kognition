@@ -1,0 +1,36 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# pgvector-backed KnowledgeBaseClass.
+#
+# Prereqs:
+#   1. `helm install kognition ./deploy/helm/kognition --set kbPgvector.enabled=true`
+#      (or bring your own Postgres+pgvector and create a Secret with key
+#      `connectionString` containing a libpq DSN — the ingester expects it).
+#   2. A Model CR with credentials for the embedding model referenced below.
+#
+# The `Secret` name below matches the one produced by the built-in
+# `kbPgvector` template: `<release>-kb-pgvector`. Adjust the release name.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClass
+metadata:
+  name: pgvector-standard
+spec:
+  provisioner: pgvector
+  indexMode: dense
+  reclaimPolicy: Delete
+  embeddingModelRef:
+    name: text-embedding-3-small
+  chunkStrategy:
+    size: 512
+    overlap: 64
+    mode: recursive
+  vectorStore:
+    type: pgvector
+    pgvector:
+      # Change "kognition" to your Helm release name if different.
+      connectionSecretRef:
+        name: kognition-kb-pgvector
+      table: kognition_kb_chunks
+      dimension: 1536

@@ -1,0 +1,334 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  change-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Publish advisory validation plan
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -z "${BASE_SHA}" || "${BASE_SHA}" =~ ^0+$ ]] || ! git cat-file -e "${BASE_SHA}^{commit}"; then
+            BASE_SHA=EMPTY
+          fi
+          go run ./tools/securitygate plan --base "${BASE_SHA}" --head "${GITHUB_SHA}" > "${RUNNER_TEMP}/security-change-plan.json"
+          go run ./tools/securitygate plan --base "${BASE_SHA}" --head "${GITHUB_SHA}" --format markdown >> "${GITHUB_STEP_SUMMARY}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-change-plan
+          path: ${{ runner.temp }}/security-change-plan.json
+          if-no-files-found: warn
+
+  traceability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate commit messages
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            RANGE="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          else
+            BEFORE="${{ github.event.before }}"
+            if [[ -z "${BEFORE}" || "${BEFORE}" =~ ^0+$ ]]; then
+              RANGE="${{ github.sha }}^!"
+            else
+              RANGE="${BEFORE}..${{ github.sha }}"
+            fi
+          fi
+          bash .github/scripts/validate-commit-messages.sh "${RANGE}"
+      - name: Validate PR description
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: bash .github/scripts/validate-pr-description.sh
+      - name: Test traceability validators
+        run: bash .github/scripts/test-traceability-validators.sh
+      - name: Verify FR/NFR coverage
+        run: bash .github/scripts/check-fr-nfr-coverage.sh
+      - name: Test FR/NFR coverage checker
+        run: bash .github/scripts/test-fr-nfr-coverage.sh
+      - name: Verify NFR verification-plan semantics
+        run: bash .github/scripts/check-nfr-verification-plan.sh
+      - name: Test NFR verification-plan checker
+        run: bash .github/scripts/test-nfr-verification-plan.sh
+      - name: Test trace CLI chain rendering
+        run: bash .github/scripts/test-trace-cli.sh
+      - name: Test trace CLI git integration
+        run: bash .github/scripts/test-trace-cli-git.sh
+      - name: Verify first-party copyright headers
+        shell: pwsh
+        run: ./tools/copyright-headers.ps1 -Mode Check
+      - name: Test copyright header insertion
+        shell: pwsh
+        run: ./tools/tests/copyright-headers-tests.ps1
+      - name: Test optional sample server lifecycle
+        shell: pwsh
+        run: ./samples/workflows/tool-sandbox-tests.ps1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test release legal preparation
+        run: |
+          python -m pip install -r tools/requirements-test.txt
+          python -m pytest tools/tests/test_distribution_notices.py
+          python tools/distribution_notices.py source
+          python tools/distribution_notices.py charts
+          python tools/distribution_notices.py charts --check
+
+  lint:
+    runs-on: ubuntu-latest
+    needs: proto
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Format check
+        run: test -z "$(gofmt -l .)"
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+      - name: Go quality checks
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -z "${BASE_SHA}" || "${BASE_SHA}" =~ ^0+$ ]]; then
+            BASE_SHA="${GITHUB_SHA}^"
+          fi
+          golangci-lint run --timeout=10m --new-from-rev="${BASE_SHA}" ./...
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: proto
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: kognition
+          POSTGRES_PASSWORD: kognition
+          POSTGRES_DB: kognition
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kognition"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - name: Run tests
+        env:
+          DATABASE_URL: postgres://kognition:kognition@localhost:5432/kognition?sslmode=disable
+          KOGNITION_PGVECTOR_TEST_DSN: postgres://kognition:kognition@localhost:5432/kognition?sslmode=disable
+        run: go test -p=1 -count=1 -timeout=10m -race -coverpkg=github.com/kognition-ai/kognition/... -coverprofile=coverage.out ./...
+      - name: Enforce authored Go coverage
+        run: bash .github/scripts/check-go-coverage.sh --profile coverage.out --min 80
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  integration-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: proto
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: kognition
+          POSTGRES_PASSWORD: kognition
+          POSTGRES_DB: kognition
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kognition"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - name: Install setup-envtest
+        run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+      - name: Provision envtest control-plane binaries
+        run: echo "KUBEBUILDER_ASSETS=$(setup-envtest use 1.30.x -p path)" >> "$GITHUB_ENV"
+      - name: Install offline model export test dependency
+        shell: pwsh
+        run: Install-Module powershell-yaml -RequiredVersion 0.4.12 -Scope CurrentUser -Force
+      - name: Run integration tests
+        env:
+          DATABASE_URL: postgres://kognition:kognition@localhost:5432/kognition?sslmode=disable
+          KOGNITION_PGVECTOR_TEST_DSN: postgres://kognition:kognition@localhost:5432/kognition?sslmode=disable
+        run: go test -tags integration -count=1 -timeout=15m ./...
+
+  python-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test agent runtime
+        working-directory: runtime/agent
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt
+          python -m pytest -q
+
+  autogen-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test real AutoGen SDK runtime
+        working-directory: runtime/agent
+        run: |
+          python -m pip install -r requirements-test.txt -r requirements-autogen.txt
+          python -c "import autogen_agentchat, autogen_ext; from importlib.metadata import version; assert version('autogen-agentchat') == '0.7.5'; assert version('autogen-ext') == '0.7.5'"
+          python -m pytest test_autogen_graph.py test_main.py test_runtime_binding.py -q --junitxml=autogen-results.xml
+          python -c "import xml.etree.ElementTree as ET; suites = ET.parse('autogen-results.xml').getroot().iter('testsuite'); assert all(int(s.attrib.get('skipped', '0')) == 0 for s in suites), 'required AutoGen tests were skipped'"
+
+  test-watchdog:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install -r tools/requirements-test.txt
+      - name: Test deadline watchdog
+        run: python tools/run_bounded.py --timeout 120 -- python -m pytest tools/tests -q
+
+  security:
+    runs-on: ubuntu-latest
+    needs: proto
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Scan reachable Go vulnerabilities
+        uses: golang/govulncheck-action@v1
+        with:
+          go-package: ./...
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Audit Python dependencies
+        run: |
+          python -m pip install --disable-pip-version-check pip-audit==2.9.0
+          python -m pip_audit -r runtime/agent/requirements.txt
+          python -m pip_audit -r runtime/agent/requirements-autogen.txt
+          python -m pip_audit -r runtime/ingester/requirements.txt
+      - name: Verify reviewed SPIRE fixture dispositions
+        run: go run ./tools/securitygate identity-fixture
+      - name: Scan repository dependencies and configuration
+        uses: aquasecurity/trivy-action@v0.33.1
+        env:
+          TRIVY_IGNOREFILE: .trivyignore.yaml
+        with:
+          version: v0.74.0
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Test KB ingester
+        timeout-minutes: 10
+        working-directory: runtime/ingester
+        run: |
+          pip install -r requirements-test.txt
+          python -m pytest -q
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [traceability, lint, test, integration-test, python-tests, autogen-tests, test-watchdog, security, proto]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build binaries
+        run: |
+          go build -o bin/kognition-apiserver ./cmd/kognition-apiserver
+          go build -o bin/kognition-controller-manager ./cmd/kognition-controller-manager
+          go build -o bin/kognitionctl ./cmd/kognitionctl
+          go build -o bin/kognition-intent-gateway ./cmd/kognition-intent-gateway
+          go build -o bin/kognition-intent-gateway-client ./cmd/kognition-intent-gateway-client
+          go build -o bin/kognition-memory-policy-gateway ./cmd/kognition-memory-policy-gateway
+            go build -o bin/kognition-knowledge-gateway ./cmd/kognition-knowledge-gateway
+            go build -o bin/kognition-knowledge-indexer ./cmd/kognition-knowledge-indexer
+            go build -o bin/kognition-knowledge-azuresearch ./cmd/kognition-knowledge-azuresearch
+
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bufbuild/buf-setup-action@v1
+      - name: Buf lint
+        run: buf lint
+      - name: Generate protobuf bindings
+        run: buf generate
+      - name: Preserve first-party generated headers
+        shell: pwsh
+        run: |
+          $generated = @(git ls-files 'proto/gen/*.go')
+          ./tools/copyright-headers.ps1 -Mode Apply -Paths $generated
+      - name: Verify generated bindings are current
+        shell: bash
+        run: |
+          git diff --exit-code -- proto/gen
+          test -z "$(git ls-files --others -- proto/gen)"

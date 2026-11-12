@@ -1,0 +1,95 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if and (eq .Values.mode "kubernetes") .Values.webhook.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "kognition.fullname" . }}-validating
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+    {{- if .Values.global.aksAdmissionsEnforcerOptOut }}
+    admissions.enforcer/disabled: "true"
+    {{- end }}
+  {{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "kognition.fullname" . }}-webhook-cert
+  {{- end }}
+webhooks:
+  - name: validate.kognition.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    clientConfig:
+      {{- include "kognition.resourceWebhookCABundle" . | nindent 6 }}
+      service:
+        name: {{ include "kognition.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate
+        port: 443
+    rules:
+      - apiGroups: ["kognition.dev"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources:
+          - agents
+          - agentinstances
+          - agentpolicies
+          - cognitiveadmissionpolicies
+          - cognitivequotas
+          - cognitivelimitranges
+          - workspaces
+          - agentidentities
+          - agentidentities/status
+          - agentroles
+          - agentrolebindings
+          - memoryclaims
+          - memoryvolumes
+          - models
+          - modelinvocationprofiles
+          - secretrefs
+          - tools
+          - workflows
+          - workflowruns
+          - approvaldecisions
+          - autonomyreviews
+          - autonomyreviews/status
+          - trustprofiles
+          - runtimeapprovals
+          - runtimeapprovals/status
+          - knowledgebases
+          - knowledgebaseclaims
+          - knowledgebaseindexruns
+          - knowledgebaseindexschedules
+        scope: Namespaced
+      - apiGroups: ["kognition.dev"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources:
+          - autonomyclasses
+          - knowledgebaseclasses
+          - memoryclasses
+          - modelclasses
+          - toolclasses
+        scope: Cluster
+  - name: audit.kognition.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: NoneOnDryRun
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    clientConfig:
+      {{- include "kognition.resourceWebhookCABundle" . | nindent 6 }}
+      service:
+        name: {{ include "kognition.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /audit
+        port: 443
+    rules:
+      - apiGroups: ["kognition.dev"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["*"]
+        scope: "*"
+{{- end }}

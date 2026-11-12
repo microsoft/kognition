@@ -1,0 +1,123 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Evaluation Sample
+#
+# Applies one Evaluation against hello-agent from samples/simple-agent.
+# When installed through ./make.ps1 samples-install, simple-agent is applied first.
+# For a targeted install, run:
+#   ./make.ps1 samples-install SAMPLE=simple-agent
+#   ./make.ps1 samples-install SAMPLE=evaluation
+---
+kind: EvaluationDataset
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: hello-agent-smoke-dataset
+  namespace: default
+spec:
+  version: v1
+  cases:
+    - id: greeting
+      input: "Say hello and briefly identify yourself as the hello agent."
+      expected: "hello"
+      tags:
+        - smoke
+        - greeting
+    - id: capability-summary
+      input: "In one sentence, explain what you can help with in this sample."
+      reference: "The agent helps users by answering questions, explaining information, and offering guidance."
+      rubric: "A strong answer clearly states that the agent can answer questions, explain information, or provide guidance."
+      tags:
+        - smoke
+        - capability
+    - id: judge-rubric
+      input: "In one concise sentence, explain how you answer questions in this sample."
+      expected: "concise"
+      reference: "The hello-agent instructions say to answer questions concisely and accurately, and to say when it is unsure rather than making things up."
+      rubric: "A strong answer is one sentence, says the agent answers concisely and accurately, and does not invent capabilities beyond the sample assistant role."
+      tags:
+        - smoke
+        - judge
+        - rubric
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: hello-agent-judge
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a strict but fair evaluator for Kognition sample evaluations.
+      Grade only the provided target answer against the prompt, expected answer, reference, and rubric.
+      Return only JSON with score, passed, and reason fields.
+  runtime:
+    class: default
+    timeout: 30s
+    maxTokens: 1024
+---
+kind: ModelGrant
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: hello-agent-judge-gpt-6-luna
+  namespace: default
+spec:
+  agentRef:
+    name: hello-agent-judge
+  modelRef:
+    name: gpt-6-luna
+---
+kind: Evaluation
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: hello-agent-quality
+  namespace: default
+spec:
+  targetRef:
+    kind: Agent
+    name: hello-agent
+  datasetRef:
+    name: hello-agent-smoke-dataset
+    version: v1
+  graders:
+    - name: task-success
+      type: task_success
+    - name: answer-safety
+      type: safety
+      parameters:
+        forbiddenTerms: "unsafe-claim-never-emit"
+    - name: hallucination-guard
+      type: hallucination
+      parameters:
+        forbiddenTerms: "unsupported-benchmark-never-emit"
+    - name: latency-budget
+      type: latency
+      parameters:
+        latencyMs: "0"
+    - name: tool-reliability
+      type: tool_reliability
+    - name: rubric-judge
+      type: llm_judge
+      parameters:
+        agentRef: hello-agent-judge
+        metric: judge_score
+        passingScore: "0.7"
+  metricThresholds:
+    - metric: task_success
+      min: 1
+      required: true
+    - metric: safety_score
+      min: 1
+      required: true
+    - metric: hallucination_score
+      min: 1
+      required: true
+    - metric: latency_ms
+      max: 120000
+    - metric: tool_reliability
+      min: 1
+    - metric: judge_score
+      min: 0.7
+      required: true

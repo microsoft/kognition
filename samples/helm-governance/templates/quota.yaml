@@ -1,0 +1,21 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if .Values.quota.enabled }}
+apiVersion: kognition.dev/v1alpha1
+kind: CognitiveQuota
+metadata:
+  name: {{ .Release.Name }}-quota
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "kognition-governance.labels" . | nindent 4 }}
+spec:
+  hard:
+    agents: {{ .Values.quota.hard.agents }}
+    tools: {{ .Values.quota.hard.tools }}
+    workflows: {{ .Values.quota.hard.workflows }}
+  tokenBudget:
+    maxInputTokens: {{ .Values.quota.tokenBudget.maxInputTokens }}
+    maxOutputTokens: {{ .Values.quota.tokenBudget.maxOutputTokens }}
+  resetInterval: {{ .Values.quota.resetInterval }}
+{{- end }}

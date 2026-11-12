@@ -1,0 +1,118 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# Real, pgvector-backed S3 blob KB, indexing docs from an in-cluster S3
+# (S3-compatible) store. The kb-ingester Job fetches each object over the S3
+# API, chunks + embeds it into pgvector, and the runtime attaches a
+# `knowledge_search` tool. Works unchanged against AWS S3, R2, etc. — just
+# change the endpoint/region/credentials.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClass
+metadata:
+  name: s3-blob-kb
+spec:
+  provisioner: pgvector
+  indexMode: dense
+  reclaimPolicy: Delete
+  embeddingModelRef:
+    name: text-embedding-3-small
+  chunkStrategy:
+    mode: recursive
+    size: 512
+    overlap: 64
+  vectorStore:
+    type: pgvector
+    pgvector:
+      connectionSecretRef:
+        name: kognition-kb-pgvector
+      table: s3_docs_chunks
+      dimension: 1536
+---
+# Embedding model backed by the Foundry project (shared with the other KB
+# samples). Credentials come from the `foundry-creds` SecretRef.
+apiVersion: kognition.dev/v1alpha1
+kind: Model
+metadata:
+  name: text-embedding-3-small
+  namespace: default
+spec:
+  className: foundry
+  provider: foundry
+  modelID: text-embedding-3-small
+  endpoint: https://ai-foundry-do-titi.cognitiveservices.azure.com
+  credentialRef:
+    name: foundry-creds
+  parameters:
+    apiVersion: "2024-08-01-preview"
+---
+# KnowledgeBase pointing at the local bucket. `endpoint` selects the
+# S3-compatible store; `credentialSecretRef` carries the access/secret keys.
+# The ingester uses path-style addressing for custom endpoints.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBase
+metadata:
+  name: s3-docs-kb
+  namespace: default
+  annotations:
+    kognition.dev/ingest-allow-private-networks: "true"
+spec:
+  knowledgeBaseClassName: s3-blob-kb
+  sources:
+    - type: blob
+      blob:
+        provider: s3
+        bucket: product-docs
+        endpoint: http://minio.samples-s3-blob-services.svc.cluster.local:9000
+        region: us-east-1
+        prefix: mark7/
+        credentialSecretRef:
+          name: s3-blob-creds
+        include:
+          - "**/*.md"
+          - "**/*.txt"
+          - "**/*.pdf"
+        exclude:
+          - "**/drafts/**"
+  refreshPolicy:
+    mode: onDemand
+---
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClaim
+metadata:
+  name: s3-docs-claim
+  namespace: default
+spec:
+  knowledgeBaseName: s3-docs-kb
+  accessMode: ReadOnly
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: s3-docs-agent
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are the Orbital Mark 7 product documentation assistant. For any
+      factual question (release dates, pricing, regions, limits), call
+      `knowledge_search` with a focused query before answering, then quote or
+      paraphrase the returned passages and cite the source file. If the tool
+      returns nothing relevant, say so plainly instead of inventing details.
+  knowledgeBaseClaims:
+    - name: s3-docs-claim
+      required: true
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 1024
+---
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseIndexRun
+metadata:
+  name: s3-docs-reindex-now
+  namespace: default
+spec:
+  knowledgeBaseName: s3-docs-kb

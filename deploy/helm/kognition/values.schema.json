@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "global": {
+      "type": "object",
+      "properties": {
+        "aksAdmissionsEnforcerOptOut": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "memoryService": {
+      "type": "object",
+      "properties": {
+        "privateEgress": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/privateEgressRule" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "migrations": {
+      "type": "object",
+      "properties": {
+        "retainCompletedJobs": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "kubernetesApiEgressCIDRs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "ciliumApiServerEgress": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "webhook": {
+      "type": "object",
+      "properties": {
+        "caBundle": {
+          "type": "string",
+          "maxLength": 131072,
+          "pattern": "^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        }
+      },
+      "additionalProperties": true
+    },
+    "k8sController": {
+      "type": "object",
+      "properties": {
+        "pluginHost": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "socketDir": {
+              "type": "string",
+              "pattern": "^/.*$"
+            },
+            "hostVersion": {
+              "type": "string",
+              "minLength": 1
+            },
+            "discoveryInterval": {
+              "$ref": "#/definitions/duration"
+            },
+            "probeInterval": {
+              "$ref": "#/definitions/duration"
+            },
+            "probeTimeout": {
+              "$ref": "#/definitions/duration"
+            },
+            "connectTimeout": {
+              "$ref": "#/definitions/duration"
+            },
+            "reconnectBackoff": {
+              "$ref": "#/definitions/duration"
+            },
+            "maxReconnectBackoff": {
+              "$ref": "#/definitions/duration"
+            },
+            "sidecars": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["name", "image"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$"
+                  },
+                  "image": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "imagePullPolicy": {
+                    "type": "string",
+                    "enum": ["Always", "IfNotPresent", "Never"]
+                  },
+                  "command": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "env": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  },
+                  "resources": {
+                    "type": "object"
+                  },
+                  "securityContext": {
+                    "type": "object"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true,
+  "definitions": {
+    "privateEgressRule": {
+      "type": "object",
+      "required": ["namespaceSelector", "podSelector", "ports"],
+      "properties": {
+        "namespaceSelector": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string" }
+        },
+        "podSelector": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string" }
+        },
+        "ports": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "duration": {
+      "type": "string",
+      "pattern": "^(?:[0-9]+(?:\\.[0-9]+)?(?:ns|us|ms|s|m|h))+$"
+    }
+  }
+}

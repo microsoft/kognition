@@ -1,0 +1,170 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: porting-bridge, namespace: recovery-runtime}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: porting-bridge, namespace: recovery-runtime}
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, configmaps]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list]
+  - apiGroups: [kognition.dev]
+    resources: [agentjobs]
+    verbs: [create, get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: porting-bridge, namespace: recovery-runtime}
+subjects: [{kind: ServiceAccount, name: porting-bridge, namespace: recovery-runtime}]
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: porting-bridge}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: porting-bridge-discovery}
+rules:
+  - nonResourceURLs: [/api, /api/*, /apis, /apis/*]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: porting-bridge-discovery}
+subjects: [{kind: ServiceAccount, name: porting-bridge, namespace: recovery-runtime}]
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: porting-bridge-discovery}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: porting-bridge-child-jobs}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [kognition.dev]
+        apiVersions: [v1alpha1]
+        operations: [CREATE, UPDATE]
+        resources: [agentjobs]
+  matchConditions:
+    - name: bridge-only
+      expression: "request.userInfo.username == 'system:serviceaccount:recovery-runtime:porting-bridge'"
+  validations:
+    - message: Bridge may only submit bounded no-retry jobs for the reviewed PromQL Agent.
+      expression: >-
+        object.metadata.namespace == 'recovery-runtime' &&
+        object.metadata.name.matches('^kagent-promql-[a-f0-9]{40}$') &&
+        has(object.spec.agentRef) && object.spec.agentRef.name == 'porting-promql' &&
+        !has(object.spec.agentSpec) && !has(object.spec.agentRevision) && !has(object.spec.memoryClaimRef) &&
+        has(object.spec.backoffLimit) && object.spec.backoffLimit == 0 &&
+        has(object.spec.input) && size(object.spec.input) > 0 && size(object.spec.input) <= 65536 &&
+        has(object.metadata.annotations) && 'kognition.dev/tool-invocation-id' in object.metadata.annotations &&
+        size(object.metadata.annotations['kognition.dev/tool-invocation-id']) > 0 &&
+        size(object.metadata.annotations['kognition.dev/tool-invocation-id']) <= 128
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: porting-bridge-child-jobs}
+spec: {policyName: porting-bridge-child-jobs, validationActions: [Deny]}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: porting-bridge-config, namespace: recovery-runtime}
+data:
+  kubeconfig: |
+    apiVersion: v1
+    kind: Config
+    clusters:
+      - name: fixture
+        cluster:
+          server: https://kubernetes.default.svc
+          certificate-authority: /var/run/bridge-identity/ca.crt
+    users:
+      - name: bridge
+        user: {tokenFile: /var/run/bridge-identity/token}
+    contexts:
+      - name: fixture
+        context: {cluster: fixture, user: bridge, namespace: recovery-runtime}
+    current-context: fixture
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: porting-bridge, namespace: recovery-runtime}
+spec:
+  podSelector: {matchLabels: {app: porting-bridge}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: recovery-control}}
+          podSelector: {matchLabels: {app.kubernetes.io/component: tool-gateway, app.kubernetes.io/instance: recovery-test}}
+      ports: [{protocol: TCP, port: 443}]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: recovery-runtime}}
+          podSelector: {matchExpressions: [{key: app, operator: In, values: [porting-prometheus, porting-grafana]}]}
+      ports: [{protocol: TCP, port: 443}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata: {name: porting-bridge-api, namespace: recovery-runtime}
+spec:
+  endpointSelector: {matchLabels: {app: porting-bridge}}
+  egress:
+    - toEntities: [kube-apiserver]
+      toPorts: [{ports: [{port: "6443", protocol: TCP}, {port: "443", protocol: TCP}]}]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: porting-bridge
+  namespace: recovery-runtime
+  labels: {app: porting-bridge, kognition-fixture: porting-20261008}
+spec:
+  serviceAccountName: porting-bridge
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile: {type: RuntimeDefault}
+    sysctls: [{name: net.ipv4.ip_unprivileged_port_start, value: "0"}]
+  containers:
+    - name: bridge
+      image: docker.io/library/kognition-kagent-observability-bridge@sha256:365e2f862173169fb4bacd48ab717815b31946b404ebf89a793f1dc86be05de1
+      imagePullPolicy: Never
+      env:
+        - {name: KOGNITION_BRIDGE_KUBECONFIG, value: /var/run/bridge-config/kubeconfig}
+        - {name: KOGNITION_BRIDGE_NAMESPACE, value: recovery-runtime}
+        - {name: KOGNITION_BRIDGE_PROMETHEUS_URL, value: "http://porting-prometheus.recovery-runtime.svc:443/api/v1"}
+        - {name: KOGNITION_BRIDGE_GRAFANA_URL, value: "http://porting-grafana.recovery-runtime.svc:443/api"}
+        - {name: KOGNITION_BRIDGE_GRAFANA_TOKEN, valueFrom: {secretKeyRef: {name: porting-bridge-grafana, key: token}}}
+        - {name: KOGNITION_BRIDGE_DASHBOARD_PREFIX, value: porting-owned-}
+        - {name: KOGNITION_BRIDGE_FOLDER_UID, value: porting-owned}
+        - {name: KOGNITION_BRIDGE_PROMQL_AGENT, value: porting-promql}
+        - {name: KOGNITION_BRIDGE_LISTEN, value: ":443"}
+      resources: {requests: {cpu: 25m, memory: 32Mi}, limits: {cpu: 500m, memory: 128Mi}}
+      securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+      volumeMounts:
+        - {name: identity, mountPath: /var/run/bridge-identity, readOnly: true}
+        - {name: config, mountPath: /var/run/bridge-config, readOnly: true}
+  volumes:
+    - name: config
+      configMap: {name: porting-bridge-config}
+    - name: identity
+      projected:
+        sources:
+          - serviceAccountToken: {path: token, expirationSeconds: 600}
+          - configMap: {name: kube-root-ca.crt, items: [{key: ca.crt, path: ca.crt}]}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: porting-bridge, namespace: recovery-runtime}
+spec: {selector: {app: porting-bridge}, ports: [{port: 443, targetPort: 443}]}

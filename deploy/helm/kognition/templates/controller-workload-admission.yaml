@@ -1,0 +1,133 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if eq .Values.mode "kubernetes" }}
+{{- $controllerUser := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kognition.controllerServiceAccountName" .) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-workload
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["pods", "pods/ephemeralcontainers"]
+        scope: Namespaced
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["deployments"]
+        scope: Namespaced
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["jobs"]
+        scope: Namespaced
+  matchConditions:
+    - name: controller-workload-writer
+      expression: request.userInfo.username == {{ $controllerUser | toJson }}
+  variables:
+    - name: candidates
+      expression: '[object, oldObject].filter(candidate, candidate != null)'
+    - name: pods
+      expression: "variables.candidates.map(candidate, request.resource.resource == 'pods' ? candidate.spec : candidate.spec.template.spec)"
+  validations:
+    - expression: >-
+        variables.candidates.all(candidate,
+          has(candidate.metadata.labels) &&
+          'app.kubernetes.io/managed-by' in candidate.metadata.labels &&
+          candidate.metadata.labels['app.kubernetes.io/managed-by'] == 'kognition' &&
+          (!has(candidate.metadata.annotations) ||
+            (!('meta.helm.sh/release-name' in candidate.metadata.annotations) &&
+             !('meta.helm.sh/release-namespace' in candidate.metadata.annotations))))
+      message: Controller workload writes require existing Kognition ownership; unrelated or Helm-owned objects cannot be adopted.
+      reason: Forbidden
+    - expression: >-
+        variables.pods.all(pod,
+          (!has(pod.serviceAccountName) || pod.serviceAccountName in ['', 'default']) &&
+          has(pod.automountServiceAccountToken) && !pod.automountServiceAccountToken &&
+          (!has(pod.volumes) || pod.volumes.all(volume,
+            !has(volume.projected) || volume.projected.sources.all(source, !has(source.serviceAccountToken)))))
+      message: Controller workloads cannot select elevated ServiceAccounts or mount Kubernetes API tokens.
+      reason: Forbidden
+    - expression: >-
+        variables.pods.all(pod,
+          (!has(pod.hostNetwork) || !pod.hostNetwork) &&
+          (!has(pod.hostPID) || !pod.hostPID) &&
+          (!has(pod.hostIPC) || !pod.hostIPC) &&
+          (!has(pod.os) || pod.os.name == 'linux') &&
+          !has(pod.runtimeClassName) &&
+          has(pod.securityContext) &&
+          has(pod.securityContext.runAsNonRoot) && pod.securityContext.runAsNonRoot &&
+          (!has(pod.securityContext.runAsUser) || pod.securityContext.runAsUser > 0) &&
+          has(pod.securityContext.seccompProfile) && pod.securityContext.seccompProfile.type == 'RuntimeDefault' &&
+          !has(pod.securityContext.windowsOptions) && !has(pod.securityContext.seLinuxOptions) &&
+          (!has(pod.securityContext.sysctls) || size(pod.securityContext.sysctls) == 0) &&
+          (!has(pod.volumes) || pod.volumes.all(volume,
+            has(volume.secret) || has(volume.configMap) || has(volume.emptyDir) || has(volume.downwardAPI) || has(volume.projected)
+            {{- if .Values.workloadIdentityStatus.enabled }}
+            || (request.resource.resource != 'jobs' && volume.name == 'workload-api' && has(volume.csi) &&
+                volume.csi.driver == 'csi.spiffe.io' && has(volume.csi.readOnly) && volume.csi.readOnly &&
+                !has(volume.csi.nodePublishSecretRef) &&
+                (!has(volume.csi.fsType) || volume.csi.fsType == '') &&
+                (!has(volume.csi.volumeAttributes) || size(volume.csi.volumeAttributes) == 0))
+            {{- end }}
+            )))
+      message: Controller workloads require restricted Linux isolation without host namespaces, host volumes, or custom runtime security settings.
+      reason: Forbidden
+    {{- if .Values.workloadIdentityStatus.enabled }}
+    - expression: >-
+        variables.pods.all(pod,
+          (!has(pod.volumes) || !pod.volumes.exists(volume, has(volume.csi)) ||
+            (pod.containers.exists(container, container.name == 'workload-identity-proxy' &&
+              has(container.volumeMounts) && container.volumeMounts.exists(mount,
+                mount.name == 'workload-api' && mount.mountPath == '/spiffe-workload-api' && has(mount.readOnly) && mount.readOnly)) &&
+             variables.candidates.all(candidate, has(candidate.metadata.labels) && 'kognition.dev/agent' in candidate.metadata.labels))) &&
+          ((has(pod.initContainers) ? pod.initContainers : []) +
+            (has(pod.ephemeralContainers) ? pod.ephemeralContainers : [])).all(container,
+              !has(container.volumeMounts) || container.volumeMounts.all(mount, mount.name != 'workload-api')) &&
+          (pod.containers + (has(pod.initContainers) ? pod.initContainers : []) +
+            (has(pod.ephemeralContainers) ? pod.ephemeralContainers : [])).all(container,
+              !has(container.volumeMounts) || container.volumeMounts.all(mount,
+                mount.name != 'workload-api' ||
+                (container.name == 'workload-identity-proxy' &&
+                 mount.mountPath == '/spiffe-workload-api' && has(mount.readOnly) && mount.readOnly &&
+                 !has(mount.subPath) && !has(mount.subPathExpr) && !has(mount.mountPropagation)))))
+      message: Only the managed Agent identity proxy may mount the protected read-only SPIFFE Workload API.
+      reason: Forbidden
+    {{- end }}
+    - expression: >-
+        variables.pods.all(pod,
+          (pod.containers +
+            (has(pod.initContainers) ? pod.initContainers : []) +
+            (has(pod.ephemeralContainers) ? pod.ephemeralContainers : [])).all(container,
+              has(container.securityContext) &&
+              (!has(container.securityContext.privileged) || !container.securityContext.privileged) &&
+              has(container.securityContext.allowPrivilegeEscalation) && !container.securityContext.allowPrivilegeEscalation &&
+              (!has(container.securityContext.runAsNonRoot) || container.securityContext.runAsNonRoot) &&
+              (!has(container.securityContext.runAsUser) || container.securityContext.runAsUser > 0) &&
+              (!has(container.securityContext.seccompProfile) || container.securityContext.seccompProfile.type == 'RuntimeDefault') &&
+              (!has(container.securityContext.procMount) || container.securityContext.procMount == 'Default') &&
+              !has(container.securityContext.windowsOptions) && !has(container.securityContext.seLinuxOptions) &&
+              has(container.securityContext.capabilities) &&
+              has(container.securityContext.capabilities.drop) && 'ALL' in container.securityContext.capabilities.drop &&
+              (!has(container.securityContext.capabilities.add) || size(container.securityContext.capabilities.add) == 0) &&
+              (!has(container.ports) || container.ports.all(port, !has(port.hostPort) || port.hostPort == 0))))
+      message: All workload containers, including init and ephemeral containers, must remain non-root and unprivileged with all capabilities dropped.
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-workload
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-workload
+  validationActions: [Deny]
+{{- end }}

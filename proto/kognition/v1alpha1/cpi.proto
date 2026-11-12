@@ -1,0 +1,417 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+syntax = "proto3";
+
+package kognition.v1alpha1;
+
+option go_package = "github.com/kognition-ai/kognition/proto/gen/kognition/v1alpha1";
+
+// Identity is the CPI service for provider registration and capability discovery.
+service Identity {
+  // GetProviderInfo returns metadata about the capability provider.
+  rpc GetProviderInfo(GetProviderInfoRequest) returns (GetProviderInfoResponse);
+
+  // GetCapabilities returns the provider's supported operations.
+  rpc GetProviderCapabilities(GetProviderCapabilitiesRequest) returns (GetProviderCapabilitiesResponse);
+}
+
+// Lifecycle manages provisioning and deprovisioning of resources via CPI.
+service Lifecycle {
+  // Provision creates or allocates a resource through the provider.
+  rpc Provision(ProvisionRequest) returns (ProvisionResponse);
+
+  // Deprovision releases a previously provisioned resource.
+  rpc Deprovision(DeprovisionRequest) returns (DeprovisionResponse);
+
+  // Update modifies an existing provisioned resource.
+  rpc Update(UpdateRequest) returns (UpdateResponse);
+
+  // Validate checks whether a resource spec is valid for this provider.
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+
+  // HealthCheck performs a unary health check against the provider.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+
+  // HealthWatch streams health status of a provisioned resource.
+  rpc HealthWatch(HealthWatchRequest) returns (stream HealthWatchResponse);
+}
+
+// Extension is the CPI service for arbitrary key-value extension calls.
+service Extension {
+  // Call invokes a named extension operation with arbitrary key-value parameters.
+  rpc Call(ExtensionCallRequest) returns (ExtensionCallResponse);
+
+  // ListOperations returns the extension operations supported by this provider.
+  rpc ListOperations(ListExtensionOperationsRequest) returns (ListExtensionOperationsResponse);
+}
+
+// ToolExtension is the CPI extension service for tool providers.
+service ToolExtension {
+  // ValidateTool checks if a tool spec is valid for this provider.
+  rpc ValidateTool(ValidateToolRequest) returns (ValidateToolResponse);
+
+  // InvokeTool executes a tool call and streams results.
+  rpc InvokeTool(InvokeToolRequest) returns (stream InvokeToolResponse);
+
+  // ListTools returns the tools available from this provider.
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+}
+
+// MemoryExtension is the CPI extension service for memory providers.
+service MemoryExtension {
+  // Read retrieves data from memory.
+  rpc Read(MemoryReadRequest) returns (MemoryReadResponse);
+
+  // Write stores data in memory.
+  rpc Write(MemoryWriteRequest) returns (MemoryWriteResponse);
+
+  // Summarize produces a summary of stored memories.
+  rpc Summarize(MemorySummarizeRequest) returns (MemorySummarizeResponse);
+
+  // Forget removes specific memory entries.
+  rpc Forget(MemoryForgetRequest) returns (MemoryForgetResponse);
+}
+
+// ModelExtension is the CPI extension service for model providers.
+service ModelExtension {
+  // Complete generates a completion from a model.
+  rpc Complete(ModelCompleteRequest) returns (stream ModelCompleteResponse);
+
+  // Embed generates embeddings for input text.
+  rpc Embed(ModelEmbedRequest) returns (ModelEmbedResponse);
+
+  // ValidateModelId checks if a model ID is valid for this provider.
+  rpc ValidateModelId(ValidateModelIdRequest) returns (ValidateModelIdResponse);
+}
+
+service KnowledgeExtension {
+  rpc Query(KnowledgeQueryRequest) returns (KnowledgeQueryResponse);
+  rpc Index(stream KnowledgeIndexBatchRequest) returns (KnowledgeIndexResponse);
+  rpc Cleanup(KnowledgeCleanupRequest) returns (KnowledgeCleanupResponse);
+}
+
+message KnowledgeScope {
+  string namespace = 1;
+  string knowledge_base_uid = 2;
+  int64 generation = 3;
+  string configuration_api_group = 4;
+  string configuration_kind = 5;
+  string configuration_name = 6;
+  string configuration_uid = 7;
+  string configuration_digest = 8;
+  string operation_id = 9;
+}
+
+message KnowledgeFilter {
+  string key = 1;
+  string value = 2;
+}
+
+message KnowledgeQueryRequest {
+  KnowledgeScope scope = 1;
+  string request_id = 2;
+  string mode = 3;
+  string text = 4;
+  repeated double vector = 5;
+  int32 top_k = 6;
+  repeated KnowledgeFilter filters = 7;
+}
+
+message KnowledgeQueryResponse {
+  KnowledgeScope scope = 1;
+  string request_id = 2;
+  repeated KnowledgeMatch matches = 3;
+}
+
+message KnowledgeMatch {
+  string document_id = 1;
+  string chunk_id = 2;
+  string content = 3;
+  double score = 4;
+  string source_uri = 5;
+  string location = 6;
+}
+
+message KnowledgeIndexBatchRequest {
+  KnowledgeScope scope = 1;
+  string operation_id = 2;
+  string source_digest = 3;
+  int32 sequence = 4;
+  repeated KnowledgeIndexChunk chunks = 5;
+}
+
+message KnowledgeIndexChunk {
+  string document_id = 1;
+  string chunk_id = 2;
+  string content = 3;
+  string source_uri = 4;
+  string location = 5;
+  repeated double vector = 6;
+}
+
+message KnowledgeIndexResponse {
+  KnowledgeScope scope = 1;
+  string operation_id = 2;
+  string source_digest = 3;
+  int64 document_count = 4;
+  int64 indexed_chunks = 5;
+  string backend_operation_id = 6;
+}
+
+enum KnowledgeReclaimPolicy {
+  KNOWLEDGE_RECLAIM_POLICY_UNSPECIFIED = 0;
+  KNOWLEDGE_RECLAIM_POLICY_DELETE = 1;
+  KNOWLEDGE_RECLAIM_POLICY_RETAIN = 2;
+  KNOWLEDGE_RECLAIM_POLICY_ARCHIVE = 3;
+}
+
+message KnowledgeCleanupRequest {
+  KnowledgeScope scope = 1;
+  string cleanup_id = 2;
+  KnowledgeReclaimPolicy reclaim_policy = 3;
+  string backend_operation_id = 4;
+}
+
+message KnowledgeCleanupResponse {
+  KnowledgeScope scope = 1;
+  string cleanup_id = 2;
+  KnowledgeReclaimPolicy reclaim_policy = 3;
+  string backend_operation_id = 4;
+}
+
+// --- Identity messages ---
+
+message GetProviderInfoRequest {}
+
+message GetProviderInfoResponse {
+  string name = 1;
+  string version = 2;
+  string description = 3;
+  // dimension indicates the provider category: "tool", "memory", "model", or "knowledge".
+  string dimension = 4;
+}
+
+message GetProviderCapabilitiesRequest {}
+
+message GetProviderCapabilitiesResponse {
+  repeated string capabilities = 1;
+  KnowledgeProviderCapabilities knowledge = 2;
+}
+
+message KnowledgeProviderCapabilities {
+  string protocol_version = 1;
+  repeated KnowledgeConfigurationKind configuration_kinds = 2;
+  repeated string operations = 3;
+}
+
+message KnowledgeConfigurationKind {
+  string api_group = 1;
+  string kind = 2;
+}
+
+// --- Validate & HealthCheck messages ---
+
+message ValidateRequest {
+  string resource_kind = 1;
+  string spec_json = 2;
+  map<string, string> parameters = 3;
+}
+
+message ValidateResponse {
+  bool valid = 1;
+  string reason = 2;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  bool ready = 1;
+  string message = 2;
+}
+
+// --- Extension messages ---
+
+message ExtensionCallRequest {
+  string operation = 1;
+  map<string, string> parameters = 2;
+}
+
+message ExtensionCallResponse {
+  map<string, string> results = 1;
+  string error = 2;
+}
+
+message ListExtensionOperationsRequest {}
+
+message ListExtensionOperationsResponse {
+  repeated ExtensionOperation operations = 1;
+}
+
+message ExtensionOperation {
+  string name = 1;
+  string description = 2;
+}
+
+// --- Lifecycle messages ---
+
+message ProvisionRequest {
+  string resource_kind = 1;
+  string resource_name = 2;
+  string namespace = 3;
+  map<string, string> parameters = 4;
+}
+
+message ProvisionResponse {
+  string resource_id = 1;
+  map<string, string> connection_info = 2;
+}
+
+message DeprovisionRequest {
+  string resource_id = 1;
+}
+
+message DeprovisionResponse {}
+
+message UpdateRequest {
+  string resource_id = 1;
+  map<string, string> parameters = 2;
+}
+
+message UpdateResponse {}
+
+message HealthWatchRequest {
+  string resource_id = 1;
+}
+
+message HealthWatchResponse {
+  bool healthy = 1;
+  string message = 2;
+}
+
+// --- ToolExtension messages ---
+
+message ValidateToolRequest {
+  string tool_name = 1;
+  string spec_json = 2;
+}
+
+message ValidateToolResponse {
+  bool valid = 1;
+  string reason = 2;
+}
+
+message InvokeToolRequest {
+  string tool_name = 1;
+  string arguments_json = 2;
+  string call_id = 3;
+}
+
+message InvokeToolResponse {
+  string content = 1;
+  bool is_final = 2;
+  string error = 3;
+}
+
+message ListToolsRequest {}
+
+message ListToolsResponse {
+  repeated ToolInfo tools = 1;
+}
+
+message ToolInfo {
+  string name = 1;
+  string description = 2;
+  string input_schema_json = 3;
+}
+
+// --- MemoryExtension messages ---
+
+message MemoryReadRequest {
+  string volume_id = 1;
+  string query = 2;
+  int32 top_k = 3;
+}
+
+message MemoryReadResponse {
+  repeated MemoryEntry entries = 1;
+}
+
+message MemoryEntry {
+  string id = 1;
+  string content = 2;
+  float score = 3;
+  map<string, string> metadata = 4;
+}
+
+message MemoryWriteRequest {
+  string volume_id = 1;
+  string content = 2;
+  map<string, string> metadata = 3;
+}
+
+message MemoryWriteResponse {
+  string entry_id = 1;
+}
+
+message MemorySummarizeRequest {
+  string volume_id = 1;
+}
+
+message MemorySummarizeResponse {
+  string summary = 1;
+}
+
+message MemoryForgetRequest {
+  string volume_id = 1;
+  repeated string entry_ids = 2;
+}
+
+message MemoryForgetResponse {}
+
+// --- ModelExtension messages ---
+
+message ModelCompleteRequest {
+  string model_id = 1;
+  repeated Message messages = 2;
+  map<string, string> parameters = 3;
+}
+
+message Message {
+  string role = 1;
+  string content = 2;
+}
+
+message ModelCompleteResponse {
+  string content = 1;
+  bool is_final = 2;
+  UsageInfo usage = 3;
+}
+
+message UsageInfo {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+}
+
+message ModelEmbedRequest {
+  string model_id = 1;
+  repeated string texts = 2;
+}
+
+message ModelEmbedResponse {
+  repeated Embedding embeddings = 1;
+}
+
+message Embedding {
+  repeated float values = 1;
+}
+
+message ValidateModelIdRequest {
+  string model_id = 1;
+}
+
+message ValidateModelIdResponse {
+  bool valid = 1;
+  string reason = 2;
+}

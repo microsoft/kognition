@@ -1,0 +1,31 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- $values := fromYaml (toYaml .Values) }}
+{{- $intentGatewayEnabled := dig "intentGateway" "enabled" true $values }}
+{{- $intentGatewayServiceType := dig "intentGateway" "service" "type" "ClusterIP" $values }}
+{{- $intentGatewayServicePort := dig "intentGateway" "service" "port" 8080 $values }}
+{{- if and (eq .Values.mode "kubernetes") $intentGatewayEnabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kognition.fullname" . }}-intent-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: intent-gateway
+spec:
+  type: {{ $intentGatewayServiceType }}
+  ports:
+    - name: http
+      port: {{ $intentGatewayServicePort }}
+      targetPort: http
+      protocol: TCP
+    - name: grpc
+      port: 8081
+      targetPort: grpc
+      protocol: TCP
+  selector:
+    app.kubernetes.io/component: intent-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

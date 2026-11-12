@@ -1,0 +1,67 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: porting-model, namespace: recovery-runtime}
+spec:
+  podSelector: {matchLabels: {app: porting-model}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: recovery-control}}
+          podSelector: {matchLabels: {app.kubernetes.io/component: model-gateway, app.kubernetes.io/instance: recovery-test}}
+      ports: [{protocol: TCP, port: 443}]
+  egress: []
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: porting-model
+  namespace: recovery-runtime
+  labels: {app: porting-model, kognition-fixture: porting-20261008}
+spec:
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile: {type: RuntimeDefault}
+    sysctls: [{name: net.ipv4.ip_unprivileged_port_start, value: "0"}]
+  containers:
+    - name: model
+      image: docker.io/library/kognition-kagent-model@sha256:fde12ba2f9b67945694be59e10a8b422069367515bea4f2606588828abd8c5df
+      imagePullPolicy: Never
+      env:
+        - {name: KOGNITION_PORTING_REFERENCE_CONTRACT, value: /reference/model-contract.json}
+      resources: {requests: {cpu: 25m, memory: 16Mi}, limits: {cpu: 250m, memory: 64Mi}}
+      securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+      volumeMounts:
+        - {name: reference, mountPath: /reference, readOnly: true}
+      readinessProbe:
+        httpGet: {path: /healthz, port: 443}
+        periodSeconds: 1
+  volumes:
+    - name: reference
+      configMap: {name: porting-model-contract}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: porting-model, namespace: recovery-runtime}
+spec: {selector: {app: porting-model}, ports: [{port: 443, targetPort: 443}]}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata: {name: porting-model-discovery, namespace: recovery-runtime}
+spec:
+  endpointSelector: {matchLabels: {app: porting-model}}
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: recovery-control
+            k8s:app.kubernetes.io/component: k8s-controller
+            k8s:app.kubernetes.io/instance: recovery-test
+      toPorts:
+        - ports: [{port: "443", protocol: TCP}]
+          rules:
+            http: [{method: GET, path: "^/v1/models$"}]

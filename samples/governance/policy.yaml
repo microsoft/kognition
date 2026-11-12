@@ -1,0 +1,49 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# AgentPolicy Sample
+#
+# Governance rules with OPA/Rego policies, tool grants, and safety rules.
+---
+kind: AgentPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: safety-policy
+spec:
+  enforce: true
+  scope: workspace
+  toolGrants:
+    - toolRef: web-search
+      allow: true
+      conditions: |
+        package kognition.conditions
+        allow { input.user_approved == true }
+    - toolRef: shell-exec
+      allow: false
+  safetyRules:
+    - name: no-pii-in-output
+      severity: error
+      rego: |
+        package kognition.safety
+        deny[msg] {
+          contains(lower(input.output), "ssn")
+          msg := "output appears to reference SSN"
+        }
+    - name: cost-limit
+      severity: warning
+      rego: |
+        package kognition.safety
+        deny[msg] {
+          input.cost > 1.0
+          msg := "action cost exceeds $1.00 limit"
+        }
+  complianceRules:
+    - name: require-instructions
+      severity: error
+      rego: |
+        package kognition.compliance
+        deny[msg] {
+          not input.spec.instructions.inline
+          not input.spec.instructions.ref
+          msg := "agents must have instructions defined"
+        }

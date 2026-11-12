@@ -1,0 +1,529 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: runtimeapprovals.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: RuntimeApproval
+    listKind: RuntimeApprovalList
+    plural: runtimeapprovals
+    singular: runtimeapproval
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.decisionState
+      name: Decision
+      type: string
+    - jsonPath: .status.executionState
+      name: Execution
+      type: string
+    - jsonPath: .spec.agentRef.name
+      name: Agent
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        x-kubernetes-validations:
+        - rule: "self.spec == oldSelf.spec"
+          message: "RuntimeApproval spec is immutable"
+        - rule: "!has(oldSelf.status) || !has(oldSelf.status.decisionState) || !(oldSelf.status.decisionState in ['Approved', 'Rejected', 'Expired', 'NotRequired']) || self.status.decisionState == oldSelf.status.decisionState"
+          message: "terminal RuntimeApproval decision is immutable"
+        - rule: "!has(oldSelf.status) || !has(oldSelf.status.decisionAudit) || self.status.decisionAudit == oldSelf.status.decisionAudit"
+          message: "RuntimeApproval decision audit outbox is immutable"
+        - rule: "(has(oldSelf.status) && has(oldSelf.status.decisionState)) || self.status.decisionState == self.spec.initialDecision"
+          message: "RuntimeApproval initial status must match immutable initialDecision"
+        - rule: "(has(oldSelf.status) && has(oldSelf.status.decisionState)) || self.spec.initialDecision != 'NotRequired' || (has(self.status.decisionAudit) && has(self.status.decidedAt) && self.status.decisionAudit.id != '' && self.status.decisionAudit.payload.workspace == self.spec.workspace && self.status.decisionAudit.payload.invocationID == self.spec.invocationID && self.status.decisionAudit.payload.decision == 'NotRequired' && self.status.decisionAudit.payload.decidedAt == self.status.decidedAt)"
+          message: "NotRequired RuntimeApproval initialization requires matching atomic audit evidence"
+        - rule: "!has(oldSelf.status) || !has(oldSelf.status.decisionState) || oldSelf.status.decisionState != 'Pending' || self.status.decisionState == 'Pending' || self.status.decisionState in ['Approved', 'Rejected', 'Expired']"
+          message: "Pending RuntimeApproval may transition only to Approved, Rejected, or Expired"
+        - rule: "!has(oldSelf.status) || !has(oldSelf.status.decisionState) || oldSelf.status.decisionState != 'Pending' || self.status.decisionState == 'Pending' || (has(self.status.decisionAudit) && has(self.status.decidedAt) && self.status.decisionAudit.id != '' && self.status.decisionAudit.payload.workspace == self.spec.workspace && self.status.decisionAudit.payload.invocationID == self.spec.invocationID && self.status.decisionAudit.payload.decision == self.status.decisionState && self.status.decisionAudit.payload.decidedAt == self.status.decidedAt && self.status.decisionAudit.payload.issuer == self.status.decidedByIssuer && self.status.decisionAudit.payload.subject == self.status.decidedBySubject)"
+          message: "terminal RuntimeApproval decision requires matching atomic audit evidence"
+        - rule: "!has(oldSelf.status) || !has(oldSelf.status.decisionState) || oldSelf.status.decisionState != 'Pending' || !(self.status.decisionState in ['Approved', 'Rejected']) || (has(self.status.decidedByIssuer) && self.status.decidedByIssuer != '' && has(self.status.decidedBySubject) && self.status.decidedBySubject != '')"
+          message: "human RuntimeApproval decision requires canonical actor"
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              agentIdentityRef:
+                properties:
+                  kind:
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                  name:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  namespace:
+                    maxLength: 253
+                    type: string
+                  resourceVersion:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  scope:
+                    enum:
+                    - Namespaced
+                    - Cluster
+                    type: string
+                  uid:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - kind
+                - name
+                - resourceVersion
+                - scope
+                - uid
+                type: object
+              agentInstanceRef:
+                properties:
+                  configurationDigest:
+                    description: Signed digest of execution configuration; resourceVersion remains the original observation.
+                    maxLength: 64
+                    minLength: 64
+                    pattern: ^[a-f0-9]{64}$
+                    type: string
+                  kind:
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                  name:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  namespace:
+                    maxLength: 253
+                    type: string
+                  resourceVersion:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  scope:
+                    enum:
+                    - Namespaced
+                    - Cluster
+                    type: string
+                  uid:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - kind
+                - name
+                - resourceVersion
+                - scope
+                - uid
+                type: object
+              agentRef:
+                properties:
+                  kind:
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                  name:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  namespace:
+                    maxLength: 253
+                    type: string
+                  resourceVersion:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  scope:
+                    enum:
+                    - Namespaced
+                    - Cluster
+                    type: string
+                  uid:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - kind
+                - name
+                - resourceVersion
+                - scope
+                - uid
+                type: object
+              authorizationRefs:
+                maxItems: 64
+                items:
+                  properties:
+                    kind:
+                      maxLength: 64
+                      minLength: 1
+                      type: string
+                    name:
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    namespace:
+                      maxLength: 253
+                      type: string
+                    resourceVersion:
+                      format: int64
+                      minimum: 1
+                      type: integer
+                    scope:
+                      enum:
+                      - Namespaced
+                      - Cluster
+                      type: string
+                    uid:
+                      maxLength: 128
+                      minLength: 1
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  - resourceVersion
+                  - scope
+                  - uid
+                  type: object
+                type: array
+              autonomyClassRef:
+                properties:
+                  kind:
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                  name:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  namespace:
+                    maxLength: 253
+                    type: string
+                  resourceVersion:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  scope:
+                    enum:
+                    - Namespaced
+                    - Cluster
+                    type: string
+                  uid:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - kind
+                - name
+                - resourceVersion
+                - scope
+                - uid
+                type: object
+              binding:
+                properties:
+                  algorithm:
+                    enum:
+                    - HMAC-SHA-256
+                    type: string
+                  domain:
+                    enum:
+                    - kognition.dev/runtime-approval/action/v1
+                    type: string
+                  epoch:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  format:
+                    enum:
+                    - kognition-runtime-action-v1
+                    type: string
+                  keyVersion:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  tag:
+                    maxLength: 64
+                    minLength: 43
+                    type: string
+                required:
+                - algorithm
+                - domain
+                - epoch
+                - format
+                - keyVersion
+                - tag
+                type: object
+              createdAt:
+                format: date-time
+                type: string
+              expiresAt:
+                format: date-time
+                type: string
+              initialDecision:
+                enum: [Pending, NotRequired]
+                type: string
+              invocationID:
+                minLength: 1
+                maxLength: 128
+                type: string
+              operation:
+                minLength: 1
+                maxLength: 64
+                type: string
+              plane:
+                enum: [Tool, Memory, Communication]
+                type: string
+              sessionRef:
+                minLength: 1
+                maxLength: 256
+                type: string
+              targetRef:
+                properties:
+                  kind:
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                  name:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  namespace:
+                    maxLength: 253
+                    type: string
+                  resourceVersion:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  scope:
+                    enum:
+                    - Namespaced
+                    - Cluster
+                    type: string
+                  uid:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - kind
+                - name
+                - resourceVersion
+                - scope
+                - uid
+                type: object
+              trustProfileRef:
+                properties:
+                  kind:
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                  name:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  namespace:
+                    maxLength: 253
+                    type: string
+                  resourceVersion:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  scope:
+                    enum:
+                    - Namespaced
+                    - Cluster
+                    type: string
+                  uid:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - kind
+                - name
+                - resourceVersion
+                - scope
+                - uid
+                type: object
+              workspace:
+                minLength: 1
+                maxLength: 253
+                type: string
+            required:
+            - agentIdentityRef
+            - agentInstanceRef
+            - agentRef
+            - autonomyClassRef
+            - binding
+            - createdAt
+            - expiresAt
+            - initialDecision
+            - invocationID
+            - operation
+            - plane
+            - sessionRef
+            - targetRef
+            - workspace
+            type: object
+            x-kubernetes-validations:
+            - rule: "self.agentRef.scope == 'Namespaced' && self.agentRef.__namespace__ == self.workspace"
+              message: "agentRef must be namespaced to the RuntimeApproval workspace"
+            - rule: "self.agentIdentityRef.scope == 'Namespaced' && self.agentIdentityRef.__namespace__ == self.workspace"
+              message: "agentIdentityRef must be namespaced to the RuntimeApproval workspace"
+            - rule: "self.agentInstanceRef.scope == 'Namespaced' && self.agentInstanceRef.__namespace__ == self.workspace"
+              message: "agentInstanceRef must be namespaced to the RuntimeApproval workspace"
+            - rule: "!has(self.trustProfileRef) || (self.trustProfileRef.scope == 'Namespaced' && self.trustProfileRef.__namespace__ == self.workspace)"
+              message: "trustProfileRef must be namespaced to the RuntimeApproval workspace"
+            - rule: "self.autonomyClassRef.scope == 'Cluster' && !has(self.autonomyClassRef.__namespace__)"
+              message: "autonomyClassRef must be cluster-scoped"
+            - rule: "!has(self.authorizationRefs) || self.authorizationRefs.all(ref, (ref.scope == 'Namespaced' && ref.__namespace__ == self.workspace) || (ref.scope == 'Cluster' && !has(ref.__namespace__)))"
+              message: "authorizationRefs must have a valid workspace or cluster scope"
+          status:
+            properties:
+              claimant:
+                properties:
+                  claimedAt:
+                    format: date-time
+                    type: string
+                  containerID:
+                    maxLength: 256
+                    type: string
+                  lastHeartbeat:
+                    format: date-time
+                    type: string
+                  leaseDeadline:
+                    format: date-time
+                    type: string
+                  processStartNonce:
+                    minLength: 1
+                    maxLength: 128
+                    type: string
+                  workloadUID:
+                    minLength: 1
+                    maxLength: 128
+                    type: string
+                required:
+                - claimedAt
+                - lastHeartbeat
+                - processStartNonce
+                - workloadUID
+                type: object
+              decidedAt:
+                format: date-time
+                type: string
+              decidedByIssuer:
+                maxLength: 512
+                type: string
+              decidedBySubject:
+                maxLength: 512
+                type: string
+              decisionAudit:
+                properties:
+                  id:
+                    minLength: 1
+                    maxLength: 64
+                    type: string
+                  payload:
+                    properties:
+                      approvalUID:
+                        minLength: 1
+                        maxLength: 128
+                        type: string
+                      decidedAt:
+                        format: date-time
+                        type: string
+                      decision:
+                        enum: [NotRequired, Approved, Rejected, Expired]
+                        type: string
+                      invocationID:
+                        minLength: 1
+                        maxLength: 128
+                        type: string
+                      issuer:
+                        maxLength: 512
+                        type: string
+                      subject:
+                        maxLength: 512
+                        type: string
+                      workspace:
+                        minLength: 1
+                        maxLength: 253
+                        type: string
+                    required:
+                    - approvalUID
+                    - decidedAt
+                    - decision
+                    - invocationID
+                    - workspace
+                    type: object
+                required:
+                - id
+                - payload
+                type: object
+              decisionEvidenceDelivered:
+                type: boolean
+              decisionState:
+                enum: [Pending, NotRequired, Approved, Rejected, Expired]
+                type: string
+              executionDisposition:
+                maxLength: 64
+                type: string
+              executionState:
+                enum: [NotStarted, Claimed, Uncertain, Completed, Failed]
+                type: string
+              fencingToken:
+                format: int64
+                minimum: 0
+                type: integer
+              preparationDeadline:
+                format: date-time
+                type: string
+              preparationToken:
+                maxLength: 128
+                type: string
+              reconciledByIssuer:
+                maxLength: 512
+                type: string
+              reconciledBySubject:
+                maxLength: 512
+                type: string
+              reconciliationEvidenceRef:
+                maxLength: 512
+                type: string
+              terminationProofRef:
+                maxLength: 512
+                type: string
+            required:
+            - decisionState
+            - executionState
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

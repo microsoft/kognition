@@ -1,0 +1,31 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: kognition.dev/v1alpha1
+kind: Model
+metadata:
+  name: {{ .Values.model.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "kognition-multi-agent.labels" . | nindent 4 }}
+spec:
+  className: {{ .Values.model.className }}
+  modelID: {{ .Values.model.modelID }}
+  provider: {{ .Values.model.provider }}
+  {{- if .Values.model.invocationContract }}
+  invocationContract: {{ .Values.model.invocationContract | quote }}
+  invocationProfileRef:
+    name: {{ required "invocationProfile.name is required with model.invocationContract" .Values.invocationProfile.name | quote }}
+    specDigest: {{ required "invocationProfile.specDigest is required with model.invocationContract" .Values.invocationProfile.specDigest | quote }}
+  {{- end }}
+  endpoint: {{ .Values.model.endpoint }}
+  capabilities:
+    {{- range .Values.model.capabilities }}
+    - {{ . }}
+    {{- end }}
+  credentialRef:
+    name: {{ .Values.credentials.name }}
+  {{- if .Values.model.apiVersion }}
+  parameters:
+    apiVersion: {{ .Values.model.apiVersion | quote }}
+  {{- end }}

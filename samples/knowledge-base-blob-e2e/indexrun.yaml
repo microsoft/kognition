@@ -1,0 +1,22 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# KnowledgeBaseIndexRun is a one-shot, imperative reindex of an existing
+# KnowledgeBase. Analogous to a Kubernetes Job: create it → the reconciler
+# launches an ingest Job → status transitions Pending → Running → Succeeded
+# (or Failed). Use it for ad-hoc "reindex right now" after uploading new
+# documents, or on demand from a CI job.
+#
+# The run's underlying batch/v1 Job is garbage-collected with the IndexRun,
+# and (if you set ttlSecondsAfterFinished) the IndexRun itself deletes
+# after the specified retention window.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseIndexRun
+metadata:
+  name: azure-docs-reindex-now
+  namespace: default
+spec:
+  knowledgeBaseName: azure-docs-kb
+  # Keep the record around for 24 hours after completion for audit visibility.
+  ttlSecondsAfterFinished: 86400

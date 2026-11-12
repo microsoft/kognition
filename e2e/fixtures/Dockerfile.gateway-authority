@@ -1,0 +1,8 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+FROM scratch
+ARG BINARY
+COPY --chmod=0555 ${BINARY} /app
+USER 65532:65532
+ENTRYPOINT ["/app"]

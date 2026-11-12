@@ -1,0 +1,85 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Autonomy Sample
+#
+# STEP 1: Apply this file first. It contains only AutonomyClasses and the Agent.
+# Kubernetes assigns the Agent metadata.uid. Do not add metadata.uid here.
+# Then follow samples/autonomy/trustprofile.template.yaml for STEP 2.
+# RuntimeApproval is intentionally absent; trusted gateways create it.
+---
+# Supervised: human approval required for most actions
+kind: AutonomyClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: supervised
+spec:
+  level: 10
+  requiresApproval: true
+  maxCostPerAction: 10
+  allowedTools:
+    - calculator
+    - web-search
+  approvalPolicy:
+    toolInvocation: high-risk-only
+    memoryWrite: never
+    externalCommunication: always
+    costThreshold: 5
+  constraints:
+    maxConcurrentActions: 3
+    maxTokenBudgetPerAction: 4096
+---
+# Assisted: some autonomy with guardrails
+kind: AutonomyClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: assisted
+spec:
+  level: 50
+  requiresApproval: false
+  maxCostPerAction: 50
+  allowedTools:
+    - calculator
+    - web-search
+    - weather-api
+  approvalPolicy:
+    toolInvocation: never
+    memoryWrite: high-risk-only
+    externalCommunication: high-risk-only
+    costThreshold: 25
+  constraints:
+    maxConcurrentActions: 5
+    maxTokenBudgetPerAction: 8192
+---
+# Autonomous: full self-directed operation
+kind: AutonomyClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: autonomous
+spec:
+  level: 90
+  requiresApproval: false
+  maxCostPerAction: 100
+  allowedTools:
+    - "*"
+  approvalPolicy:
+    toolInvocation: never
+    memoryWrite: never
+    externalCommunication: high-risk-only
+    costThreshold: 50
+  constraints:
+    maxConcurrentActions: 10
+    maxTokenBudgetPerAction: 16384
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: research-agent
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: Research the requested topic and cite evidence.
+  runtime:
+    class: default

@@ -1,0 +1,15 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# Imperative reindex of `kognition-docs-kb`. Create → controller
+# launches a batch/v1 Job running the kb-ingester image → the run's
+# status walks Pending → Running → Succeeded with DOCS≥4, CHUNKS>0.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseIndexRun
+metadata:
+  name: kognition-docs-reindex-now
+  namespace: default
+spec:
+  knowledgeBaseName: kognition-docs-kb
+  ttlSecondsAfterFinished: 86400

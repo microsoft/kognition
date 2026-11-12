@@ -1,0 +1,17 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# CI verifies both this policy and the acceptance fixture before applying it.
+misconfigurations:
+  - id: KSV-0009
+    paths: [e2e/fixtures/workload-identity-platform.yaml]
+    statement: The isolated SPIRE agent uses the host network to reach the authenticated local kubelet endpoint.
+  - id: KSV-0010
+    paths: [e2e/fixtures/workload-identity-platform.yaml]
+    statement: SPIRE workload attestation requires host process visibility in the isolated identity fixture.
+  - id: KSV-0017
+    paths: [e2e/fixtures/workload-identity-platform.yaml]
+    statement: The SPIFFE CSI driver requires privileged bidirectional kubelet bind mounts; workload Pods do not receive that privilege.
+  - id: KSV-0047
+    paths: [e2e/fixtures/workload-identity-platform.yaml]
+    statement: The isolated SPIRE agent requires authenticated kubelet access through the reviewed nodes/proxy grant.

@@ -1,0 +1,146 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: evaluationdatasets.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: EvaluationDataset
+    listKind: EvaluationDatasetList
+    plural: evaluationdatasets
+    singular: evaluationdataset
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.version
+      name: Version
+      type: string
+    - jsonPath: .status.caseCount
+      name: Cases
+      type: integer
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: EvaluationDataset declares concrete inputs and expectations used
+          by an Evaluation.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: EvaluationDatasetSpec defines the cases evaluated by a run.
+            properties:
+              cases:
+                items:
+                  description: EvaluationDatasetCase defines one input and optional
+                    expectations.
+                  properties:
+                    expected:
+                      type: string
+                    id:
+                      minLength: 1
+                      type: string
+                    input:
+                      minLength: 1
+                      type: string
+                    metadata:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    reference:
+                      type: string
+                    rubric:
+                      type: string
+                    tags:
+                      items:
+                        type: string
+                      type: array
+                  required:
+                  - id
+                  - input
+                  type: object
+                minItems: 1
+                type: array
+              version:
+                type: string
+            required:
+            - cases
+            type: object
+          status:
+            description: EvaluationDatasetStatus summarizes observed dataset validation
+              state.
+            properties:
+              caseCount:
+                format: int32
+                type: integer
+              conditions:
+                items:
+                  properties:
+                    lastTransitionTime:
+                      format: date-time
+                      type: string
+                    message:
+                      type: string
+                    observedGeneration:
+                      format: int64
+                      type: integer
+                    reason:
+                      type: string
+                    status:
+                      type: string
+                    type:
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              digest:
+                type: string
+              lastValidatedAt:
+                format: date-time
+                type: string
+              message:
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

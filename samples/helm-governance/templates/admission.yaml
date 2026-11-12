@@ -1,0 +1,23 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- range .Values.admissionPolicies }}
+{{- if .enabled }}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: CognitiveAdmissionPolicy
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "kognition-governance.labels" $ | nindent 4 }}
+spec:
+  failurePolicy: {{ .failurePolicy }}
+  matchKinds:
+    {{- toYaml .matchKinds | nindent 4 }}
+  matchOperations:
+    {{- toYaml .matchOperations | nindent 4 }}
+  rego: |
+    {{- .rego | nindent 4 }}
+{{- end }}
+{{- end }}

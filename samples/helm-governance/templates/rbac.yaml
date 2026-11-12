@@ -1,0 +1,31 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- range .Values.roles }}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentRole
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "kognition-governance.labels" $ | nindent 4 }}
+rules:
+  {{- toYaml .rules | nindent 2 }}
+{{- end }}
+---
+{{- range .Values.roleBindings }}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentRoleBinding
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "kognition-governance.labels" $ | nindent 4 }}
+spec:
+  roleRef:
+    name: {{ .roleRef }}
+  subjects:
+    {{- toYaml .subjects | nindent 4 }}
+{{- end }}

@@ -1,0 +1,19 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if .Values.memoryService.enabled }}
+apiVersion: kognition.dev/v1alpha1
+kind: MemoryClass
+metadata:
+  name: default
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+  annotations:
+    kognition.dev/is-default-class: "true"
+spec:
+  backendType: {{ .Values.memoryService.backendType | quote }}
+  reclaimPolicy: Retain
+  consistencyMode: lww
+  parameters:
+    serviceURL: "http://{{ include "kognition.fullname" . }}-memory-service.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.memoryService.service.port }}"
+{{- end }}

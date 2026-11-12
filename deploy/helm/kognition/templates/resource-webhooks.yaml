@@ -1,0 +1,226 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if and (eq .Values.mode "kubernetes") .Values.webhook.enabled }}
+{{- $name := printf "%s-webhook" (include "kognition.fullname" .) }}
+{{- $controller := include "kognition.controllerServiceAccountName" . }}
+{{- if or (eq $name $controller) (eq $name (include "kognition.serviceAccountName" .)) }}
+{{- fail "resource webhook ServiceAccount must be distinct from controller and platform identities" }}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: resource-webhooks
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: resource-webhooks
+rules:
+  - apiGroups: ["kognition.dev"]
+    resources: ["autonomyclasses", "memoryclasses", "knowledgebaseclasses", "modelclasses", "toolclasses", "knowledgebindingrecords", "cognitiveadmissionpolicies"]
+    verbs: ["get", "list"]
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: resource-webhooks
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- range $namespace := (include "kognition.controllerNamespaces" . | fromJsonArray) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "kognition.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: resource-webhooks
+rules:
+  - apiGroups: ["kognition.dev"]
+    resources: ["agents", "agentinstances", "agentjobs", "agentpolicies", "cognitiveadmissionpolicies", "cognitivequotas", "cognitivelimitranges", "workspaces", "agentidentities", "agentroles", "agentrolebindings", "agentcommunicationpolicies", "memoryclaims", "memorygrants", "memoryvolumes", "memories", "memoryrecords", "knowledgebases", "knowledgebaseclaims", "knowledgebaseindexruns", "knowledgebaseindexschedules", "models", "modelgrants", "modelautoscalers", "agentautoscalers", "secretrefs", "tools", "toolgrants", "toolinvocationruns", "workflows", "workflowruns", "evaluations", "evaluationruns", "evaluationdatasets", "approvaldecisions", "autonomyreviews", "trustprofiles", "trustprofileindices", "agentservices", "intentgateways", "prompts", "solutions", "crossnamespacegrants", "runtimeapprovals", "runtimeapprovaltombstones", "runtimeapprovalquotatickets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["runtimeapprovals/status"]
+    verbs: ["get", "update"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["kognition-runtime-approval-binding-keys", "kognition-runtime-approval-records"]
+    verbs: ["get", "update"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  {{- if eq $namespace $.Release.Namespace }}
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "kognition.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: resource-webhooks
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: resource-webhooks
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: resource-webhooks
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "kognition.labels" . | nindent 8 }}
+        app.kubernetes.io/component: resource-webhooks
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ $name }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: resource-webhooks
+          image: {{ include "kognition.image" (dict "image" .Values.k8sController.image "defaultTag" .Chart.AppVersion "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.k8sController.image.pullPolicy }}
+          args: ["resource-webhooks", "--leader-elect=false", "--metrics-bind-address=0"]
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            {{- include "kognition.artifactSigningEnv" . | nindent 12 }}
+            - name: KOGNITION_CONTROLLER_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: KOGNITION_CONTROLLER_SERVICE_ACCOUNT
+              value: {{ $controller | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_DECISION_SERVICE_ACCOUNT
+              value: {{ $name | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_TOOL_SERVICE_ACCOUNT
+              value: {{ ternary (printf "%s-tool-gateway" (include "kognition.fullname" .)) "" .Values.toolGateway.enabled | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_MEMORY_SERVICE_ACCOUNT
+              value: {{ ternary (printf "%s-memory-policy-gateway" (include "kognition.fullname" .)) "" (and .Values.memoryService.enabled .Values.memoryPolicyGateway.enabled) | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_COMMUNICATION_SERVICE_ACCOUNT
+              value: {{ ternary (printf "%s-agent-communication-gateway" (include "kognition.fullname" .)) "" .Values.agentCommunicationGateway.enabled | quote }}
+            - name: KOGNITION_MANAGED_NAMESPACES
+              value: {{ include "kognition.controllerNamespaces" . | fromJsonArray | join "," | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_WRITER_SERVICE_ACCOUNTS
+              value: {{ list $name (ternary (printf "%s-tool-gateway" (include "kognition.fullname" .)) "" .Values.toolGateway.enabled) (ternary (printf "%s-memory-policy-gateway" (include "kognition.fullname" .)) "" (and .Values.memoryService.enabled .Values.memoryPolicyGateway.enabled)) (ternary (printf "%s-agent-communication-gateway" (include "kognition.fullname" .)) "" .Values.agentCommunicationGateway.enabled) | compact | join "," | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_MAXIMUM_CLOCK_SKEW
+              value: {{ .Values.runtimeAuth.maximumClockSkew | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (printf "%s-runtime-auth" (include "kognition.fullname" .)) .Values.runtimeAuth.existingSecret }}
+                  key: runtime-approval-binding-keys.json
+          ports:
+            - name: webhook
+              containerPort: 9443
+            - name: health
+              containerPort: 8081
+          volumeMounts:
+            {{- include "kognition.artifactSigningMount" . | nindent 12 }}
+            - name: webhook-tls
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        {{- include "kognition.artifactSigningVolume" . | nindent 8 }}
+        - name: webhook-tls
+          secret:
+            secretName: {{ include "kognition.fullname" . }}-webhook-tls
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: resource-webhooks
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: resource-webhooks
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - port: 9443
+          protocol: TCP
+    {{- include "kognition.kubeletProbeIngress" (dict "cidrs" .Values.networkPolicy.kubeletProbeIngressCIDRs "port" 8081) | nindent 4 }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+{{- end }}
+{{- end }}

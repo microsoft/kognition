@@ -1,0 +1,14 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Optional server-side embeddings for hybrid semantic and BM25 memory recall.
+# Configure.ps1 generates tenant-specific values and the identity Secret under
+# .azure/local-samples/. Include those values in the reviewed installation.
+memoryService:
+  embedding:
+    provider: foundry
+    endpoint: https://YOUR-RESOURCE.cognitiveservices.azure.com
+    # The Foundry deployment name, which may differ from the underlying model.
+    model: my-text-embedding-deployment
+    apiVersion: "2024-02-01"
+    azureIdentitySecret: azure-samples-identity

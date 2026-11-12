@@ -1,0 +1,27 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# KnowledgeBaseIndexSchedule is a cron schedule that produces
+# KnowledgeBaseIndexRun objects on each tick. Analogous to a Kubernetes
+# CronJob. Each tick creates a child IndexRun (which in turn launches an
+# ingest Job); the schedule keeps history for audit and dashboards.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseIndexSchedule
+metadata:
+  name: azure-docs-daily
+  namespace: default
+spec:
+  knowledgeBaseName: azure-docs-kb
+  # Every day at 02:00 UTC.
+  schedule: "0 2 * * *"
+  # If the previous day's run has not finished, skip this tick.
+  concurrencyPolicy: Forbid
+  # Retain the last 3 successful and last 1 failed runs for audit.
+  successfulRunsHistoryLimit: 3
+  failedRunsHistoryLimit: 1
+  # Skip ticks that we noticed more than an hour late (e.g. after a
+  # controller outage).
+  startingDeadlineSeconds: 3600
+  runTemplate:
+    ttlSecondsAfterFinished: 604800  # keep child runs for 7 days

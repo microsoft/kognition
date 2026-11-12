@@ -1,0 +1,16 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: v2
+name: kognition
+description: Declarative Cognitive Orchestration Platform (DCOP) — Kubernetes-style control plane for AI agents
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - ai
+  - agents
+  - orchestration
+  - control-plane
+maintainers:
+  - name: Kognition AI

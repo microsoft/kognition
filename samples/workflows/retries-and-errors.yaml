@@ -1,0 +1,97 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Demo: Retries and Error Tolerance
+#
+# Exercises:
+#   - step.retry with exponential backoff (MaxAttempts, Backoff, Multiplier, MaxBackoff)
+#   - step.continueOnError to allow non-critical branches to fail without
+#     failing the whole workflow
+#   - Aggregator that consumes a step's output even when a sibling step failed
+#
+# Topology:
+#
+#   seed ──┬──→ critical   (retry up to 3x, fails workflow if exhausted)
+#          └──→ optional   (continueOnError: true, sibling)
+#                    │
+#                    └──────────────┐
+#   critical ────────────────────────┴──→ summarize
+#
+# `optional` and `critical` run in parallel after `seed`. If `optional` fails
+# permanently (e.g. transient model hiccup), the workflow proceeds to
+# `summarize` anyway because of continueOnError. `critical` will be retried
+# with backoff 5s → 10s → 20s before giving up.
+#
+# This demo uses an acyclic graph so the optional and critical branches can run
+# in parallel. Cyclic workflows apply the same per-step controls sequentially
+# within each iteration.
+#
+# Trigger:
+#   kind: WorkflowRun
+#   spec:
+#     workflowRef: { name: wfdemo-resilient }
+#     input: "Daily ops digest"
+---
+kind: Workflow
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-resilient
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+    workflow.kognition.dev/feature: retries-and-errors
+spec:
+  steps:
+    - name: seed
+      agentRef:
+        name: wfdemo-llm
+      input: 'Produce a single short topic sentence about: "{{.Input}}"'
+      timeout: 120s
+    - name: critical
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        Expand on this sentence with two supporting bullet points:
+        {{.Steps.seed.Output}}
+      timeout: 120s
+      retry:
+        maxAttempts: 3
+        backoff: 5s
+        backoffMultiplier: 2.0
+        maxBackoff: 30s
+    - name: optional
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        Suggest one playful headline for this topic. Be witty.
+        Topic: {{.Steps.seed.Output}}
+      timeout: 120s
+      # If this step fails (timeout, retry exhausted, etc.) the workflow
+      # continues; downstream steps may still see an empty Output for it.
+      continueOnError: true
+    - name: summarize
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        Compose a final digest. Use the expansion below as the body and the
+        headline if one was produced (it may be empty if the optional step
+        failed — handle that gracefully).
+
+        --- Body ---
+        {{.Steps.critical.Output}}
+
+        --- Headline (may be empty) ---
+        {{.Steps.optional.Output}}
+      timeout: 180s
+  edges:
+    - from: seed
+      to: critical
+    - from: seed
+      to: optional
+    - from: critical
+      to: summarize
+    - from: optional
+      to: summarize
+  budgets:
+    maxDuration: 10m
+    maxTokens: 8000

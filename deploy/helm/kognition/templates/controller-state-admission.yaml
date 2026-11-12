@@ -1,0 +1,371 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if eq .Values.mode "kubernetes" }}
+{{- if and .Values.kbIngester.serviceAccount (ne .Values.kbIngester.serviceAccount "default") }}
+{{- fail "kbIngester.serviceAccount must be empty or default; workload admission prohibits elevated identities" }}
+{{- end }}
+{{- if not (semverCompare ">=1.30-0" .Capabilities.KubeVersion.Version) }}
+{{- fail "Kubernetes mode requires Kubernetes >= 1.30 for API-server-enforced controller state admission" }}
+{{- end }}
+{{- $controllerUser := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kognition.controllerServiceAccountName" .) }}
+{{- $platformUser := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kognition.serviceAccountName" .) }}
+{{- $webhookUser := printf "system:serviceaccount:%s:%s-webhook" .Release.Namespace (include "kognition.fullname" .) }}
+{{- $writers := list }}
+{{- $auditOnlyUsers := list }}
+{{- if .Values.webhook.enabled }}{{- $auditOnlyUsers = append $auditOnlyUsers $webhookUser }}{{- end }}
+{{- range $component, $enabled := dict "tool-gateway" .Values.toolGateway.enabled "memory-policy-gateway" (and .Values.memoryService.enabled .Values.memoryPolicyGateway.enabled) "agent-communication-gateway" .Values.agentCommunicationGateway.enabled "model-gateway" .Values.modelGateway.enabled "knowledge-gateway" .Values.knowledgeGateway.enabled }}
+{{- if $enabled }}
+{{- $username := printf "system:serviceaccount:%s:%s-%s" $.Release.Namespace (include "kognition.fullname" $) $component }}
+{{- if or (eq $username $controllerUser) (eq $username $platformUser) (and $.Values.webhook.enabled (eq $username $webhookUser)) }}
+{{- fail "enabled gateway state writers require identities distinct from controller, platform and webhook" }}
+{{- end }}
+{{- $writers = append $writers (dict "component" $component "username" $username) }}
+{{- if eq $component "memory-policy-gateway" }}{{- $auditOnlyUsers = append $auditOnlyUsers $username }}{{- end }}
+{{- end }}
+{{- end }}
+{{- $gatewayUsers := list }}{{- range $writer := $writers }}{{- $gatewayUsers = append $gatewayUsers $writer.username }}{{- end }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-state
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["configmaps"]
+        scope: Namespaced
+  matchConditions:
+    - name: installation-state-writers
+      expression: >-
+        request.userInfo.username == {{ $controllerUser | toJson }} ||
+        (request.namespace == {{ .Release.Namespace | toJson }} && request.userInfo.username == {{ $platformUser | toJson }}){{ if .Values.webhook.enabled }} ||
+        request.userInfo.username == {{ $webhookUser | toJson }}{{ end }}{{ if $gatewayUsers }} ||
+        request.userInfo.username in {{ $gatewayUsers | toJson }}{{ end }}
+  variables:
+    - name: auditBatch
+      expression: >-
+        object != null &&
+        request.namespace == {{ .Release.Namespace | toJson }} &&
+        object.metadata.namespace == request.namespace &&
+        object.metadata.name.matches('^kognition-audit-[0-9a-f]{32}$') &&
+        has(object.immutable) && object.immutable &&
+        has(object.metadata.labels) &&
+        'kognition.dev/cognitive-audit' in object.metadata.labels &&
+        object.metadata.labels['kognition.dev/cognitive-audit'] == 'true' &&
+        'kognition.dev/audit-workspace' in object.metadata.labels &&
+        object.metadata.labels['kognition.dev/audit-workspace'].matches('^[0-9a-f]{24}$') &&
+        object.metadata.labels.all(key,
+          key in ['kognition.dev/cognitive-audit', 'kognition.dev/audit-workspace'] ||
+          (key.matches('^kognition[.]dev/audit-agent-[0-9a-f]{24}$') &&
+            object.metadata.labels[key] == 'true')) &&
+        (!has(object.metadata.annotations) || size(object.metadata.annotations) == 0) &&
+        (!has(object.metadata.ownerReferences) || size(object.metadata.ownerReferences) == 0) &&
+        (!has(object.metadata.finalizers) || size(object.metadata.finalizers) == 0) &&
+        (!has(object.data) || size(object.data) == 0) &&
+        has(object.binaryData) && size(object.binaryData) == 1 &&
+        'entries.json' in object.binaryData &&
+        size(object.binaryData['entries.json']) > 0 &&
+        size(object.binaryData['entries.json']) <= 1228800
+    - name: mutableLedger
+      expression: >-
+        request.namespace == {{ .Release.Namespace | toJson }} &&
+        request.operation in ['CREATE', 'UPDATE'] &&
+        [object, oldObject].all(candidate, candidate == null || (
+          candidate.metadata.namespace == request.namespace &&
+          (!has(candidate.immutable) || !candidate.immutable) &&
+          has(candidate.metadata.labels) && size(candidate.metadata.labels) == 1 &&
+          has(candidate.metadata.annotations) && size(candidate.metadata.annotations) == 1 &&
+          (!has(candidate.metadata.ownerReferences) || size(candidate.metadata.ownerReferences) == 0) &&
+          (!has(candidate.metadata.finalizers) || size(candidate.metadata.finalizers) == 0) &&
+          (!has(candidate.binaryData) || size(candidate.binaryData) == 0) &&
+          has(candidate.data) && size(candidate.data) == 1
+        ))
+    - name: costRecord
+      expression: >-
+        object != null &&
+        request.namespace == {{ .Release.Namespace | toJson }} &&
+        object.metadata.namespace == request.namespace &&
+        has(object.immutable) && object.immutable &&
+        object.metadata.name.matches('^kognition-cost-([0-9a-f]{24}|[0-9a-f-]{36})$') &&
+        has(object.metadata.labels) &&
+        'kognition.dev/cost-record' in object.metadata.labels &&
+        object.metadata.labels['kognition.dev/cost-record'] == 'true' &&
+        'kognition.dev/cost-workspace' in object.metadata.labels &&
+        object.metadata.labels['kognition.dev/cost-workspace'].matches('^[0-9a-f]{24}$') &&
+        object.metadata.labels.all(key,
+          key in ['kognition.dev/cost-record', 'kognition.dev/cost-workspace'] ||
+          (key == 'kognition.dev/usage-event' && object.metadata.labels[key] == 'true')) &&
+        (!has(object.metadata.annotations) || size(object.metadata.annotations) == 0) &&
+        (!has(object.metadata.ownerReferences) || size(object.metadata.ownerReferences) == 0) &&
+        (!has(object.metadata.finalizers) || size(object.metadata.finalizers) == 0) &&
+        (!has(object.data) || size(object.data) == 0) &&
+        has(object.binaryData) && size(object.binaryData) == 1 &&
+        'records.json' in object.binaryData &&
+        size(object.binaryData['records.json']) > 0 &&
+        size(object.binaryData['records.json']) <= 1228800
+  validations:
+    - expression: >-
+        [object, oldObject].all(candidate, candidate == null || (
+          has(candidate.metadata.labels) &&
+          (!('app.kubernetes.io/managed-by' in candidate.metadata.labels) ||
+            candidate.metadata.labels['app.kubernetes.io/managed-by'] != 'Helm') &&
+          (!has(candidate.metadata.annotations) ||
+            (!('meta.helm.sh/release-name' in candidate.metadata.annotations) &&
+             !('meta.helm.sh/release-namespace' in candidate.metadata.annotations))) &&
+          (
+            (candidate.metadata.name.startsWith('kognition-audit-') &&
+              'kognition.dev/cognitive-audit' in candidate.metadata.labels &&
+              candidate.metadata.labels['kognition.dev/cognitive-audit'] == 'true') ||
+            request.userInfo.username in {{ $gatewayUsers | toJson }} ||
+            (request.userInfo.username == {{ $controllerUser | toJson }} && (
+              (request.namespace != {{ .Release.Namespace | toJson }} &&
+                candidate.metadata.name == 'kognition-knowledge-gateway-ca' &&
+                'app.kubernetes.io/managed-by' in candidate.metadata.labels &&
+                candidate.metadata.labels['app.kubernetes.io/managed-by'] == 'kognition') ||
+              (candidate.metadata.name.startsWith('kognition-cost-') &&
+                'kognition.dev/cost-record' in candidate.metadata.labels &&
+                candidate.metadata.labels['kognition.dev/cost-record'] == 'true') ||
+              (candidate.metadata.name.startsWith('kognition-usage-receipt-') &&
+                'kognition.dev/usage-receipt' in candidate.metadata.labels &&
+                candidate.metadata.labels['kognition.dev/usage-receipt'] == 'true') ||
+              (request.namespace == {{ .Release.Namespace | toJson }} &&
+                candidate.metadata.name.startsWith('kognition-md-') &&
+                'kognition.dev/model-dispatch-record' in candidate.metadata.labels &&
+                candidate.metadata.labels['kognition.dev/model-dispatch-record'] == 'true' &&
+                has(candidate.immutable) && candidate.immutable) ||
+              (request.namespace == {{ .Release.Namespace | toJson }} &&
+                candidate.metadata.name.startsWith('kognition-rr-') &&
+                'kognition.dev/runtime-recovery' in candidate.metadata.labels &&
+                candidate.metadata.labels['kognition.dev/runtime-recovery'] == 'true') ||
+              (candidate.metadata.name.startsWith('kognition-token-reservations-') &&
+                'kognition.dev/token-ledger' in candidate.metadata.labels &&
+                candidate.metadata.labels['kognition.dev/token-ledger'] == 'true') ||
+              (candidate.metadata.name.startsWith('kognition-tool-call-reservations-') &&
+                'kognition.dev/tool-call-ledger' in candidate.metadata.labels &&
+                candidate.metadata.labels['kognition.dev/tool-call-ledger'] == 'true') ||
+              (candidate.metadata.name.startsWith('kognition-tool-invocations-') &&
+                'kognition.dev/tool-invocation-ledger' in candidate.metadata.labels &&
+                candidate.metadata.labels['kognition.dev/tool-invocation-ledger'] == 'true') ||
+              (candidate.metadata.name.startsWith('kognition-revision-') &&
+                'kognition.dev/revision-parent' in candidate.metadata.labels &&
+                'kognition.dev/revision-kind' in candidate.metadata.labels &&
+                has(candidate.immutable) && candidate.immutable &&
+                has(candidate.metadata.ownerReferences) &&
+                candidate.metadata.ownerReferences.exists(owner, owner.apiVersion == 'kognition.dev/v1alpha1'))
+            ))
+          )
+        ))
+      message: Installation ConfigMap writes are restricted to reserved Kognition state; existing unowned or Helm-owned objects cannot be adopted.
+      reason: Forbidden
+{{- if $auditOnlyUsers }}
+    # Native admission exposes binaryData as base64 text: 900 KiB is 1228800 characters.
+    - expression: >-
+        !(request.userInfo.username in {{ $auditOnlyUsers | toJson }}) ||
+        (request.operation == 'CREATE' && variables.auditBatch)
+      message: Audit-only ConfigMap writers may create only immutable bounded audit batches in the installation namespace.
+      reason: Forbidden
+{{- end }}
+{{- range $writer := $writers }}
+{{- if ne $writer.component "memory-policy-gateway" }}
+{{- $ledgers := list }}
+{{- if or (eq $writer.component "tool-gateway") (eq $writer.component "agent-communication-gateway") }}
+{{- $ledgers = append $ledgers (dict "prefix" (printf "kognition-tool-invocations-%s-" $writer.component) "label" "kognition.dev/tool-invocation-ledger" "annotation" "kognition.dev/workload-namespace" "data" "receipts.json") }}
+{{- end }}
+{{- if eq $writer.component "tool-gateway" }}
+{{- $ledgers = append $ledgers (dict "prefix" "kognition-tool-call-reservations-" "label" "kognition.dev/tool-call-ledger" "annotation" "kognition.dev/quota-namespace" "data" "ledger.json") }}
+{{- end }}
+{{- if or (eq $writer.component "model-gateway") (eq $writer.component "knowledge-gateway") }}
+{{- $ledgers = append $ledgers (dict "prefix" "kognition-token-reservations-" "label" "kognition.dev/token-ledger" "annotation" "kognition.dev/quota-namespace" "data" "ledger.json") }}
+{{- end }}
+    - expression: >-
+        request.userInfo.username != {{ $writer.username | toJson }} ||
+        (request.operation == 'CREATE' && variables.auditBatch) ||
+{{- if ne $writer.component "agent-communication-gateway" }}
+        (request.operation == 'CREATE' && variables.costRecord) ||
+{{- end }}
+        (variables.mutableLedger && [object, oldObject].all(candidate, candidate == null || (
+          false
+{{- range $ledger := $ledgers }}
+{{- $namespaces := dict }}
+{{- range $namespace := (include "kognition.controllerNamespaces" $ | fromJsonArray) }}
+{{- $_ := set $namespaces (printf "%s%s" $ledger.prefix (sha256sum $namespace)) $namespace }}
+{{- end }}
+          || (candidate.metadata.name in {{ $namespaces | toJson }} &&
+              {{ $ledger.label | toJson }} in candidate.metadata.labels &&
+              candidate.metadata.labels[{{ $ledger.label | toJson }}] == 'true' &&
+              {{ $ledger.annotation | toJson }} in candidate.metadata.annotations &&
+              candidate.metadata.annotations[{{ $ledger.annotation | toJson }}] == {{ $namespaces | toJson }}[candidate.metadata.name] &&
+              {{ $ledger.data | toJson }} in candidate.data &&
+              size(candidate.data[{{ $ledger.data | toJson }}]) > 0)
+{{- end }}
+        )))
+{{- if or (eq $writer.component "model-gateway") (eq $writer.component "knowledge-gateway") }}
+        || (request.operation == 'CREATE' &&
+            request.namespace == {{ $.Release.Namespace | toJson }} &&
+            object.metadata.name.matches('^kognition-usage-receipt-[0-9a-f]{24}$') &&
+            has(object.immutable) && object.immutable &&
+            has(object.metadata.labels) && size(object.metadata.labels) == 2 &&
+            'kognition.dev/usage-receipt' in object.metadata.labels && object.metadata.labels['kognition.dev/usage-receipt'] == 'true' &&
+            'kognition.dev/cost-workspace' in object.metadata.labels && object.metadata.labels['kognition.dev/cost-workspace'].matches('^[0-9a-f]{24}$') &&
+            has(object.metadata.annotations) && size(object.metadata.annotations) == 1 &&
+            'kognition.dev/workspace' in object.metadata.annotations &&
+            object.metadata.annotations['kognition.dev/workspace'] in {{ include "kognition.controllerNamespaces" $ }} &&
+            (!has(object.metadata.ownerReferences) || size(object.metadata.ownerReferences) == 0) &&
+            (!has(object.metadata.finalizers) || size(object.metadata.finalizers) == 0) &&
+            (!has(object.binaryData) || size(object.binaryData) == 0) &&
+            has(object.data) && size(object.data) == 1 && 'fingerprint' in object.data &&
+            object.data['fingerprint'].matches('^[0-9a-f]{64}$'))
+{{- end }}
+      message: Gateway ConfigMap writes require the exact writer's enrolled ledgers or append-only audit/cost records; legacy, foreign and Helm state cannot be adopted or deleted.
+      reason: Forbidden
+{{- end }}
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-state
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-state
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-model-dispatch
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["configmaps"]
+        scope: Namespaced
+  matchConditions:
+    - name: reserved-model-dispatch-record
+      expression: >-
+        request.namespace == {{ .Release.Namespace | toJson }} &&
+        [object, oldObject].exists(candidate, candidate != null &&
+          (candidate.metadata.name.startsWith('kognition-md-') ||
+            (has(candidate.metadata.labels) &&
+             'kognition.dev/model-dispatch-record' in candidate.metadata.labels)))
+  validations:
+    - expression: >-
+        request.userInfo.username == {{ $controllerUser | toJson }} &&
+        request.operation != 'DELETE' &&
+        object.metadata.name.startsWith('kognition-md-') &&
+        has(object.immutable) && object.immutable &&
+        has(object.metadata.labels) &&
+        'kognition.dev/model-dispatch-record' in object.metadata.labels &&
+        object.metadata.labels['kognition.dev/model-dispatch-record'] == 'true'
+      message: Model dispatch receipts are immutable controller-authored records and cannot be deleted to replay paid inference.
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-model-dispatch
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-model-dispatch
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-runtime-recovery
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["configmaps"]
+        scope: Namespaced
+  matchConditions:
+    - name: reserved-runtime-recovery
+      expression: >-
+        request.namespace == {{ .Release.Namespace | toJson }} &&
+        [object, oldObject].exists(candidate, candidate != null &&
+          (candidate.metadata.name.startsWith('kognition-rr-') ||
+           (has(candidate.metadata.labels) && 'kognition.dev/runtime-recovery' in candidate.metadata.labels)))
+  validations:
+    - expression: >-
+        request.userInfo.username == {{ $controllerUser | toJson }} && request.operation != 'DELETE' &&
+        object.metadata.name.startsWith('kognition-rr-') &&
+        has(object.metadata.labels) && object.metadata.labels['kognition.dev/runtime-recovery'] == 'true' &&
+        'kognition.dev/recovery-phase' in object.metadata.labels && has(object.data) &&
+        ['workspace','sessionID','bindingDigest'].all(key, key in object.data) &&
+        ((request.operation == 'CREATE' && object.metadata.labels['kognition.dev/recovery-phase'] == 'prepared') ||
+         (request.operation == 'UPDATE' && object.data == oldObject.data &&
+          ((oldObject.metadata.labels['kognition.dev/recovery-phase'] == 'prepared' && object.metadata.labels['kognition.dev/recovery-phase'] == 'claimed') ||
+           (oldObject.metadata.labels['kognition.dev/recovery-phase'] == 'claimed' && object.metadata.labels['kognition.dev/recovery-phase'] == 'terminal') ||
+           (oldObject.metadata.labels['kognition.dev/recovery-phase'] == 'terminal' && object.metadata.labels['kognition.dev/recovery-phase'] == 'retired'))))
+      message: Runtime recovery records require controller ownership, immutable binding and monotonic state; deletion cannot authorize replay.
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-runtime-recovery
+spec:
+  policyName: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-runtime-recovery
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-credentials
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["secrets"]
+        scope: Namespaced
+  matchConditions:
+    - name: controller-credential-writer
+      expression: request.userInfo.username == {{ $controllerUser | toJson }}
+  validations:
+    - expression: >-
+        [object, oldObject].all(candidate, candidate == null || (
+          candidate.type == 'Opaque' &&
+          has(candidate.metadata.labels) &&
+          'app.kubernetes.io/managed-by' in candidate.metadata.labels &&
+          candidate.metadata.labels['app.kubernetes.io/managed-by'] == 'kognition' &&
+          (!has(candidate.metadata.annotations) ||
+            (!('meta.helm.sh/release-name' in candidate.metadata.annotations) &&
+             !('meta.helm.sh/release-namespace' in candidate.metadata.annotations) &&
+             !('kubernetes.io/service-account.name' in candidate.metadata.annotations)))))
+      message: Controller credential writes require existing managed Opaque Secrets and cannot mint Kubernetes ServiceAccount tokens or adopt unrelated Secrets.
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-credentials
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-credentials
+  validationActions: [Deny]
+{{- end }}

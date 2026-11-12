@@ -1,0 +1,99 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Kognition Governance Helm Chart - Default Values
+namespace: default
+
+# Label applied by the unified compatible sample bundle for scoped validation.
+sampleBundleLabel: ""
+
+# Workspace configuration
+workspace:
+  enabled: true
+  displayName: "Production Workspace"
+  requireSignedArtifacts: true
+  retention:
+    traceTTL: 720h
+    auditLogTTL: 2160h
+    costRecordTTL: 2160h
+    eventTTL: 168h
+
+# Cognitive Quota
+quota:
+  enabled: true
+  hard:
+    agents: 10
+    tools: 5
+    workflows: 5
+  tokenBudget:
+    maxInputTokens: 1000000
+    maxOutputTokens: 200000
+  resetInterval: 24h
+
+# CognitiveLimitRange
+limitRange:
+  enabled: true
+  limits:
+    - type: Agent
+      tokensPerSession: 16384
+      timeoutSeconds: 120
+      maxConcurrentSessions: 5
+
+# AgentPolicy
+policy:
+  enabled: true
+  enforce: true
+  safetyRules:
+    - name: no-pii-in-output
+      severity: error
+      rego: |
+        package kognition.safety
+        deny[msg] {
+          contains(lower(input.output), "ssn")
+          msg := "output appears to reference SSN"
+        }
+
+# CognitiveAdmissionPolicy
+admissionPolicies:
+  - name: require-instructions
+    enabled: true
+    failurePolicy: Deny
+    matchKinds:
+      - Agent
+    matchOperations:
+      - CREATE
+      - UPDATE
+    rego: |
+      package kognition.admission
+      deny[msg] {
+        input.kind == "Agent"
+        not input.spec.instructions.inline
+        not input.spec.instructions.ref
+        msg := "Agent must define instructions (inline or ref)"
+      }
+
+# Agent Identities
+identities:
+  enabled: false
+  agents: []
+  # - researcher
+  # - writer
+
+# AgentRoles
+roles:
+  - name: tool-invoker
+    rules:
+      - resources: [Tool]
+        verbs: [get, invoke]
+  - name: memory-reader
+    rules:
+      - resources: [Memory]
+        verbs: [get, read]
+
+# AgentRoleBindings
+roleBindings: []
+# - name: writer-tool-access
+#   roleRef: tool-invoker
+#   subjects:
+#     - kind: Agent
+#       name: writer

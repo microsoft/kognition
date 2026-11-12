@@ -1,0 +1,142 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if eq .Values.mode "standalone" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kognition.fullname" . }}-controller-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller-manager
+spec:
+  replicas: {{ .Values.controllerManager.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: controller-manager
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "kognition.labels" . | nindent 8 }}
+        app.kubernetes.io/component: controller-manager
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "kognition.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.postgres.enabled }}
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ include "kognition.thirdPartyImage" (dict "global" .Values.global "image" .Values.thirdPartyImages.busybox) }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          command: ['sh', '-c', 'until nc -z {{ include "kognition.fullname" . }}-postgres 5432; do echo waiting for postgres; sleep 2; done']
+          resources:
+            {{- toYaml .Values.controllerManager.waitForPostgres.resources | nindent 12 }}
+      {{- end }}
+      containers:
+        - name: controller-manager
+          image: {{ include "kognition.image" (dict "global" .Values.global "image" .Values.controllerManager.image "defaultTag" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.controllerManager.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: metrics
+              containerPort: 8080
+          env:
+            {{- include "kognition.workloadIdentityStatusEnv" . | nindent 12 }}
+            {{- include "kognition.runtimeRecoveryEnv" . | nindent 12 }}
+            - name: KOGNITION_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.databaseSecretName" . }}
+                  key: DATABASE_URL
+            - name: KOGNITION_CANARY_OPERATION_RETENTION
+              value: {{ .Values.canaryOperationRetention | quote }}
+            - name: KOGNITION_METRICS_ADDR
+              value: ":8080"
+            {{- if .Values.memoryService.enabled }}
+            - name: KOGNITION_MEMORY_SERVICE_URL
+              value: "http://{{ include "kognition.fullname" . }}-memory-service.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.memoryService.service.port }}"
+            {{- if .Values.memoryPolicyGateway.enabled }}
+            - name: MEMORY_SERVICE_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-memory-policy-gateway
+                  key: upstream-token
+            {{- end }}
+            {{- end }}
+            {{- if .Values.kbIngester.enabled }}
+            - name: KOGNITION_KB_INGESTER_URL
+              value: http://127.0.0.1:8082
+            {{- if .Values.kbPgvector.enabled }}
+            - name: KOGNITION_KB_PGVECTOR_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-kb-pgvector
+                  key: connectionString
+            {{- end }}
+            {{- end }}
+            {{- include "kognition.openTelemetryEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.controllerManager.resources | nindent 12 }}
+          {{- if or .Values.workloadIdentityStatus.enabled .Values.runtimeRecovery.existingSecret }}
+          volumeMounts:
+            {{- include "kognition.workloadIdentityStatusMounts" . | nindent 12 }}
+            {{- include "kognition.runtimeRecoveryMount" . | nindent 12 }}
+          {{- end }}
+        {{- if .Values.kbIngester.enabled }}
+        - name: kb-ingester
+          image: {{ include "kognition.image" (dict "global" .Values.global "image" .Values.kbIngester.image "defaultTag" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.kbIngester.image.pullPolicy }}
+          command: ["python", "service.py"]
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            - name: KOGNITION_INGEST_LISTEN
+              value: 127.0.0.1:8082
+          readinessProbe:
+            exec:
+              command: ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/healthz', timeout=2)"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/healthz', timeout=2)"]
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          volumeMounts:
+            - name: kb-ingester-tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.kbIngester.resources | nindent 12 }}
+        {{- end }}
+      {{- if or .Values.workloadIdentityStatus.enabled .Values.kbIngester.enabled .Values.runtimeRecovery.existingSecret }}
+      volumes:
+        {{- include "kognition.workloadIdentityStatusVolumes" . | nindent 8 }}
+        {{- include "kognition.runtimeRecoveryVolume" . | nindent 8 }}
+        {{- if .Values.kbIngester.enabled }}
+        - name: kb-ingester-tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- end }}
+      {{- end }}
+      {{- with .Values.controllerManager.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controllerManager.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controllerManager.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

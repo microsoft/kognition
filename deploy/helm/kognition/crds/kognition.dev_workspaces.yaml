@@ -1,0 +1,91 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: workspaces.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: Workspace
+    listKind: WorkspaceList
+    plural: workspaces
+    singular: workspace
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Workspace provides multi-tenant isolation (analogous to K8s Namespace).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: WorkspaceSpec defines workspace configuration.
+            properties:
+              displayName:
+                description: DisplayName is a human-friendly name for the workspace.
+                type: string
+              requireSignedArtifacts:
+                description: |-
+                  RequireSignedArtifacts enables supply-chain signature verification
+                  for Tool and Model resources admitted into this workspace.
+                type: boolean
+              retention:
+                description: Retention configures data retention policies for observability
+                  data.
+                properties:
+                  auditLogTTL:
+                    description: AuditLogTTL is the duration to retain audit log entries.
+                    type: string
+                  costRecordTTL:
+                    description: CostRecordTTL is the duration to retain cost records.
+                    type: string
+                  eventTTL:
+                    description: EventTTL is the duration to retain instance events.
+                    type: string
+                  traceTTL:
+                    description: |-
+                      TraceTTL is the duration to retain trace spans (e.g., "720h" = 30 days).
+                      Zero means retain indefinitely.
+                    type: string
+                type: object
+            type: object
+          status:
+            description: WorkspaceStatus describes the observed state of a Workspace.
+            properties:
+              phase:
+                description: Phase is the current lifecycle phase.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

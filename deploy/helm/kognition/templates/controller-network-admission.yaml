@@ -1,0 +1,133 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if eq .Values.mode "kubernetes" }}
+{{- $controllerUser := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kognition.controllerServiceAccountName" .) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-services
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["services"]
+        scope: Namespaced
+  matchConditions:
+    - name: controller-network-writer
+      expression: request.userInfo.username == {{ $controllerUser | toJson }}
+  validations:
+    - expression: >-
+        [object, oldObject].all(candidate, candidate == null || (
+          has(candidate.metadata.labels) &&
+          'app.kubernetes.io/managed-by' in candidate.metadata.labels &&
+          candidate.metadata.labels['app.kubernetes.io/managed-by'] == 'kognition' &&
+          (!has(candidate.metadata.annotations) ||
+            (!('meta.helm.sh/release-name' in candidate.metadata.annotations) &&
+             !('meta.helm.sh/release-namespace' in candidate.metadata.annotations)))
+        ))
+      message: Controller network writes require existing Kognition ownership; unrelated or Helm-owned objects cannot be adopted.
+      reason: Forbidden
+    - expression: >-
+        [object, oldObject].all(candidate, candidate == null || (
+          candidate.spec.type == 'ClusterIP' &&
+          (!has(candidate.spec.externalIPs) || size(candidate.spec.externalIPs) == 0) &&
+          (!has(candidate.spec.externalName) || candidate.spec.externalName == '') &&
+          has(candidate.spec.selector) &&
+          'app.kubernetes.io/managed-by' in candidate.spec.selector &&
+          candidate.spec.selector['app.kubernetes.io/managed-by'] == 'kognition' &&
+          candidate.spec.selector.all(key, key in candidate.metadata.labels && candidate.metadata.labels[key] == candidate.spec.selector[key]) &&
+          (
+            ('kognition.dev/agent' in candidate.spec.selector && candidate.spec.selector['kognition.dev/agent'] != '') ||
+            ('kognition.dev/agent-service-workload' in candidate.spec.selector && candidate.spec.selector['kognition.dev/agent-service-workload'] != '') ||
+            ('kognition.dev/agent-name' in candidate.spec.selector && candidate.spec.selector['kognition.dev/agent-name'] != '' &&
+             'kognition.dev/agent-namespace' in candidate.spec.selector && candidate.spec.selector['kognition.dev/agent-namespace'] != '')
+          )
+        ))
+      message: Controller Services must be internal and select a specific Kognition workload matching their identity labels.
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-services
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-services
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-network
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["networkpolicies"]
+        scope: Namespaced
+  matchConditions:
+    - name: controller-network-writer
+      expression: request.userInfo.username == {{ $controllerUser | toJson }}
+  validations:
+    - expression: >-
+        [object, oldObject].all(candidate, candidate == null || (
+          has(candidate.metadata.labels) &&
+          'app.kubernetes.io/managed-by' in candidate.metadata.labels &&
+          candidate.metadata.labels['app.kubernetes.io/managed-by'] == 'kognition' &&
+          (!has(candidate.metadata.annotations) ||
+            (!('meta.helm.sh/release-name' in candidate.metadata.annotations) &&
+             !('meta.helm.sh/release-namespace' in candidate.metadata.annotations)))
+        ))
+      message: Controller network writes require existing Kognition ownership; unrelated or Helm-owned objects cannot be adopted.
+      reason: Forbidden
+    - expression: >-
+        [object, oldObject].all(candidate, candidate == null || (
+          has(candidate.spec.podSelector.matchLabels) &&
+          (!has(candidate.spec.podSelector.matchExpressions) || size(candidate.spec.podSelector.matchExpressions) == 0) &&
+          'app.kubernetes.io/managed-by' in candidate.spec.podSelector.matchLabels &&
+          candidate.spec.podSelector.matchLabels['app.kubernetes.io/managed-by'] == 'kognition' &&
+          ['kognition.dev/agent', 'kognition.dev/agent-service-workload', 'kognition.dev/exec-probe', 'kognition.dev/stdio-invocation'].exists(key,
+            key in candidate.spec.podSelector.matchLabels && candidate.spec.podSelector.matchLabels[key] != '' &&
+            key in candidate.metadata.labels && candidate.metadata.labels[key] == candidate.spec.podSelector.matchLabels[key])
+        ))
+      message: Controller NetworkPolicies must select their specific Kognition workload, never an entire namespace.
+      reason: Forbidden
+    - expression: >-
+        object == null || oldObject == null ||
+        object.spec.podSelector == oldObject.spec.podSelector
+      message: Controller NetworkPolicy workload selectors are immutable.
+      reason: Forbidden
+    - expression: >-
+        [object, oldObject].all(candidate, candidate == null ||
+          !['kognition.dev/exec-probe', 'kognition.dev/stdio-invocation'].exists(key,
+            key in candidate.metadata.labels ||
+            (has(candidate.spec.podSelector.matchLabels) && key in candidate.spec.podSelector.matchLabels)) || (
+            size(candidate.spec.policyTypes) == 1 && candidate.spec.policyTypes[0] == 'Egress' &&
+            (!has(candidate.spec.egress) || size(candidate.spec.egress) == 0) &&
+            (!has(candidate.spec.ingress) || size(candidate.spec.ingress) == 0)
+          ))
+      message: Tool sandbox NetworkPolicies must retain deny-all egress.
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-network
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-network
+  validationActions: [Deny]
+{{- end }}

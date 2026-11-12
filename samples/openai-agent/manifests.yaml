@@ -1,0 +1,29 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# OpenAI-Compatible Agent Sample
+# Note: In this environment, only Azure AI Foundry is available for LLM calls.
+# This sample now demonstrates a second agent wired to the same Foundry
+# `gpt-6-luna` Model defined in samples/simple-agent/manifests.yaml.
+#
+# Prerequisites (in the `default` namespace):
+#   - ModelClass `foundry`, SecretRef `foundry-creds`, and Model `gpt-6-luna`.
+#   Apply `samples/simple-agent/manifests.yaml` and the repo-root
+#   `foundry-creds.yaml` first.
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: openai-hello
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a helpful assistant powered by Azure AI Foundry.
+      Answer questions concisely and accurately.
+  runtime:
+    class: default
+    timeout: 30s
+    maxTokens: 4096

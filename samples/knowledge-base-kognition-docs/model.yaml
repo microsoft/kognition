@@ -1,0 +1,48 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Embedding model backed by the Foundry project. The KBClass references
+# this Model to compute chunk embeddings during ingestion and to embed
+# the runtime `knowledge_search` query at retrieval time. Credentials
+# come from the `foundry-creds` SecretRef whose internal-secret-data
+# annotation holds an azure-identity client-secret; both the ingester
+# and the agent runtime detect that shape and mint an AAD token via
+# `azure.identity.ClientSecretCredential` — no OpenAI API key needed.
+#
+# NOTE: `text-embedding-3-small` was chosen because it is the only
+# embedding deployment that lives on the same Foundry account
+# (`ai-foundry-do-titi`) that our service principal has RBAC on.
+# Its output dimension is 1536 — must match `vectorStore.pgvector.dimension`
+# in kb-class.yaml.
+apiVersion: kognition.dev/v1alpha1
+kind: Model
+metadata:
+  name: text-embedding-3-small
+  namespace: default
+spec:
+  className: foundry
+  provider: foundry
+  modelID: text-embedding-3-small
+  endpoint: https://ai-foundry-do-titi.cognitiveservices.azure.com
+  credentialRef:
+    name: foundry-creds
+  parameters:
+    apiVersion: "2024-08-01-preview"
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Model
+metadata:
+  name: gpt-6-luna
+  namespace: default
+spec:
+  className: foundry
+  provider: foundry
+  modelID: gpt-6-luna
+  endpoint: https://ai-foundry-do-titi.cognitiveservices.azure.com
+  capabilities:
+    - chat
+    - tool-calling
+  credentialRef:
+    name: foundry-creds
+  parameters:
+    apiVersion: "2024-12-01-preview"

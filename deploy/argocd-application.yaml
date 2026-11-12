@@ -1,0 +1,65 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Argo CD Application manifest for Kognition.
+# Replace the source revision and supply reviewed values, namespaces, image
+# digests and credentials before manually syncing the inactive installation.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kognition
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/compare-options: ServerSideDiff=true
+spec:
+  project: kognition-installation
+  source:
+    # Use an operator-reviewed repository and immutable commit, not a branch.
+    repoURL: https://github.com/microsoft/kognition.git
+    targetRevision: REPLACE_WITH_REVIEWED_COMMIT_SHA
+    path: deploy/helm/kognition
+    helm:
+      releaseName: kognition
+      skipCrds: true
+      valueFiles:
+        - values.yaml
+        # Add the installation owner's reviewed, non-secret values file.
+      parameters:
+        - name: mode
+          value: kubernetes
+        - name: k8sController.replicas
+          value: "0"
+        - name: k8sController.activated
+          value: "false"
+        - name: webhook.enabled
+          value: "true"
+        - name: webhook.failurePolicy
+          value: Fail
+        - name: networkPolicy.enabled
+          value: "true"
+        - name: networkPolicy.ciliumApiServerEgress
+          value: "true"
+        - name: admissionGuard.stdioIsolationProfile
+          value: cilium
+        - name: migrations.retainCompletedJobs
+          value: "true"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kognition-system
+  syncPolicy:
+    syncOptions:
+      - Prune=false
+      - Delete=false
+      - CreateNamespace=false
+      - ServerSideApply=true
+      - FailOnSharedResource=true
+      - RespectIgnoreDifferences=true
+  # Only the activation transaction owns this exact field. Do not ignore
+  # admission, RBAC, image, baseline or other workload differences.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: kognition-k8s-controller
+      namespace: kognition-system
+      jsonPointers:
+        - /spec/replicas

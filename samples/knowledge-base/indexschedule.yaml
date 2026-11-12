@@ -1,0 +1,33 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# KnowledgeBaseIndexSchedule is a cron schedule that produces
+# KnowledgeBaseIndexRun objects on each tick. Analogous to a Kubernetes
+# CronJob. Each tick creates a child IndexRun; the schedule keeps history
+# for audit and dashboards.
+#
+# The `inline` KnowledgeBaseClass used by this sample has no ingester, so
+# each child IndexRun completes immediately with a "no ingester configured"
+# message. This still exercises the full schedule reconciler: cron parsing,
+# tick materialization, concurrency policy, and history pruning. For a
+# schedule that drives real ingest work, see
+# samples/knowledge-base-blob-e2e/indexschedule.yaml.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseIndexSchedule
+metadata:
+  name: orbital-notes-hourly
+  namespace: default
+spec:
+  knowledgeBaseName: orbital-notes-kb
+  # Every hour at :05.
+  schedule: "5 * * * *"
+  # If the previous run has not finished, skip this tick.
+  concurrencyPolicy: Forbid
+  # Retain the last 3 successful and last 1 failed runs for audit.
+  successfulRunsHistoryLimit: 3
+  failedRunsHistoryLimit: 1
+  # Skip ticks noticed more than 15 minutes late.
+  startingDeadlineSeconds: 900
+  runTemplate:
+    ttlSecondsAfterFinished: 3600  # keep child runs for 1 hour

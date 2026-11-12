@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kognition.dev/schemas/trust-decision-v1.schema.json",
+  "title": "Kognition Trust Decision v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "timestamp",
+    "plane",
+    "outcome",
+    "reasonCode",
+    "workspace",
+    "request",
+    "authorization",
+    "execution"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "plane": {
+      "type": "string",
+      "enum": ["tool", "memory", "model", "communication"]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["allowed", "denied", "revoked", "replayed", "pending", "approved", "rejected", "completed", "failed"]
+    },
+    "reasonCode": {
+      "type": "string",
+      "enum": ["authorized", "capability_invalid", "capability_expired", "identity_not_ready", "role_denied", "grant_missing", "grant_revoked", "argument_constraints_denied", "policy_denied", "quota_exhausted", "replay_detected", "approval_required", "approval_approved", "approval_rejected", "target_completed", "target_failed"]
+    },
+    "workspace": { "type": "string", "minLength": 1, "maxLength": 63 },
+    "runId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "reason": { "type": "string", "maxLength": 512 },
+    "identity": { "$ref": "#/$defs/identity" },
+    "agentRef": { "$ref": "#/$defs/resourceRef" },
+    "claimedIdentityRef": { "$ref": "#/$defs/resourceRef" },
+    "session": { "$ref": "#/$defs/session" },
+    "request": { "$ref": "#/$defs/request" },
+    "authorization": { "$ref": "#/$defs/authorization" },
+    "approval": { "$ref": "#/$defs/approval" },
+    "execution": { "$ref": "#/$defs/execution" },
+    "trace": { "$ref": "#/$defs/trace" }
+  },
+  "$defs": {
+    "resourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "namespace": { "type": "string", "maxLength": 63 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 253 },
+        "resourceVersion": { "type": "string", "maxLength": 128 },
+        "uid": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agentIdentity"],
+      "properties": {
+        "agentIdentity": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "agentIdentityRef": { "$ref": "#/$defs/resourceRef" }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId"],
+      "properties": {
+        "sessionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorityMode": { "type": "string", "enum": ["in_process"] },
+        "instanceRef": { "$ref": "#/$defs/resourceRef" },
+        "capabilityId": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "targetRef"],
+      "properties": {
+        "operation": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "invocationId": { "type": "string", "maxLength": 128 },
+        "targetRef": { "$ref": "#/$defs/resourceRef" },
+        "constraintRef": { "$ref": "#/$defs/resourceRef" }
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "role", "grant", "policy"],
+      "properties": {
+        "identity": { "$ref": "#/$defs/evidenceStatus" },
+        "role": { "$ref": "#/$defs/evidenceStatus" },
+        "grant": { "$ref": "#/$defs/evidenceStatus" },
+        "policy": { "$ref": "#/$defs/evidenceStatus" },
+        "grantRef": { "$ref": "#/$defs/resourceRef" },
+        "policyRef": { "$ref": "#/$defs/resourceRef" }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "enum": ["not_evaluated", "not_required", "pending", "approved", "rejected", "unavailable"] },
+        "decisionRef": { "$ref": "#/$defs/resourceRef" }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "enum": ["not_started", "blocked", "completed", "failed", "unavailable"] },
+        "targetReached": { "type": "boolean" }
+      }
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "traceId": { "type": "string", "pattern": "^[a-f0-9]{32}$" },
+        "spanId": { "type": "string", "pattern": "^[a-f0-9]{16}$" }
+      }
+    },
+    "evidenceStatus": {
+      "type": "string",
+      "enum": ["allowed", "denied", "revoked", "not_required", "not_evaluated", "unavailable"]
+    }
+  }
+}

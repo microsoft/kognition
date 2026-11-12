@@ -1,0 +1,130 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Tools Sample
+#
+# ToolClass (cluster-scoped) defines the tool provisioner.
+# Tool (namespace-scoped) declares specific tools available to agents.
+#
+# The `calculator` Tool here points at the shared tool-sandbox HTTP service —
+# apply `samples/workflows/tool-sandbox.yaml` first so the `sandbox-openapi`
+# ToolClass and the sandbox pod exist.
+---
+kind: ToolClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: mcp-tools
+spec:
+  provisioner: mcp
+  executionTier: process
+  transport: stdio
+  resourceLimits:
+    maxCpuMilli: 500
+    maxMemoryMB: 256
+    maxTimeout: 30s
+---
+kind: ToolClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: openapi-tools
+spec:
+  provisioner: openapi
+  executionTier: sidecar
+  transport: http
+  resourceLimits:
+    maxCpuMilli: 1000
+    maxMemoryMB: 512
+    maxTimeout: 60s
+---
+kind: Tool
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: web-search
+spec:
+  className: sandbox-openapi
+  protocol: OpenAPI
+  description: Search the demo product documentation corpus
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/knowledge-search
+  metadata:
+    allowPrivateNetwork: "true"
+  inputSchema:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Free-text query to match against product documentation.
+      top_k:
+        type: integer
+        description: Maximum number of passages to return.
+        default: 3
+    required: [query]
+---
+kind: Tool
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: calculator
+spec:
+  # Delegates to the tool-sandbox service — see samples/workflows/tool-sandbox.yaml
+  className: sandbox-openapi
+  protocol: OpenAPI
+  description: Perform mathematical calculations
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/calculator
+  metadata:
+    allowPrivateNetwork: "true"
+  inputSchema:
+    type: object
+    properties:
+      expression:
+        type: string
+        description: Mathematical expression to evaluate
+    required:
+      - expression
+---
+kind: Tool
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: weather-api
+spec:
+  className: openapi-tools
+  protocol: OpenAPI
+  description: Get current weather conditions for a location
+  endpoint: https://api.weather.example.com/v1
+  # Minimal stub OpenAPI 3.0 document. Replace with the real spec for your weather provider.
+  schema:
+    openapi: "3.0.0"
+    info:
+      title: Weather API
+      version: "1.0.0"
+    paths:
+      /current:
+        get:
+          operationId: getCurrentWeather
+          summary: Get current weather conditions for a location
+          parameters:
+            - name: location
+              in: query
+              required: true
+              schema:
+                type: string
+            - name: units
+              in: query
+              required: false
+              schema:
+                type: string
+                enum: [metric, imperial]
+                default: metric
+          responses:
+            "200":
+              description: OK
+  inputSchema:
+    type: object
+    properties:
+      location:
+        type: string
+        description: City name or coordinates
+      units:
+        type: string
+        enum: ["metric", "imperial"]
+        default: "metric"
+    required:
+      - location

@@ -1,0 +1,26 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- range $name, $agent := .Values.agents }}
+{{- if $agent.enabled }}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "kognition-multi-agent.labels" $ | nindent 4 }}
+    kognition.dev/workflow: {{ $.Values.workflow.name }}
+spec:
+  modelRef:
+    name: {{ $.Values.model.name }}
+  instructions:
+    inline: |
+      {{- $agent.instructions | nindent 6 }}
+  runtime:
+    class: {{ $agent.runtime.class }}
+    timeout: {{ $agent.runtime.timeout }}
+    maxTokens: {{ $agent.runtime.maxTokens }}
+{{- end }}
+{{- end }}

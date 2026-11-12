@@ -1,0 +1,149 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# MemoryClaim — demonstrates control-plane binding. The current controller
+# creates MemoryVolume metadata but does not provision that handle in the
+# memory service, so this runnable sample uses explicit sandbox Tool CRs for
+# its data path.
+apiVersion: kognition.dev/v1alpha1
+kind: MemoryClaim
+metadata:
+  name: notes-claim
+  namespace: default
+spec:
+  memoryClassName: default
+  type: working
+  capacity: 10Mi
+  accessModes:
+    - ReadWrite
+---
+# Tool CR — POST to the sandbox `/memory-store` endpoint.
+# Prereq: kubectl apply -f samples/workflows/tool-sandbox.yaml
+apiVersion: kognition.dev/v1alpha1
+kind: Tool
+metadata:
+  name: sandbox-memory-store
+  namespace: default
+spec:
+  className: sandbox-openapi
+  protocol: OpenAPI
+  description: Persist a fact or note in the shared demo memory store.
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/memory-store
+  metadata:
+    allowPrivateNetwork: "true"
+  inputSchema:
+    type: object
+    properties:
+      content:
+        type: string
+        description: The fact or note to remember.
+      tag:
+        type: string
+        description: Optional category tag.
+    required: [content]
+---
+# Tool CR — POST to the sandbox `/memory-recall` endpoint.
+apiVersion: kognition.dev/v1alpha1
+kind: Tool
+metadata:
+  name: sandbox-memory-recall
+  namespace: default
+spec:
+  className: sandbox-openapi
+  protocol: OpenAPI
+  description: Keyword search over previously stored demo records.
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/memory-recall
+  metadata:
+    allowPrivateNetwork: "true"
+  inputSchema:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Free-text query.
+      top_k:
+        type: integer
+        description: Maximum number of memories to return.
+        default: 5
+    required: [query]
+---
+# Agent that uses the sandbox memory tools while retaining a bound claim for
+# control-plane lifecycle visibility.
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: notes-agent
+  namespace: default
+  labels:
+    kognition.dev/sample-tool-demo: "true"
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a personal note-keeping assistant with two tools available:
+
+        - sandbox_memory_store(content, tag): persist a single fact for later
+          recall. Use this whenever the user tells you to remember something,
+          or shares a stable personal fact (preferences, names, dates,
+          decisions).
+        - sandbox_memory_recall(query, top_k): search previously stored facts.
+          Use this BEFORE answering any question about what was previously
+          said or remembered. Do not guess — if recall returns no matches,
+          say so.
+
+      Be concise. After storing, briefly confirm what was stored. After
+      recalling, quote the stored content verbatim when possible.
+  memory:
+    claims:
+      - name: notes-claim
+  tools:
+    - ref:
+        name: sandbox-memory-store
+    - ref:
+        name: sandbox-memory-recall
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 1024
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: notes-agent-tool-grants
+  namespace: default
+spec:
+  scope: agent
+  enforce: true
+  targetAgents:
+    - notes-agent
+  toolGrants:
+    - toolRef: sandbox-memory-store
+      allow: true
+    - toolRef: sandbox-memory-recall
+      allow: true
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentRole
+metadata:
+  name: notes-agent-tool-invoker
+  namespace: default
+rules:
+  - resources:
+      - Tool
+    verbs:
+      - get
+      - invoke
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentRoleBinding
+metadata:
+  name: notes-agent-tool-invoker
+  namespace: default
+spec:
+  roleRef:
+    name: notes-agent-tool-invoker
+  subjects:
+    - kind: Agent
+      name: notes-agent

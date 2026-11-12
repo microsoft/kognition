@@ -1,0 +1,102 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# Azurite — the official Azure Storage emulator — deployed in-cluster so the
+# Azure Blob knowledge-base sample works fully locally, with no external Azure
+# account, no RBAC, and no network egress. Blob data is ephemeral (emptyDir);
+# apply.ps1 re-uploads the docs on every run.
+#
+# Azurite uses the well-known dev account `devstoreaccount1` with a fixed,
+# PUBLIC dev key — it is not a secret and is safe to commit.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: samples-azure-blob-services
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: azurite
+  namespace: samples-azure-blob-services
+  labels:
+    app.kubernetes.io/name: azurite
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: azurite
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: azurite
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: azurite
+          image: mcr.microsoft.com/azure-storage/azurite@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # Bind to 0.0.0.0 so the Service can reach it; skip the API-version
+          # check so a newer azure-storage-blob SDK (ingester) is accepted;
+          # disableProductStyleUrl forces path-style account resolution
+          # (account = first path segment) so requests to the Service's DNS
+          # name (azurite.<ns>.svc...) don't try to parse the account from the
+          # hostname and 404.
+          args:
+            - "azurite-blob"
+            - "--blobHost"
+            - "0.0.0.0"
+            - "--blobPort"
+            - "10000"
+            - "--location"
+            - "/data"
+            - "--skipApiVersionCheck"
+            - "--disableProductStyleUrl"
+          ports:
+            - name: blob
+              containerPort: 10000
+          readinessProbe:
+            tcpSocket:
+              port: 10000
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: "20m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: azurite
+  namespace: samples-azure-blob-services
+  labels:
+    app.kubernetes.io/name: azurite
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: azurite
+  ports:
+    - name: blob
+      port: 10000
+      targetPort: blob

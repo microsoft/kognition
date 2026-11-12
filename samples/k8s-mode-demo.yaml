@@ -1,0 +1,320 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Kognition K8s-Mode Demo Sample
+#
+# Multi-agent content-pipeline backed by Azure AI Foundry.
+# Exercises ModelClass + Model + Agents + Workflow + governance.
+#
+# Before applying, create a SecretRef named `foundry-creds` in the
+# `kognition-demo` namespace. From this repository, run:
+#   .\make.ps1 foundry-creds AGENT_NAMESPACE=kognition-demo
+#
+# Apply with:
+#   kubectl apply -f samples/k8s-mode-demo.yaml
+#
+# Inspect with:
+#   kubectl -n kognition-demo get agents,workflows,memoryclaims,tools,agentpolicies,cognitivequotas
+#   kubectl -n kognition-demo get models,secretrefs
+#   kubectl get modelclasses,memoryclasses,toolclasses
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kognition-demo
+  labels:
+    kognition.dev/managed: "true"
+---
+# Cluster-scoped: ModelClass groups model deployments by provisioner.
+apiVersion: kognition.dev/v1alpha1
+kind: ModelClass
+metadata:
+  name: foundry
+spec:
+  provisioner: foundry
+  latencyClass: low
+  costTier: standard
+  contextWindow: 128000
+  modalities:
+    - text
+---
+# Namespace-scoped: Model binds a Foundry deployment to the ModelClass.
+apiVersion: kognition.dev/v1alpha1
+kind: Model
+metadata:
+  name: gpt-6-luna
+  namespace: kognition-demo
+spec:
+  className: foundry
+  modelID: gpt-6-luna
+  provider: foundry
+  endpoint: https://ai-foundry-do-titi.cognitiveservices.azure.com
+  capabilities:
+    - chat
+    - tool-calling
+  credentialRef:
+    name: foundry-creds
+  parameters:
+    apiVersion: "2024-12-01-preview"
+---
+# Cluster-scoped: MemoryClass with zero-config in-memory backend.
+apiVersion: kognition.dev/v1alpha1
+kind: MemoryClass
+metadata:
+  name: ephemeral
+spec:
+  backendType: in-memory
+  reclaimPolicy: Delete
+  consistencyMode: lww
+---
+# Namespace-scoped: MemoryClaim binding to the ephemeral MemoryClass.
+apiVersion: kognition.dev/v1alpha1
+kind: MemoryClaim
+metadata:
+  name: pipeline-memory
+  namespace: kognition-demo
+spec:
+  memoryClassName: ephemeral
+  type: shared
+  capacity: 64Mi
+  accessModes:
+    - ReadWrite
+---
+# Namespace-scoped: a simple Tool the agents may call. Backed by the
+# tool-sandbox service in `default` (apply samples/workflows/tool-sandbox.yaml
+# first — that manifest also declares the `sandbox-openapi` ToolClass).
+apiVersion: kognition.dev/v1alpha1
+kind: Tool
+metadata:
+  name: word-counter
+  namespace: kognition-demo
+spec:
+  protocol: OpenAPI
+  className: sandbox-openapi
+  description: Counts words and characters in a string of text.
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/wordcount
+  metadata:
+    allowPrivateNetwork: "true"
+  schema:
+    type: object
+    properties:
+      input:
+        type: string
+        description: The text to count words and characters for.
+    required:
+      - input
+---
+# Agent 1 — Researcher
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: researcher
+  namespace: kognition-demo
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a research specialist. Given a topic, gather comprehensive
+      information including key facts, statistics, and notable sources.
+      Output a research brief with: Executive Summary, Key Findings, Sources.
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 8192
+  memory:
+    claims:
+      - name: pipeline-memory
+---
+# Agent 2 — Writer
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: writer
+  namespace: kognition-demo
+  labels:
+    kognition.dev/sample-tool-demo: "true"
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a professional technical writer. Given a research brief,
+      produce a well-structured article: Title, Introduction, Body sections,
+      Conclusion, References.
+  tools:
+    - ref:
+        name: word-counter
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 8192
+  memory:
+    claims:
+      - name: pipeline-memory
+---
+# Agent 3 — Reviewer
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: reviewer
+  namespace: kognition-demo
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a senior editor. Evaluate the article for clarity, accuracy,
+      structure, and engagement. Output: Overall Assessment (approved or
+      revision-needed), Strengths, Issues (severity), Specific Suggestions.
+  runtime:
+    class: default
+    timeout: 45s
+    maxTokens: 4096
+  memory:
+    claims:
+      - name: pipeline-memory
+---
+# Communication grants match the three directed Workflow edges exactly.
+apiVersion: kognition.dev/v1alpha1
+kind: AgentCommunicationPolicy
+metadata:
+  name: content-pipeline-researcher-to-writer
+  namespace: kognition-demo
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: researcher
+  allowTo:
+    - name: writer
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentCommunicationPolicy
+metadata:
+  name: content-pipeline-writer-to-reviewer
+  namespace: kognition-demo
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: writer
+  allowTo:
+    - name: reviewer
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentCommunicationPolicy
+metadata:
+  name: content-pipeline-reviewer-to-writer
+  namespace: kognition-demo
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: reviewer
+  allowTo:
+    - name: writer
+---
+# Workflow chaining the three agents with an approval gate and revision loop.
+apiVersion: kognition.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: content-pipeline
+  namespace: kognition-demo
+spec:
+  entryPoint: research
+  steps:
+    - name: research
+      agentRef:
+        name: researcher
+      input: "Research the following topic thoroughly: the rise of agentic AI in enterprise software."
+      timeout: 90s
+    - name: draft
+      agentRef:
+        name: writer
+      input: "Write an article based on the researcher's brief."
+      timeout: 90s
+      retry:
+        maxAttempts: 2
+        backoff: 10s
+    - name: review
+      agentRef:
+        name: reviewer
+      input: "Review the article produced by the writer."
+      timeout: 60s
+  edges:
+    - from: research
+      to: draft
+    - from: draft
+      to: review
+    - from: review
+      to: draft
+      condition: "output.contains('revision-needed')"
+  approvalGates:
+    - from: draft
+      to: review
+  budgets:
+    maxDuration: 10m
+    maxTokens: 50000
+    maxIterations: 5
+---
+# Governance: per-namespace token + agent quotas.
+apiVersion: kognition.dev/v1alpha1
+kind: CognitiveQuota
+metadata:
+  name: demo-quota
+  namespace: kognition-demo
+spec:
+  hard:
+    agents: 10
+    tools: 5
+    workflows: 5
+  tokenBudget:
+    maxInputTokens: 1000000
+    maxOutputTokens: 200000
+  resetInterval: 24h
+---
+# Governance: warn-only policy that gates use of the word-counter tool.
+apiVersion: kognition.dev/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: writer-tool-grants
+  namespace: kognition-demo
+spec:
+  enforce: true
+  scope: agent
+  targetAgents:
+    - writer
+  toolGrants:
+    - toolRef: word-counter
+      allow: true
+  safetyRules:
+    - name: no-pii-in-output
+      severity: warning
+      rego: |
+        package kognition.safety
+        deny[msg] {
+          contains(lower(input.output), "ssn")
+          msg := "output appears to reference SSN"
+        }
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentRole
+metadata:
+  name: writer-tool-invoker
+  namespace: kognition-demo
+rules:
+  - resources:
+      - Tool
+    verbs:
+      - get
+      - invoke
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentRoleBinding
+metadata:
+  name: writer-tool-invoker
+  namespace: kognition-demo
+spec:
+  roleRef:
+    name: writer-tool-invoker
+  subjects:
+    - kind: Agent
+      name: writer

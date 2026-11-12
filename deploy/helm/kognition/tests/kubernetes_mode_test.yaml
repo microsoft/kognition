@@ -1,0 +1,247 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+suite: Kubernetes mode rendering
+templates:
+  - templates/k8s-controller-deployment.yaml
+  - templates/webhook-service.yaml
+  - templates/validating-webhook-configuration.yaml
+  - templates/mutating-webhook-configuration.yaml
+  - templates/webhook-certificate.yaml
+  - templates/clusterrole.yaml
+  - templates/clusterrolebinding.yaml
+  - templates/quota-ledger-role.yaml
+  - templates/runtime-auth-secret.yaml
+tests:
+  # --- Kubernetes resources render in kubernetes mode ---
+  - it: should render k8s-controller deployment in kubernetes mode
+    template: templates/k8s-controller-deployment.yaml
+    set:
+      mode: kubernetes
+      runtimeAuth.create: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Deployment
+
+  - it: should provision and inject RuntimeApproval keys in kubernetes mode
+    template: templates/runtime-auth-secret.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - exists:
+          path: data["runtime-approval-binding-keys.json"]
+
+  - it: should inject RuntimeApproval keys into k8s-controller
+    template: templates/k8s-controller-deployment.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-kognition-runtime-auth
+                key: runtime-approval-binding-keys.json
+
+  - it: should keep the plugin host disabled by default
+    template: templates/k8s-controller-deployment.yaml
+    set:
+      mode: kubernetes
+      webhook.enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KOGNITION_PLUGIN_HOST_ENABLED
+            value: "true"
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notExists:
+          path: spec.template.spec.volumes
+
+  - it: should mount writable pod-local plugin sockets when enabled
+    template: templates/k8s-controller-deployment.yaml
+    set:
+      mode: kubernetes
+      webhook.enabled: false
+      k8sController.pluginHost.enabled: true
+      k8sController.pluginHost.socketDir: /run/test-plugins
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KOGNITION_PLUGIN_HOST_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KOGNITION_PLUGIN_SOCKET_DIR
+            value: /run/test-plugins
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: plugin-sockets
+            mountPath: /run/test-plugins
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: plugin-sockets
+            emptyDir: {}
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+
+  - it: should render webhook service in kubernetes mode
+    template: templates/webhook-service.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Service
+
+  - it: should render validating webhook configuration in kubernetes mode
+    template: templates/validating-webhook-configuration.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ValidatingWebhookConfiguration
+
+  - it: should validate Knowledge Base resources with their declared scopes
+    template: templates/validating-webhook-configuration.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - equal:
+          path: webhooks[0].rules[0].scope
+          value: Namespaced
+      - contains:
+          path: webhooks[0].rules[0].resources
+          content: knowledgebases
+      - contains:
+          path: webhooks[0].rules[0].resources
+          content: knowledgebaseindexruns
+      - contains:
+          path: webhooks[0].rules[0].resources
+          content: knowledgebaseindexschedules
+      - equal:
+          path: webhooks[0].rules[1].scope
+          value: Cluster
+      - contains:
+          path: webhooks[0].rules[1].resources
+          content: knowledgebaseclasses
+
+  - it: should render mutating webhook configuration in kubernetes mode
+    template: templates/mutating-webhook-configuration.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: MutatingWebhookConfiguration
+
+  - it: should mutate ToolClass at cluster scope
+    template: templates/mutating-webhook-configuration.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - equal:
+          path: webhooks[0].rules[1].scope
+          value: Cluster
+      - contains:
+          path: webhooks[0].rules[1].resources
+          content: toolclasses
+
+  - it: should render webhook certificate in kubernetes mode
+    template: templates/webhook-certificate.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - hasDocuments:
+          count: 2  # Issuer + Certificate
+
+  - it: should render clusterrole in kubernetes mode
+    template: templates/clusterrole.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ClusterRole
+
+  - it: should render clusterrolebinding in kubernetes mode
+    template: templates/clusterrolebinding.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ClusterRoleBinding
+
+  - it: should render namespaced quota ledger permissions in kubernetes mode
+    template: templates/quota-ledger-role.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: should NOT render quota ledger permissions in standalone mode
+    template: templates/quota-ledger-role.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # --- Kubernetes resources do NOT render in standalone mode ---
+  - it: should NOT render k8s-controller deployment in standalone mode
+    template: templates/k8s-controller-deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should NOT render webhook service in standalone mode
+    template: templates/webhook-service.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should NOT render validating webhook in standalone mode
+    template: templates/validating-webhook-configuration.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should NOT render mutating webhook in standalone mode
+    template: templates/mutating-webhook-configuration.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should NOT render webhook certificate in standalone mode
+    template: templates/webhook-certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should NOT render clusterrole in standalone mode
+    template: templates/clusterrole.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should NOT render clusterrolebinding in standalone mode
+    template: templates/clusterrolebinding.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

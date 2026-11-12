@@ -1,0 +1,73 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# AgentRole and AgentRoleBinding Sample
+#
+# RBAC for agents — defines what resources agents can access.
+---
+kind: AgentRole
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: tool-invoker
+rules:
+  - resources:
+      - Tool
+    verbs:
+      - get
+      - invoke
+---
+kind: AgentRole
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: memory-reader
+rules:
+  - resources:
+      - Memory
+    verbs:
+      - get
+      - read
+---
+kind: AgentRole
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: memory-writer
+rules:
+  - resources:
+      - Memory
+    verbs:
+      - get
+      - read
+      - write
+---
+kind: AgentRoleBinding
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: writer-tool-invoker
+spec:
+  roleRef:
+    name: tool-invoker
+  subjects:
+    - kind: Agent
+      name: writer
+---
+kind: AgentRoleBinding
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: researcher-memory-reader
+spec:
+  roleRef:
+    name: memory-reader
+  subjects:
+    - kind: Agent
+      name: researcher
+---
+kind: AgentRoleBinding
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: writer-memory-writer
+spec:
+  roleRef:
+    name: memory-writer
+  subjects:
+    - kind: Agent
+      name: writer

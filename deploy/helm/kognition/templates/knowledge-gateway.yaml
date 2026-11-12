@@ -1,0 +1,269 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- $gateway := default (dict) .Values.knowledgeGateway }}
+{{- if and (eq .Values.mode "kubernetes") $gateway.enabled }}
+{{- $name := printf "%s-knowledge-gateway" (include "kognition.fullname" .) }}
+{{- $image := default (dict "repository" "kognition-knowledge-gateway" "tag" "" "pullPolicy" "IfNotPresent") $gateway.image }}
+{{- $service := default (dict) $gateway.service }}
+{{- $provider := required "knowledgeGateway.provider is required" $gateway.provider }}
+{{- $configuration := required "knowledgeGateway.provider.configuration is required" $provider.configuration }}
+{{- $tls := required "knowledgeGateway.tls is required" $gateway.tls }}
+{{- $tlsSecretName := required "knowledgeGateway.tls.secretName is required" $tls.secretName }}
+{{- $runtimeTLS := required "knowledgeGateway.runtimeTLS is required" $gateway.runtimeTLS }}
+{{- $runtimeTLSSecretName := required "knowledgeGateway.runtimeTLS.secretName is required" $runtimeTLS.secretName }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: knowledge-gateway
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+rules:
+  - apiGroups: ["kognition.dev"]
+    resources: ["knowledgebaseclasses", "modelclasses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- range $namespace := (include "kognition.controllerNamespaces" . | fromJsonArray) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+rules:
+  - apiGroups: ["kognition.dev"]
+    resources: ["agents", "agentinstances", "agentidentities", "knowledgebaseclaims", "knowledgebases", "models", "modelinvocationprofiles", "modelgrants", "agentpolicies", "secretrefs", "cognitivequotas"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["cognitivequotas/status"]
+    verbs: ["get", "update"]
+  - apiGroups: [{{ required "knowledgeGateway.provider.configuration.apiGroup is required" $configuration.apiGroup | quote }}]
+    resources: [{{ required "knowledgeGateway.provider.configuration.resource is required" $configuration.resource | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $name }}}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-cost
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-cost
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-cost
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: knowledge-gateway
+spec:
+  replicas: {{ default 1 $gateway.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: knowledge-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "kognition.labels" . | nindent 8 }}
+        app.kubernetes.io/component: knowledge-gateway
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ $name }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: knowledge-gateway
+          image: {{ include "kognition.image" (dict "global" .Values.global "image" $image "defaultTag" .Chart.AppVersion) }}
+          imagePullPolicy: {{ default "IfNotPresent" $image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: https
+              containerPort: 8095
+          env:
+            - name: LISTEN_ADDR
+              value: ":8095"
+            - name: KOGNITION_MODE
+              value: "kubernetes"
+            - name: KOGNITION_COST_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: KOGNITION_KNOWLEDGE_PROVIDER_NAME
+              value: {{ required "knowledgeGateway.provider.name is required" $provider.name | quote }}
+            - name: KOGNITION_KNOWLEDGE_PROVIDER_ADDRESS
+              value: {{ required "knowledgeGateway.provider.address is required" $provider.address | quote }}
+            - name: KOGNITION_KNOWLEDGE_PROVIDER_SERVER_NAME
+              value: {{ required "knowledgeGateway.provider.serverName is required" $provider.serverName | quote }}
+            - name: KOGNITION_KNOWLEDGE_PROVIDER_PEER_URI
+              value: {{ required "knowledgeGateway.provider.peerURI is required" $provider.peerURI | quote }}
+            - name: KOGNITION_KNOWLEDGE_CONFIGURATION_API_GROUP
+              value: {{ required "knowledgeGateway.provider.configuration.apiGroup is required" $configuration.apiGroup | quote }}
+            - name: KOGNITION_KNOWLEDGE_CONFIGURATION_API_VERSION
+              value: {{ required "knowledgeGateway.provider.configuration.apiVersion is required" $configuration.apiVersion | quote }}
+            - name: KOGNITION_KNOWLEDGE_CONFIGURATION_KIND
+              value: {{ required "knowledgeGateway.provider.configuration.kind is required" $configuration.kind | quote }}
+            - name: KOGNITION_KNOWLEDGE_TLS_CERT_FILE
+              value: /var/run/kognition/tls/tls.crt
+            - name: KOGNITION_KNOWLEDGE_TLS_KEY_FILE
+              value: /var/run/kognition/tls/tls.key
+            - name: KOGNITION_KNOWLEDGE_TLS_CA_FILE
+              value: /var/run/kognition/tls/ca.crt
+            - name: KOGNITION_KNOWLEDGE_RUNTIME_TLS_CERT_FILE
+              value: /var/run/kognition/runtime-tls/tls.crt
+            - name: KOGNITION_KNOWLEDGE_RUNTIME_TLS_KEY_FILE
+              value: /var/run/kognition/runtime-tls/tls.key
+            - name: KNOWLEDGE_CAPABILITY_HMAC_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ $name }}, key: capability-hmac-key}
+            - name: KNOWLEDGE_CAPABILITY_HMAC_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: {{ $name }}, key: capability-hmac-key-id}
+            - name: KNOWLEDGE_CAPABILITY_HMAC_PREVIOUS_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ $name }}, key: capability-hmac-previous-key, optional: true}
+            - name: KNOWLEDGE_CAPABILITY_HMAC_PREVIOUS_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: {{ $name }}, key: capability-hmac-previous-key-id, optional: true}
+          readinessProbe:
+            httpGet: {path: /healthz, port: https, scheme: HTTPS}
+          livenessProbe:
+            httpGet: {path: /healthz, port: https, scheme: HTTPS}
+          resources:
+            {{- toYaml $gateway.resources | nindent 12 }}
+          volumeMounts:
+            - name: tls
+              mountPath: /var/run/kognition/tls
+              readOnly: true
+            - name: runtime-tls
+              mountPath: /var/run/kognition/runtime-tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ $tlsSecretName }}
+            items:
+              - {key: {{ default "tls.crt" $tls.certificateKey }}, path: tls.crt}
+              - {key: {{ default "tls.key" $tls.privateKeyKey }}, path: tls.key}
+              - {key: {{ default "ca.crt" $tls.trustBundleKey }}, path: ca.crt}
+        - name: runtime-tls
+          secret:
+            secretName: {{ $runtimeTLSSecretName }}
+            items:
+              - {key: {{ default "tls.crt" $runtimeTLS.certificateKey }}, path: tls.crt}
+              - {key: {{ default "tls.key" $runtimeTLS.privateKeyKey }}, path: tls.key}
+      {{- with $gateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $gateway.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $gateway.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: knowledge-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: knowledge-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: https
+      port: {{ default 8095 $service.port }}
+      targetPort: https
+      protocol: TCP
+{{- if .Values.observability.metrics.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    {{- with .Values.observability.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: knowledge-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace | quote }}]
+  endpoints:
+    - port: https
+      path: /metrics
+      scheme: https
+      tlsConfig:
+        ca:
+          secret:
+            name: {{ $runtimeTLSSecretName }}
+            key: {{ default "ca.crt" $runtimeTLS.trustBundleKey }}
+        serverName: {{ required "knowledgeGateway.runtimeTLS.serverName is required" $runtimeTLS.serverName | quote }}
+      honorLabels: true
+      interval: {{ default "30s" .Values.observability.metrics.serviceMonitor.interval | quote }}
+{{- end }}
+{{- end }}

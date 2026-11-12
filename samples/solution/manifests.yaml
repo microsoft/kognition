@@ -1,0 +1,179 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Solution Sample
+#
+# High-level goal decomposition — the planner generates a Workflow at runtime.
+---
+kind: Solution
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: write-blog-post
+spec:
+  goal: |
+    Write a comprehensive blog post about the benefits of declarative
+    AI orchestration for enterprise teams. Include research, examples,
+    and a compelling narrative.
+  constraints:
+    - "Must be between 1000-2000 words"
+    - "Must cite at least 3 sources"
+    - "Must include code examples"
+  preferences:
+    tone: professional
+    audience: platform-engineers
+  modelRef:
+    name: gpt-6-luna
+---
+kind: Solution
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: analyze-dataset
+spec:
+  goal: |
+    Analyze the provided CSV dataset, identify trends and anomalies,
+    produce a summary report with visualizations, and suggest
+    three actionable insights for the business team.
+  constraints:
+    - "Report must be under 500 words"
+    - "Must include at least one chart"
+    - "All claims must be supported by data"
+  preferences:
+    format: markdown
+    detail-level: executive-summary
+  modelRef:
+    name: gpt-6-luna
+  seed: 42
+---
+# Demo-only authorization is deliberately external to Solution compilation.
+# Generic Solutions never self-authorize the Tools they generate.
+kind: AgentPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: analyze-dataset-tool-grants
+  namespace: default
+spec:
+  scope: agent
+  enforce: true
+  targetAgents:
+    - analyze-dataset-researcher
+    - analyze-dataset-writer
+  toolGrants:
+    - toolRef: analyze-dataset-research-tool
+      allow: true
+---
+kind: AgentPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: write-blog-post-tool-grants
+  namespace: default
+spec:
+  scope: agent
+  enforce: true
+  targetAgents:
+    - write-blog-post-researcher
+    - write-blog-post-writer
+  toolGrants:
+    - toolRef: write-blog-post-research-tool
+      allow: true
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: write-blog-post-planner-to-researcher
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: write-blog-post-agent
+  allowTo:
+    - name: write-blog-post-researcher
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: write-blog-post-researcher-to-writer
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: write-blog-post-researcher
+  allowTo:
+    - name: write-blog-post-writer
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: write-blog-post-writer-to-publisher
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: write-blog-post-writer
+  allowTo:
+    - name: write-blog-post-publisher
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: analyze-dataset-planner-to-researcher
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: analyze-dataset-agent
+  allowTo:
+    - name: analyze-dataset-researcher
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: analyze-dataset-researcher-to-writer
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: analyze-dataset-researcher
+  allowTo:
+    - name: analyze-dataset-writer
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: analyze-dataset-writer-to-publisher
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: analyze-dataset-writer
+  allowTo:
+    - name: analyze-dataset-publisher
+---
+kind: AgentRole
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: analyze-dataset-tool-invoker
+  namespace: default
+rules:
+  - resources:
+      - Tool
+    verbs:
+      - get
+      - invoke
+---
+kind: AgentRoleBinding
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: analyze-dataset-tool-invoker
+  namespace: default
+spec:
+  roleRef:
+    name: analyze-dataset-tool-invoker
+  subjects:
+    - kind: Agent
+      name: analyze-dataset-researcher
+    - kind: Agent
+      name: analyze-dataset-writer
+    - kind: Agent
+      name: write-blog-post-researcher
+    - kind: Agent
+      name: write-blog-post-writer

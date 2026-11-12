@@ -1,0 +1,20 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if .Values.workspace.enabled }}
+apiVersion: kognition.dev/v1alpha1
+kind: Workspace
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "kognition-governance.labels" . | nindent 4 }}
+spec:
+  displayName: {{ .Values.workspace.displayName | quote }}
+  requireSignedArtifacts: {{ .Values.workspace.requireSignedArtifacts }}
+  retention:
+    traceTTL: {{ .Values.workspace.retention.traceTTL }}
+    auditLogTTL: {{ .Values.workspace.retention.auditLogTTL }}
+    costRecordTTL: {{ .Values.workspace.retention.costRecordTTL }}
+    eventTTL: {{ .Values.workspace.retention.eventTTL }}
+{{- end }}

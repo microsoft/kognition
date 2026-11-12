@@ -1,0 +1,9 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+FROM alpine:3.20
+COPY acceptance /acceptance
+COPY tokenizer /tokenizer
+ENV TIKTOKEN_CACHE_DIR=/tokenizer
+USER 65532:65532
+ENTRYPOINT ["/acceptance"]

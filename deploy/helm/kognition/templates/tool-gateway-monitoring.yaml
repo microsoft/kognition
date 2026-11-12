@@ -1,0 +1,68 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- $toolGateway := default (dict) .Values.toolGateway }}
+{{- $monitoring := default (dict) $toolGateway.monitoring }}
+{{- $serviceMonitor := default (dict) $monitoring.serviceMonitor }}
+{{- $prometheusRule := default (dict) $monitoring.prometheusRule }}
+{{- if and (eq .Values.mode "kubernetes") $toolGateway.enabled $serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "kognition.fullname" . }}-tool-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    {{- with $serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: tool-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace | quote }}]
+  endpoints:
+    - port: http
+      path: /metrics
+      honorLabels: true
+      interval: {{ default "30s" $serviceMonitor.interval | quote }}
+{{- end }}
+    {{- if and (eq .Values.mode "kubernetes") $toolGateway.enabled $prometheusRule.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "kognition.fullname" . }}-tool-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    {{- with $prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: kognition.tool-gateway
+      rules:
+        - alert: KognitionToolGatewayInvocationFailures
+          expr: sum(rate(kognition_tool_gateway_invocations_total{outcome!="success"}[5m])) > 0
+          for: {{ default "5m" $prometheusRule.for | quote }}
+          labels: {severity: warning}
+          annotations: {summary: Tool Gateway is returning invocation failures}
+        - alert: KognitionToolGatewayCircuitOpen
+          expr: sum(rate(kognition_tool_gateway_resilience_events_total{reason="circuit_open"}[5m])) > 0
+          for: {{ default "5m" $prometheusRule.for | quote }}
+          labels: {severity: warning}
+          annotations: {summary: Tool Gateway circuit breaker is open}
+        - alert: KognitionToolGatewayConcurrencyRejected
+          expr: sum(rate(kognition_tool_gateway_resilience_events_total{reason="concurrency_limit"}[5m])) > 0
+          for: {{ default "5m" $prometheusRule.for | quote }}
+          labels: {severity: warning}
+          annotations: {summary: Tool Gateway concurrency limit is rejecting requests}
+        - alert: KognitionToolGatewayAuditCompletionFailed
+          expr: sum(rate(kognition_tool_gateway_resilience_events_total{reason="audit_completion_failed"}[5m])) > 0
+          for: {{ default "5m" $prometheusRule.for | quote }}
+          labels: {severity: critical}
+          annotations: {summary: Tool Gateway executed a target without a durable completion audit}
+{{- end }}

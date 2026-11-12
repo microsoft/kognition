@@ -1,0 +1,18 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if .Values.identities.enabled }}
+{{- range .Values.identities.agents }}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: {{ . }}-identity
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "kognition-governance.labels" $ | nindent 4 }}
+spec:
+  agentRef:
+    name: {{ . }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,148 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Triage Router Workflow — classifier routes to one of three specialist handlers
+# based on detected urgency. Showcases conditional edges (CEL-like expressions).
+# Requires OPENAI_API_KEY env var on the controller.
+---
+kind: ModelClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: openai
+spec:
+  provisioner: openai
+  latencyClass: low
+  costTier: standard
+  contextWindow: 128000
+  modalities:
+    - text
+---
+kind: SecretRef
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: openai-api-key
+spec:
+  backendType: env
+  backendRef: OPENAI_API_KEY
+  key: OPENAI_API_KEY
+---
+kind: Model
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: gpt-4o
+spec:
+  className: openai
+  modelID: gpt-4o
+  provider: openai-compatible
+  endpoint: https://api.openai.com/v1
+  capabilities:
+    - chat
+    - tool-calling
+  credentialRef:
+    name: openai-api-key
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: triage-classifier
+spec:
+  modelRef:
+    name: gpt-4o
+  instructions:
+    inline: |
+      You classify incoming support tickets by urgency.
+      Read the user's message and respond with EXACTLY one of:
+        urgent
+        normal
+        low
+      No other words, no punctuation.
+  runtime:
+    timeout: 20s
+    maxTokens: 16
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: urgent-handler
+spec:
+  modelRef:
+    name: gpt-4o
+  instructions:
+    inline: |
+      You handle urgent support tickets. Acknowledge the issue, ask any
+      critical missing information, and propose an immediate next step.
+      Be concise and direct — minutes matter.
+  runtime:
+    timeout: 45s
+    maxTokens: 2048
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: standard-handler
+spec:
+  modelRef:
+    name: gpt-4o
+  instructions:
+    inline: |
+      You handle normal support tickets. Provide a clear, friendly response
+      that resolves the user's question or moves it toward resolution.
+  runtime:
+    timeout: 45s
+    maxTokens: 2048
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: low-priority-handler
+spec:
+  modelRef:
+    name: gpt-4o
+  instructions:
+    inline: |
+      You handle low-priority tickets (FAQ, billing trivia, feature requests).
+      Reply politely, link to relevant docs when helpful, and close the loop.
+  runtime:
+    timeout: 45s
+    maxTokens: 2048
+---
+kind: Workflow
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: triage-router
+spec:
+  entryPoint: classify
+  steps:
+    - name: classify
+      agentRef:
+        name: triage-classifier
+      input: "{{.request}}"
+      timeout: 30s
+    - name: handle-urgent
+      agentRef:
+        name: urgent-handler
+      input: "{{.request}}"
+      timeout: 60s
+    - name: handle-normal
+      agentRef:
+        name: standard-handler
+      input: "{{.request}}"
+      timeout: 60s
+    - name: handle-low
+      agentRef:
+        name: low-priority-handler
+      input: "{{.request}}"
+      timeout: 60s
+  edges:
+    - from: classify
+      to: handle-urgent
+      condition: "output == 'urgent'"
+    - from: classify
+      to: handle-normal
+      condition: "output == 'normal'"
+    - from: classify
+      to: handle-low
+      condition: "output == 'low'"
+  budgets:
+    maxDuration: 3m
+    maxTokens: 20000

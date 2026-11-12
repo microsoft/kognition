@@ -1,0 +1,234 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: runtimeapprovaltombstones.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: RuntimeApprovalTombstone
+    listKind: RuntimeApprovalTombstoneList
+    plural: runtimeapprovaltombstones
+    singular: runtimeapprovaltombstone
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.decisionState
+      name: Decision
+      type: string
+    - jsonPath: .spec.executionState
+      name: Execution
+      type: string
+    - jsonPath: .spec.retentionDeadline
+      name: Retain Until
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          RuntimeApprovalTombstone is the bounded replay fence retained after a
+          terminal RuntimeApproval is compacted. It deliberately excludes action
+          payloads, credentials, decision actors, and unbounded evidence.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              agentRef:
+                properties:
+                  kind:
+                    enum: [Agent]
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                  name:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  namespace:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  resourceVersion:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  scope:
+                    enum:
+                    - Namespaced
+                    type: string
+                  uid:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                required:
+                - kind
+                - name
+                - resourceVersion
+                - scope
+                - uid
+                type: object
+              binding:
+                properties:
+                  algorithm:
+                    enum:
+                    - HMAC-SHA-256
+                    type: string
+                  domain:
+                    enum:
+                    - kognition.dev/runtime-approval/action/v1
+                    type: string
+                  epoch:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  format:
+                    enum:
+                    - kognition-runtime-action-v1
+                    type: string
+                  keyVersion:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  tag:
+                    maxLength: 64
+                    minLength: 43
+                    type: string
+                required:
+                - algorithm
+                - domain
+                - epoch
+                - format
+                - keyVersion
+                - tag
+                type: object
+              compactedAt:
+                format: date-time
+                type: string
+              createdAt:
+                format: date-time
+                type: string
+              decisionState:
+                enum:
+                - Approved
+                - Rejected
+                - Expired
+                - NotRequired
+                type: string
+              executionDisposition:
+                enum:
+                - QuotaDenied
+                - ReceiptConflict
+                - PolicyChanged
+                - TargetChanged
+                - SessionChanged
+                - PreparationRejected
+                - ApprovalExpiredBeforeClaim
+                - AbandonedPreparation
+                - ReconciledCompleted
+                - ReconciledNotExecuted
+                - Succeeded
+                - Failed
+                type: string
+              executionState:
+                enum:
+                - NotStarted
+                - Completed
+                - Failed
+                type: string
+              expiresAt:
+                format: date-time
+                type: string
+              initialDecision:
+                enum:
+                - Pending
+                - NotRequired
+                type: string
+              invocationID:
+                maxLength: 128
+                minLength: 1
+                type: string
+              operation:
+                maxLength: 128
+                minLength: 1
+                type: string
+              plane:
+                enum:
+                - Tool
+                - Memory
+                - Communication
+                type: string
+              retentionDeadline:
+                format: date-time
+                type: string
+              runtimeApprovalUID:
+                maxLength: 128
+                minLength: 1
+                type: string
+              workspace:
+                maxLength: 253
+                minLength: 1
+                type: string
+            required:
+            - agentRef
+            - binding
+            - compactedAt
+            - createdAt
+            - decisionState
+            - executionState
+            - expiresAt
+            - initialDecision
+            - invocationID
+            - operation
+            - plane
+            - retentionDeadline
+            - runtimeApprovalUID
+            - workspace
+            type: object
+            x-kubernetes-validations:
+            - message: agentRef must identify an Agent namespaced to the RuntimeApprovalTombstone
+                workspace
+              rule: self.agentRef.kind == 'Agent' && self.agentRef.scope == 'Namespaced'
+                && self.agentRef.__namespace__ == self.workspace
+            - message: compactedAt must not precede createdAt
+              rule: self.compactedAt >= self.createdAt
+            - message: retentionDeadline must follow compactedAt
+              rule: self.retentionDeadline > self.compactedAt
+            - message: decision and execution states must describe a terminal action
+              rule: 'self.decisionState in [''Rejected'', ''Expired''] ? self.executionState
+                == ''NotStarted'' : self.executionState in [''Completed'', ''Failed'']'
+            - message: only terminal execution states require an execution disposition
+              rule: 'self.executionState == ''NotStarted'' ? !has(self.executionDisposition)
+                : has(self.executionDisposition)'
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: RuntimeApprovalTombstone spec is immutable
+          rule: self.spec == oldSelf.spec
+    served: true
+    storage: true
+    subresources: {}

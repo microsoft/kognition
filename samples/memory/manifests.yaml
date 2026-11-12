@@ -1,0 +1,94 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Memory Sample
+#
+# MemoryClass (cluster-scoped) defines the backend.
+# MemoryClaim (namespace-scoped) requests capacity from a class.
+---
+# Production memory with pgvector
+kind: MemoryClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: pgvector-default
+spec:
+  backendType: pgvector
+  reclaimPolicy: Retain
+  summarizationConfig:
+    enabled: true
+    thresholdRecords: 100
+    modelRef:
+      name: gpt-4o-mini
+  parameters:
+    dimensions: "1536"
+    indexType: ivfflat
+---
+# Ephemeral in-memory for dev/test
+kind: MemoryClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: ephemeral
+spec:
+  backendType: in-memory
+  reclaimPolicy: Delete
+  consistencyMode: lww
+---
+# Redis-backed for high-throughput working memory
+kind: MemoryClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: redis-fast
+spec:
+  backendType: redis
+  reclaimPolicy: Delete
+  consistencyMode: lww
+  parameters:
+    ttlSeconds: "3600"
+---
+# Episodic memory claim (long-term conversation history)
+kind: MemoryClaim
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: agent-episodic
+spec:
+  memoryClassName: pgvector-default
+  type: episodic
+  capacity: 1Gi
+  accessModes:
+    - ReadWrite
+---
+# Semantic memory claim (knowledge base)
+kind: MemoryClaim
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: agent-semantic
+spec:
+  memoryClassName: pgvector-default
+  type: semantic
+  capacity: 2Gi
+  accessModes:
+    - ReadWrite
+---
+# Working memory (short-term scratchpad)
+kind: MemoryClaim
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: agent-working
+spec:
+  memoryClassName: redis-fast
+  type: working
+  capacity: 64Mi
+  accessModes:
+    - ReadWrite
+---
+# Shared memory for multi-agent collaboration
+kind: MemoryClaim
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: pipeline-shared
+spec:
+  memoryClassName: ephemeral
+  type: shared
+  capacity: 64Mi
+  accessModes:
+    - ReadWrite

@@ -1,0 +1,15 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if .Values.limitRange.enabled }}
+apiVersion: kognition.dev/v1alpha1
+kind: CognitiveLimitRange
+metadata:
+  name: {{ .Release.Name }}-limits
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "kognition-governance.labels" . | nindent 4 }}
+spec:
+  limits:
+    {{- toYaml .Values.limitRange.limits | nindent 4 }}
+{{- end }}

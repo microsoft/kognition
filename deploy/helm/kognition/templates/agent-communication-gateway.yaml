@@ -1,0 +1,198 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- $gateway := default (dict) .Values.agentCommunicationGateway }}
+{{- if and (eq .Values.mode "kubernetes") $gateway.enabled }}
+{{- $name := printf "%s-agent-communication-gateway" (include "kognition.fullname" .) }}
+{{- $runtimeAuthSecret := default (printf "%s-runtime-auth" (include "kognition.fullname" .)) .Values.runtimeAuth.existingSecret }}
+{{- $gatewayImageRaw := default (dict) $gateway.image }}
+{{- $gatewayImage := dict "repository" (default "kognition-agent-communication-gateway" $gatewayImageRaw.repository) "tag" (default "" $gatewayImageRaw.tag) "digest" (default "" $gatewayImageRaw.digest) "pullPolicy" (default "IfNotPresent" $gatewayImageRaw.pullPolicy) }}
+{{- $gatewayResources := default (dict) $gateway.resources }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-communication-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-runtime-identity
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-runtime-identity
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-runtime-identity
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+rules:
+  - apiGroups: ["kognition.dev"]
+    resources: ["agents", "agentinstances", "agentidentities", "agentservices", "agentcommunicationpolicies", "crossnamespacegrants"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["trustprofiles", "trustprofileindices", "autonomyclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["runtimeapprovals"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["runtimeapprovals/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["runtimeapprovaltombstones"]
+    verbs: ["get"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["runtimeapprovalquotatickets"]
+    verbs: ["get", "list", "create", "update"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["kognition-runtime-approval-records"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-communication-gateway
+spec:
+  replicas: {{ default 1 $gateway.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: agent-communication-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "kognition.labels" . | nindent 8 }}
+        app.kubernetes.io/component: agent-communication-gateway
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ $name }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: agent-communication-gateway
+          image: {{ include "kognition.image" (dict "global" .Values.global "image" $gatewayImage "defaultTag" .Chart.AppVersion) }}
+          imagePullPolicy: {{ default "IfNotPresent" $gatewayImage.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8094
+          env:
+            - name: LISTEN_ADDR
+              value: ":8094"
+            - name: KOGNITION_RUNTIME_APPROVAL_WORKLOAD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: KOGNITION_AGENT_COMMUNICATION_GATEWAY_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: KOGNITION_AGENT_NAMESPACE
+              value: {{ .Values.k8sController.agentNamespace | quote }}
+            - name: KOGNITION_RUNTIME_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $runtimeAuthSecret }}
+                  key: runtime-control-token
+            - name: KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $runtimeAuthSecret }}
+                  key: runtime-approval-binding-keys.json
+            - name: KOGNITION_RUNTIME_APPROVAL_MAXIMUM_CLOCK_SKEW
+              value: {{ .Values.runtimeAuth.maximumClockSkew | quote }}
+            - name: AGENT_DELEGATION_CAPABILITY_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}
+                  key: capability-hmac-key
+            - name: AGENT_DELEGATION_CAPABILITY_HMAC_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}
+                  key: capability-hmac-key-id
+            - name: AGENT_DELEGATION_CAPABILITY_HMAC_PREVIOUS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}
+                  key: capability-hmac-previous-key
+                  optional: true
+            - name: AGENT_DELEGATION_CAPABILITY_HMAC_PREVIOUS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}
+                  key: capability-hmac-previous-key-id
+                  optional: true
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources:
+            {{- toYaml $gatewayResources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-communication-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: agent-communication-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ default 8094 (dig "service" "port" 8094 $gateway) }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

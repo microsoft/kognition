@@ -1,0 +1,44 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if .Values.networkPolicy.ciliumApiServerEgress }}
+{{- if or (ne .Values.mode "kubernetes") (not .Values.networkPolicy.enabled) (ne .Values.admissionGuard.stdioIsolationProfile "cilium") }}
+{{- fail "ciliumApiServerEgress requires Kubernetes mode, enforced NetworkPolicies and the cilium isolation profile" }}
+{{- end }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ printf "%s-kubernetes-api" (include "kognition.fullname" . | trunc 47 | trimSuffix "-") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    {{- include "kognition.labels" . | nindent 4 }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    matchExpressions:
+      - key: k8s:app.kubernetes.io/component
+        operator: In
+        values:
+          - k8s-controller
+          - memory-service
+          - memory-policy-gateway
+          - tool-gateway
+          - model-gateway
+          - agent-communication-gateway
+          {{- if .Values.knowledgeGateway.enabled }}
+          - knowledge-gateway
+          {{- end }}
+  egress:
+    - toEntities: [host, kube-apiserver]
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+            - port: "6443"
+              protocol: TCP
+{{- end }}

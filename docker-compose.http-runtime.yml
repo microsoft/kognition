@@ -1,0 +1,43 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+services:
+  controller-manager:
+    depends_on:
+      agent-runtime:
+        condition: service_healthy
+    environment:
+      KOGNITION_RUNTIME_DISPATCH_MODE: http
+      KOGNITION_RUNTIME_ENDPOINTS: ${KOGNITION_RUNTIME_ENDPOINTS:?Provide a JSON namespace/Agent to runtime /invoke map}
+      KOGNITION_RUNTIME_AUTH_TOKEN: ${KOGNITION_RUNTIME_AUTH_TOKEN:?Provide a separate runtime token}
+      KOGNITION_MEMORY_POLICY_GATEWAY_URL: http://memory-policy-gateway:8091
+      KOGNITION_TOOL_GATEWAY_URL: http://tool-gateway:8092
+      KOGNITION_MODEL_GATEWAY_URL: http://model-gateway:8093
+      KOGNITION_AGENT_COMMUNICATION_GATEWAY_URL: http://agent-communication-gateway:8094
+      KOGNITION_MEMORY_CAPABILITY_HMAC_KEY_ID: ${MEMORY_CAPABILITY_HMAC_KEY_ID:-local-v1}
+      KOGNITION_MEMORY_CAPABILITY_HMAC_KEY: ${MEMORY_CAPABILITY_HMAC_KEY:?Provide a Memory capability key}
+      KOGNITION_TOOL_CAPABILITY_HMAC_KEY_ID: ${TOOL_CAPABILITY_HMAC_KEY_ID:-local-v1}
+      KOGNITION_TOOL_CAPABILITY_HMAC_KEY: ${TOOL_CAPABILITY_HMAC_KEY:?Provide a Tool capability key}
+      KOGNITION_MODEL_CAPABILITY_HMAC_KEY_ID: ${MODEL_CAPABILITY_HMAC_KEY_ID:-local-v1}
+      KOGNITION_MODEL_CAPABILITY_HMAC_KEY: ${MODEL_CAPABILITY_HMAC_KEY:?Provide a Model capability key}
+      KOGNITION_AGENT_DELEGATION_CAPABILITY_HMAC_KEY_ID: ${AGENT_DELEGATION_CAPABILITY_HMAC_KEY_ID:-local-v1}
+      KOGNITION_AGENT_DELEGATION_CAPABILITY_HMAC_KEY: ${AGENT_DELEGATION_CAPABILITY_HMAC_KEY:?Provide a delegation capability key}
+
+  agent-runtime:
+    build:
+      context: .
+      dockerfile: runtime/agent/Dockerfile
+    env_file:
+      - ${KOGNITION_HTTP_RUNTIME_ENV_FILE:?Provide the dedicated Agent runtime environment file}
+    environment:
+      KOGNITION_EXTERNAL_RUNTIME: "true"
+      KOGNITION_RUNTIME_AUTH_TOKEN: ${KOGNITION_RUNTIME_AUTH_TOKEN:?Provide a separate runtime token}
+      KOGNITION_MODEL_PROVIDER: openai-compatible
+      KOGNITION_MODEL_GATEWAY_URL: http://model-gateway:8093
+      KOGNITION_TOOL_GATEWAY_URL: http://tool-gateway:8092
+      KOGNITION_AGENT_COMMUNICATION_GATEWAY_URL: http://agent-communication-gateway:8094
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; result = json.load(urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=2)); raise SystemExit(0 if result['status'] == 'ok' else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12

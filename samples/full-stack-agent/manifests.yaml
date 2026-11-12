@@ -1,0 +1,317 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Full-Stack Agent Sample
+# Exercises: ModelClass, Model, ToolClass, Tool, MemoryClass, MemoryClaim,
+#            Prompt, Agent (with memory + tools + autonomy), AutonomyClass,
+#            TrustProfile, Workflow, IntentGateway, CognitiveQuota, AgentPolicy
+---
+kind: ModelClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: foundry
+  namespace: default
+spec:
+  provisioner: foundry
+  latencyClass: low
+  costTier: standard
+  contextWindow: 128000
+  modalities:
+    - text
+
+# NOTE: This sample expects a SecretRef named `foundry-creds` and a Model
+# named `gpt-6-luna` (Foundry project endpoint) to already exist in the
+# `default` namespace — applied separately by the cluster operator (see
+# repo-root `foundry-creds.yaml` and the openai-agent sample, or your own
+# Model manifest). Do NOT redeclare them here — applying placeholders would
+# clobber real values.
+
+---
+kind: ToolClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: mcp-tools
+  namespace: default
+spec:
+  provisioner: mcp
+  executionTier: process
+  transport: stdio
+  resourceLimits:
+    maxCpuMilli: 500
+    maxMemoryMB: 256
+    maxTimeout: 30s
+
+---
+kind: Tool
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: web-search
+  namespace: default
+spec:
+  className: sandbox-openapi
+  protocol: OpenAPI
+  description: Search the demo product documentation corpus
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/knowledge-search
+  metadata:
+    allowPrivateNetwork: "true"
+  inputSchema:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Free-text query to match against product documentation.
+      top_k:
+        type: integer
+        description: Maximum number of passages to return.
+        default: 3
+    required: [query]
+
+---
+kind: Tool
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: calculator
+  namespace: default
+spec:
+  # Delegates to the tool-sandbox service — see samples/workflows/tool-sandbox.yaml
+  className: sandbox-openapi
+  protocol: OpenAPI
+  description: Perform mathematical calculations
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/calculator
+  metadata:
+    allowPrivateNetwork: "true"
+  inputSchema:
+    type: object
+    properties:
+      expression:
+        type: string
+        description: Mathematical expression to evaluate
+    required:
+      - expression
+
+---
+kind: MemoryClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: pgvector-default
+  namespace: default
+spec:
+  backendType: pgvector
+  reclaimPolicy: Retain
+  summarizationConfig:
+    enabled: true
+    thresholdRecords: 100
+    modelRef:
+      name: gpt-6-luna
+  parameters:
+    dimensions: "1536"
+    indexType: ivfflat
+
+---
+kind: MemoryClaim
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: research-agent-episodic
+  namespace: default
+spec:
+  memoryClassName: pgvector-default
+  type: episodic
+  capacity: 1Gi
+  accessModes:
+    - ReadWrite
+
+---
+kind: MemoryClaim
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: research-agent-semantic
+  namespace: default
+spec:
+  memoryClassName: pgvector-default
+  type: semantic
+  capacity: 512Mi
+  accessModes:
+    - ReadWrite
+
+---
+# Reusable prompts, autonomy policy, trust tracking, and intent routing are
+# demonstrated independently in the prompt, autonomy, and routing samples.
+
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: research-agent
+  namespace: default
+  labels:
+    kognition.dev/sample-tool-demo: "true"
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a research assistant with access to web search and calculation tools.
+
+      ## Guidelines
+      - Always cite sources when using web search results
+      - Break complex calculations into steps
+      - Use episodic memory to recall previous research sessions
+      - Use semantic memory to store and retrieve domain knowledge
+  tools:
+    - ref:
+        name: web-search
+      required: false
+    - ref:
+        name: calculator
+      required: true
+  memory:
+    claims:
+      - name: research-agent-episodic
+      - name: research-agent-semantic
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 8192
+  replicas: 2
+
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: summarizer-agent
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a summarization agent. Take long-form text and produce concise,
+      structured summaries. Use bullet points and headers for clarity.
+  runtime:
+    class: default
+    timeout: 30s
+    maxTokens: 2048
+
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: research-agent-to-summarizer-agent
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: research-agent
+  allowTo:
+    - name: summarizer-agent
+
+---
+kind: Workflow
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: research-and-summarize
+  namespace: default
+spec:
+  entryPoint: research
+  steps:
+    - name: research
+      agentRef:
+        name: research-agent
+      # {{.Input}} resolves to WorkflowRun.spec.input. Trigger with:
+      #   kubectl apply -f - <<EOF
+      #   apiVersion: kognition.dev/v1alpha1
+      #   kind: WorkflowRun
+      #   metadata: {name: research-run-1, namespace: default}
+      #   spec: {workflowRef: {name: research-and-summarize}, input: "AI agent orchestration on Kubernetes"}
+      #   EOF
+      input: "{{.Input}}"
+    - name: summarize
+      agentRef:
+        name: summarizer-agent
+      input: "Summarize: {{.Steps.research.Output}}"
+  edges:
+    - from: research
+      to: summarize
+  budgets:
+    maxDuration: 5m
+    maxTokens: 20000
+
+---
+kind: CognitiveQuota
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: default-quota
+  namespace: default
+spec:
+  hard:
+    tokens-per-hour: 100000
+    requests-per-minute: 60
+    max-concurrent-agents: 5
+    cost-per-day-usd: 10
+
+---
+kind: AgentPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: research-agent-tool-grants
+  namespace: default
+spec:
+  scope: agent
+  enforce: true
+  targetAgents:
+    - research-agent
+  toolGrants:
+    - toolRef: web-search
+      allow: true
+    - toolRef: calculator
+      allow: true
+
+---
+kind: AgentRole
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: research-agent-tool-invoker
+  namespace: default
+rules:
+  - resources:
+      - Tool
+    verbs:
+      - get
+      - invoke
+
+---
+kind: AgentRoleBinding
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: research-agent-tool-invoker
+  namespace: default
+spec:
+  roleRef:
+    name: research-agent-tool-invoker
+  subjects:
+    - kind: Agent
+      name: research-agent
+
+---
+kind: AgentPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: safety-policy
+  namespace: default
+spec:
+  rules: |
+    package kognition.policy
+
+    default allow = true
+
+    deny[msg] {
+      input.tool == "web-search"
+      not input.user_approved
+      msg := "Web search requires user approval"
+    }
+
+    deny[msg] {
+      input.cost > 1.0
+      msg := "Action cost exceeds $1.00 limit"
+    }
+  enforce: true

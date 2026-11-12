@@ -1,0 +1,12 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: kognition.dev/v1alpha1
+kind: AgentInstance
+metadata:
+  name: kognition-docs-probe-warm
+  namespace: default
+spec:
+  agentRef:
+    name: kognition-docs-agent
+  revision: 1

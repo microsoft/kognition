@@ -1,0 +1,81 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Kognition Platform Umbrella Chart - Default Values
+#
+# This chart combines the Kognition platform (CRDs, controllers)
+# with governance resources and agent pipelines.
+
+# Platform (kognition controller + CRDs)
+platform:
+  enabled: true
+
+# Kognition platform sub-chart values
+kognition:
+  mode: kubernetes
+  k8sController:
+    image:
+      pullPolicy: IfNotPresent
+  memoryService:
+    image:
+      pullPolicy: IfNotPresent
+
+# Governance sub-chart
+governance:
+  enabled: true
+  namespace: default
+  workspace:
+    enabled: true
+    displayName: "Platform Workspace"
+    requireSignedArtifacts: false
+    retention:
+      traceTTL: 720h
+      auditLogTTL: 2160h
+      costRecordTTL: 2160h
+      eventTTL: 168h
+  quota:
+    enabled: true
+    hard:
+      agents: 20
+      tools: 10
+      workflows: 10
+    tokenBudget:
+      maxInputTokens: 5000000
+      maxOutputTokens: 1000000
+    resetInterval: 24h
+  limitRange:
+    enabled: true
+    limits:
+      - type: Agent
+        tokensPerSession: 16384
+        timeoutSeconds: 120
+        maxConcurrentSessions: 5
+  policy:
+    enabled: true
+    enforce: true
+    safetyRules:
+      - name: no-pii-in-output
+        severity: error
+        rego: |
+          package kognition.safety
+          deny[msg] {
+            contains(lower(input.output), "ssn")
+            msg := "output appears to reference SSN"
+          }
+  admissionPolicies:
+    - name: require-instructions
+      enabled: true
+      failurePolicy: Deny
+      matchKinds:
+        - Agent
+      matchOperations:
+        - CREATE
+        - UPDATE
+      rego: |
+        package kognition.admission
+        deny[msg] {
+          input.kind == "Agent"
+          not input.spec.instructions.inline
+          not input.spec.instructions.ref
+          msg := "Agent must define instructions (inline or ref)"
+        }

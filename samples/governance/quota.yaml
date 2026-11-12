@@ -1,0 +1,22 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# CognitiveQuota Sample
+#
+# Sets resource budgets per namespace for cognitive resources.
+---
+kind: CognitiveQuota
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: team-quota
+spec:
+  # Sized to accommodate the complete `make samples-install` aggregate in the
+  # default namespace while still demonstrating finite governance limits.
+  hard:
+    agents: 30
+    tools: 20
+    workflows: 15
+  tokenBudget:
+    maxInputTokens: 1000000
+    maxOutputTokens: 200000
+  resetInterval: 24h

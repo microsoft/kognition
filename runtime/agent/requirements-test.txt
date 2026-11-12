@@ -1,0 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+-r requirements.txt
+-r ../../tools/requirements-test.txt
+pytest-asyncio>=0.23.0

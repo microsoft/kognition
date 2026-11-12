@@ -1,0 +1,149 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: solutions.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: Solution
+    listKind: SolutionList
+    plural: solutions
+    singular: solution
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              constraints:
+                items:
+                  type: string
+                type: array
+              goal:
+                type: string
+              modelRef:
+                description: LocalObjectReference references a resource by name within
+                  the same namespace.
+                properties:
+                  name:
+                    description: Name is the name of the referenced resource.
+                    type: string
+                required:
+                - name
+                type: object
+              overrides:
+                properties:
+                  hard:
+                    additionalProperties:
+                      format: int64
+                      type: integer
+                    type: object
+                  tokenBudget:
+                    description: TokenBudget defines token usage limits.
+                    properties:
+                      maxInputTokens:
+                        description: MaxInputTokens is the maximum input tokens per
+                          period.
+                        format: int64
+                        type: integer
+                      maxOutputTokens:
+                        description: MaxOutputTokens is the maximum output tokens
+                          per period.
+                        format: int64
+                        type: integer
+                      maxTotalTokens:
+                        description: MaxTotalTokens is the combined max (if set overrides
+                          in+out individually).
+                        format: int64
+                        type: integer
+                    type: object
+                type: object
+              preferences:
+                additionalProperties:
+                  type: string
+                type: object
+              promotionGates:
+                items:
+                  properties:
+                    evaluationRef:
+                      description: LocalObjectReference references a resource by name
+                        within the same namespace.
+                      properties:
+                        name:
+                          minLength: 1
+                          description: Name is the name of the referenced resource.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                  required:
+                  - evaluationRef
+                  type: object
+                type: array
+              seed:
+                format: int64
+                type: integer
+              target:
+                properties:
+                  kind:
+                    enum: [Agent, AgentService, Workflow]
+                    type: string
+                  ref:
+                    description: LocalObjectReference references a resource by name
+                      within the same namespace.
+                    properties:
+                      name:
+                        description: Name is the name of the referenced resource.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - kind
+                - ref
+                type: object
+            required:
+            - goal
+            type: object
+          status:
+            x-kubernetes-preserve-unknown-fields: true
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

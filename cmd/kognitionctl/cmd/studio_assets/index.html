@@ -1,0 +1,204 @@
+<!-- Copyright (c) Microsoft Corporation.
+     Licensed under the MIT License. -->
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kognition Studio</title>
+  <link rel="icon" href="/kognition-mark.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img class="logo" src="/kognition-mark.svg" alt="" width="28" height="28" />
+      <span class="title">Kognition <em>Studio</em></span>
+    </div>
+    <div class="topbar-meta">
+      <span class="meta-pill" id="meta-mode">…</span>
+      <label class="ns-picker">
+        <span>Namespace</span>
+        <select id="namespace-select"><option value="">all</option></select>
+      </label>
+    </div>
+    <div class="topbar-actions">
+      <a id="btn-learn" class="action" href="/tutorial/start" target="_blank" rel="noopener noreferrer" hidden>Learn <span class="sr-only">(opens isolated practice in a new tab)</span></a>
+      <button id="btn-explorer" class="action explorer-toggle" type="button" aria-controls="resource-explorer" aria-expanded="false">Explorer</button>
+      <button id="btn-gallery" class="action" type="button">Gallery</button>
+      <div class="create-control">
+        <button id="btn-create" class="action primary" type="button" aria-haspopup="dialog" aria-controls="create-menu" aria-expanded="false">Create <span aria-hidden="true">⌄</span></button>
+        <div id="create-menu" class="create-menu" role="dialog" aria-labelledby="create-title" data-category="All" hidden>
+          <div class="create-menu-header">
+            <h2 id="create-title">Create a resource</h2>
+            <p>Start with a common resource, or find exactly what you need.</p>
+            <label class="sr-only" for="create-search">Search resource types</label>
+            <input id="create-search" type="search" placeholder="Search resources..." autocomplete="off" spellcheck="false" aria-controls="create-results">
+            <div class="create-categories" role="group" aria-label="Resource categories">
+              <button type="button" data-create-category="All" aria-pressed="true">All</button>
+              <button type="button" data-create-category="Common" aria-pressed="false">Common</button>
+              <button type="button" data-create-category="Build" aria-pressed="false">Build</button>
+              <button type="button" data-create-category="Test" aria-pressed="false">Test</button>
+              <button type="button" data-create-category="Govern" aria-pressed="false">Govern</button>
+              <button type="button" data-create-category="Operate" aria-pressed="false">Operate</button>
+            </div>
+          </div>
+          <div id="create-results" class="create-results" role="menu" aria-label="Resource types">
+            <button id="btn-new-agent" role="menuitem" type="button">Agent</button>
+            <button id="btn-new-workflow" role="menuitem" type="button">Workflow</button>
+            <button id="btn-new-tool" role="menuitem" type="button">Tool</button>
+            <button id="btn-new-toolclass" role="menuitem" type="button">Tool class</button>
+            <button id="btn-new-knowledgebase" role="menuitem" type="button">Knowledge base</button>
+            <button id="btn-new-knowledgebaseclaim" role="menuitem" type="button">Knowledge base claim</button>
+            <button id="btn-new-evaluationdataset" role="menuitem" type="button">Evaluation dataset</button>
+            <button id="btn-new-modelgrant" role="menuitem" type="button">Model grant</button>
+            <button id="btn-new-memorygrant" role="menuitem" type="button">Memory grant</button>
+            <button id="btn-new-toolgrant" role="menuitem" type="button">Tool grant</button>
+            <button id="btn-new-crossnamespacegrant" role="menuitem" type="button">Namespace grant</button>
+          </div>
+          <div id="create-empty" class="create-empty" hidden>
+            <strong>No matching resources</strong>
+            <p>Try another search or choose a different category.</p>
+          </div>
+          <div class="create-menu-footer"><span id="create-count" role="status" aria-live="polite"></span><span>Esc to close</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="topbar-status">
+      <span id="status" class="status"></span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <div id="explorer-backdrop" class="explorer-backdrop" hidden></div>
+    <aside class="sidebar" id="resource-explorer" aria-label="Resource explorer">
+      <header class="sidebar-header">
+        <div><span class="sidebar-eyebrow">Workspace</span><h2>Resources</h2></div>
+        <button id="btn-explorer-close" class="sidebar-close" type="button" aria-label="Close explorer">✕</button>
+      </header>
+      <label class="resource-search">
+        <span class="sr-only">Filter resources</span>
+        <input id="resource-filter" type="search" placeholder="Filter resources" autocomplete="off" />
+      </label>
+
+      <section class="nav-group" aria-labelledby="nav-build-label">
+        <h3 id="nav-build-label">Build</h3>
+        <details open><summary>Agents</summary><button class="refresh" data-refresh="agents" title="Refresh agents">↻</button><ul id="list-agents" class="resource-list"></ul></details>
+        <details open><summary>Workflows</summary><button class="refresh" data-refresh="workflows" title="Refresh workflows">↻</button><ul id="list-workflows" class="resource-list"></ul></details>
+        <details open><summary>Tools</summary><button class="refresh" data-refresh="tools" title="Refresh tools">↻</button><ul id="list-tools" class="resource-list"></ul></details>
+        <details><summary>Tool classes <span id="count-toolclasses" class="muted"></span></summary><button class="refresh" data-refresh="toolclasses" title="Refresh tool classes">↻</button><ul id="list-toolclasses" class="resource-list mini"></ul></details>
+        <details><summary>Knowledge bases <span id="count-knowledgebases" class="muted"></span></summary><button class="refresh" data-refresh="knowledgebases" title="Refresh knowledge bases">↻</button><ul id="list-knowledgebases" class="resource-list mini"></ul></details>
+        <details><summary>Knowledge base classes <span id="count-knowledgebaseclasses" class="muted"></span></summary><ul id="list-knowledgebaseclasses" class="resource-list mini"></ul></details>
+        <details><summary>Models <span id="count-models" class="muted"></span></summary><ul id="list-models" class="resource-list mini"></ul></details>
+        <details><summary>Prompts <span id="count-prompts" class="muted"></span></summary><ul id="list-prompts" class="resource-list mini"></ul></details>
+      </section>
+
+      <section class="nav-group" aria-labelledby="nav-test-label">
+        <h3 id="nav-test-label">Test</h3>
+        <details open><summary>Evaluations</summary><button class="refresh" data-refresh="evaluations" title="Refresh evaluations">↻</button><ul id="list-evaluations" class="resource-list"></ul></details>
+        <details><summary>Datasets <span id="count-evaluationdatasets" class="muted"></span></summary><button class="refresh" data-refresh="evaluationdatasets" title="Refresh evaluation datasets">↻</button><ul id="list-evaluationdatasets" class="resource-list mini"></ul></details>
+        <details><summary>Evaluation runs <span id="count-evaluationruns" class="muted"></span></summary><button class="refresh" data-refresh="evaluationruns" title="Refresh evaluation runs">↻</button><ul id="list-evaluationruns" class="resource-list mini"></ul></details>
+      </section>
+
+      <section class="nav-group" aria-labelledby="nav-govern-label">
+        <h3 id="nav-govern-label">Govern</h3>
+        <details><summary>Model grants <span id="count-modelgrants" class="muted"></span></summary><button class="refresh" data-refresh="modelgrants" title="Refresh model grants">↻</button><ul id="list-modelgrants" class="resource-list mini"></ul></details>
+        <details><summary>Memory grants <span id="count-memorygrants" class="muted"></span></summary><button class="refresh" data-refresh="memorygrants" title="Refresh memory grants">↻</button><ul id="list-memorygrants" class="resource-list mini"></ul></details>
+        <details><summary>Tool grants <span id="count-toolgrants" class="muted"></span></summary><button class="refresh" data-refresh="toolgrants" title="Refresh tool grants">↻</button><ul id="list-toolgrants" class="resource-list mini"></ul></details>
+        <details><summary>Namespace grants <span id="count-crossnamespacegrants" class="muted"></span></summary><button class="refresh" data-refresh="crossnamespacegrants" title="Refresh namespace grants">↻</button><ul id="list-crossnamespacegrants" class="resource-list mini"></ul></details>
+        <details><summary>Autonomy classes <span id="count-autonomyclasses" class="muted"></span></summary><ul id="list-autonomyclasses" class="resource-list mini"></ul></details>
+      </section>
+
+      <section class="nav-group" aria-labelledby="nav-operate-label">
+        <h3 id="nav-operate-label">Operate</h3>
+        <details><summary>Memory claims <span id="count-memoryclaims" class="muted"></span></summary><ul id="list-memoryclaims" class="resource-list mini"></ul></details>
+        <details><summary>Knowledge claims <span id="count-knowledgebaseclaims" class="muted"></span></summary><button class="refresh" data-refresh="knowledgebaseclaims" title="Refresh knowledge claims">↻</button><ul id="list-knowledgebaseclaims" class="resource-list mini"></ul></details>
+        <details><summary>Secret references <span id="count-secretrefs" class="muted"></span></summary><ul id="list-secretrefs" class="resource-list mini"></ul></details>
+      </section>
+    </aside>
+
+    <section class="editor">
+      <header class="editor-bar">
+        <div class="editor-bar-left">
+          <span id="editor-kind-pill" class="meta-pill">—</span>
+          <span id="editor-title">Select or create a resource</span>
+        </div>
+        <div class="editor-bar-tabs" role="tablist" aria-label="Resource editor view">
+          <button class="tab active" data-view="builder" role="tab" aria-selected="true" aria-controls="view-builder">Builder</button>
+          <button class="tab" data-view="yaml" role="tab" aria-selected="false" aria-controls="view-yaml">YAML</button>
+          <button class="tab" data-view="preview" id="tab-preview" role="tab" aria-selected="false" aria-controls="view-preview" hidden>Preview</button>
+        </div>
+        <div class="editor-bar-actions">
+          <button id="btn-discard" class="action" disabled>Discard</button>
+          <button id="btn-delete" class="action danger" disabled>Delete</button>
+          <button id="btn-deploy" class="action primary" disabled>Deploy</button>
+        </div>
+      </header>
+
+      <div class="editor-body">
+        <div id="view-builder" class="view active">
+          <div class="empty-state" id="empty-state">
+            <h2>Build agents and workflows visually.</h2>
+            <p>Pick an existing resource from the explorer to edit it, or use <strong>Create</strong> to start from scratch.</p>
+            <p class="muted">Use guided builders or All API fields for supported configuration. Generated state is read-only; protected and deferred capabilities are identified explicitly.</p>
+            <p><button id="btn-empty-gallery" class="action primary">⊞ Browse Gallery</button></p>
+          </div>
+          <div id="builder-host"></div>
+        </div>
+        <div id="view-yaml" class="view">
+          <div class="yaml-toolbar">
+            <span class="muted">Edit the manifest here, then click <strong>Apply YAML</strong> to push it back into the builder. Deploy still saves it to the cluster.</span>
+            <button id="btn-apply-yaml" class="action">Apply YAML</button>
+          </div>
+          <textarea id="yaml-area" class="yaml-editor" spellcheck="false"></textarea>
+        </div>
+        <div id="view-preview" class="view">
+          <div id="preview-host" class="preview-host"></div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="inspector" id="inspector">
+      <header><h3 id="inspector-title">Inspector</h3><button id="inspector-close" class="close">✕</button></header>
+      <div id="inspector-body" class="inspector-body"></div>
+    </aside>
+  </main>
+
+  <div id="gallery-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="gallery-modal-title" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <div class="modal-card">
+      <header class="modal-header">
+        <div>
+          <h2 id="gallery-modal-title">Gallery</h2>
+          <p class="muted">Ready-to-use agents and workflows. Click <strong>Add</strong> to install everything into the selected namespace and open it in the builder.</p>
+        </div>
+        <button class="close" data-modal-close title="Close">✕</button>
+      </header>
+      <div class="modal-body">
+        <div id="gallery-grid" class="gallery-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tool-calls-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="tool-calls-modal-title" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <div class="modal-card">
+      <header class="modal-header">
+        <div>
+          <h2 id="tool-calls-modal-title">Tool calls</h2>
+          <p class="muted" id="tool-calls-modal-subtitle">Each row shows what the agent passed to a tool and what came back.</p>
+        </div>
+        <button class="close" data-modal-close title="Close">✕</button>
+      </header>
+      <div class="modal-body">
+        <div id="tool-calls-list" class="tool-calls-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/tutorial.js"></script>
+  <script src="/resources.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

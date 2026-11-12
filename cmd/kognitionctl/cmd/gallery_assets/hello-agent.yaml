@@ -1,0 +1,59 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Hello Agent — minimal OpenAI-backed agent.
+# Requires the OPENAI_API_KEY environment variable to be set on the controller.
+---
+kind: ModelClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: openai
+spec:
+  provisioner: openai
+  latencyClass: low
+  costTier: standard
+  contextWindow: 128000
+  modalities:
+    - text
+    - vision
+---
+kind: SecretRef
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: openai-api-key
+spec:
+  backendType: env
+  backendRef: OPENAI_API_KEY
+  key: OPENAI_API_KEY
+---
+kind: Model
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: gpt-4o
+spec:
+  className: openai
+  modelID: gpt-4o
+  provider: openai-compatible
+  endpoint: https://api.openai.com/v1
+  capabilities:
+    - chat
+    - tool-calling
+    - vision
+  credentialRef:
+    name: openai-api-key
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: hello-agent
+spec:
+  modelRef:
+    name: gpt-4o
+  instructions:
+    inline: |
+      You are a helpful assistant. Answer questions concisely and accurately.
+      When unsure, say so rather than making things up.
+  runtime:
+    class: default
+    timeout: 30s
+    maxTokens: 4096

@@ -1,0 +1,58 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- $gateway := default (dict) .Values.agentCommunicationGateway }}
+{{- $monitoring := default (dict) $gateway.monitoring }}
+{{- $serviceMonitor := default (dict) $monitoring.serviceMonitor }}
+{{- $prometheusRule := default (dict) $monitoring.prometheusRule }}
+{{- if and (eq .Values.mode "kubernetes") $gateway.enabled $serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "kognition.fullname" . }}-agent-communication-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    {{- with $serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: agent-communication-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace | quote }}]
+  endpoints:
+    - port: http
+      path: /metrics
+      honorLabels: true
+      interval: {{ default "30s" $serviceMonitor.interval | quote }}
+{{- end }}
+{{- if and (eq .Values.mode "kubernetes") $gateway.enabled $prometheusRule.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "kognition.fullname" . }}-agent-communication-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    {{- with $prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: kognition.agent-communication-gateway
+      rules:
+        - alert: KognitionAgentCommunicationGatewayFailures
+          expr: sum(rate(kognition_agent_communication_gateway_requests_total{outcome="failed"}[5m])) > 0
+          for: {{ default "5m" $prometheusRule.for | quote }}
+          labels: {severity: warning}
+          annotations: {summary: Agent Communication Gateway is returning target invocation failures}
+        - alert: KognitionAgentCommunicationGatewayDenied
+          expr: sum(rate(kognition_agent_communication_gateway_requests_total{outcome="denied"}[5m])) > 0
+          for: {{ default "5m" $prometheusRule.for | quote }}
+          labels: {severity: warning}
+          annotations: {summary: Agent Communication Gateway is denying delegation requests}
+{{- end }}

@@ -1,0 +1,119 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+syntax = "proto3";
+
+package kognition.v1alpha1;
+
+option go_package = "github.com/kognition-ai/kognition/proto/gen/kognition/v1alpha1";
+
+import "google/protobuf/timestamp.proto";
+
+// MemoryService provides data-plane access to agent memory.
+// It supports both built-in (zero-config) and external memory backends.
+service MemoryService {
+  // Store persists a memory record with optional embedding vector.
+  rpc Store(StoreMemoryRequest) returns (StoreMemoryResponse);
+
+  // Get retrieves a single record by ID.
+  rpc Get(GetMemoryRequest) returns (GetMemoryResponse);
+
+  // List retrieves records by filter criteria (time range, metadata).
+  rpc List(ListMemoryRequest) returns (ListMemoryResponse);
+
+  // Search performs vector similarity search (k-NN).
+  rpc Search(SearchMemoryRequest) returns (SearchMemoryResponse);
+
+  // Delete removes a record by ID.
+  rpc Delete(DeleteMemoryRequest) returns (DeleteMemoryResponse);
+
+  // Health returns the memory service health status.
+  rpc Health(MemoryHealthRequest) returns (MemoryHealthResponse);
+}
+
+// --- Store ---
+
+message StoreMemoryRequest {
+  string volume_handle = 1;
+  string id = 2;
+  string content = 3;
+  repeated float embedding = 4;
+  map<string, string> metadata = 5;
+  google.protobuf.Timestamp timestamp = 6;
+}
+
+message StoreMemoryResponse {
+  string id = 1;
+}
+
+// --- Get ---
+
+message GetMemoryRequest {
+  string volume_handle = 1;
+  string id = 2;
+}
+
+message GetMemoryResponse {
+  MemoryRecord record = 1;
+}
+
+// --- List ---
+
+message ListMemoryRequest {
+  string volume_handle = 1;
+  google.protobuf.Timestamp start_time = 2;
+  google.protobuf.Timestamp end_time = 3;
+  map<string, string> metadata = 4;
+  int32 limit = 5;
+}
+
+message ListMemoryResponse {
+  repeated MemoryRecord records = 1;
+}
+
+// --- Search ---
+
+message SearchMemoryRequest {
+  string volume_handle = 1;
+  repeated float vector = 2;
+  int32 top_k = 3;
+  double min_score = 4;
+  map<string, string> metadata = 5;
+}
+
+message SearchMemoryResponse {
+  repeated SearchMemoryResult results = 1;
+}
+
+message SearchMemoryResult {
+  MemoryRecord record = 1;
+  double score = 2;
+}
+
+// --- Delete ---
+
+message DeleteMemoryRequest {
+  string volume_handle = 1;
+  string id = 2;
+}
+
+message DeleteMemoryResponse {}
+
+// --- Health ---
+
+message MemoryHealthRequest {}
+
+message MemoryHealthResponse {
+  bool healthy = 1;
+  string message = 2;
+}
+
+// --- Common ---
+
+message MemoryRecord {
+  string id = 1;
+  string content = 2;
+  repeated float embedding = 3;
+  map<string, string> metadata = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}

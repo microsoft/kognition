@@ -1,0 +1,232 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+syntax = "proto3";
+
+package kognition.v1alpha1;
+
+option go_package = "github.com/kognition-ai/kognition/proto/gen/kognition/v1alpha1";
+
+import "google/protobuf/timestamp.proto";
+
+// Runtime is the primary cognitive execution interface.
+// Agents are executed through sessions managed by this service.
+service Runtime {
+  // CreateSession initializes a new agent execution session.
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+
+  // Step sends input to a session and streams reasoning/action results.
+  // The client must send CreditGrant messages to allow the runtime to continue
+  // emitting events (credit-based backpressure).
+  rpc Step(stream StepInput) returns (stream StepEvent);
+
+  // Cancel requests cooperative termination of a running session.
+  // The runtime acknowledges within the specified timeout; if not, the control
+  // plane performs a hard-kill.
+  rpc Cancel(CancelRequest) returns (CancelResponse);
+
+  // Checkpoint saves session state as an opaque token for later resumption.
+  rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse);
+
+  // Resume restores a previously checkpointed session.
+  rpc Resume(ResumeRequest) returns (ResumeResponse);
+
+  // GetCapabilities returns the runtime's supported features.
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+
+  // Health returns the runtime health status.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// --- Session lifecycle ---
+
+// CreateSessionRequest contains the agent spec and session context.
+message CreateSessionRequest {
+  string agent_name = 1;
+  string namespace = 2;
+  map<string, string> context = 3;
+  // Maximum credits the runtime may buffer before pausing.
+  uint32 initial_credits = 4;
+}
+
+message CreateSessionResponse {
+  string session_id = 1;
+}
+
+// --- Streaming protocol ---
+
+// StepInput is a bidirectional stream message from client to runtime.
+message StepInput {
+  oneof payload {
+    StepRequest request = 1;
+    CreditGrant credit = 2;
+  }
+}
+
+// StepRequest sends user or system input to a session.
+message StepRequest {
+  string session_id = 1;
+  string input = 2;
+}
+
+// CreditGrant replenishes the runtime's event budget.
+// The runtime MUST pause emitting events when credits reach zero.
+message CreditGrant {
+  string session_id = 1;
+  uint32 credits = 2;
+}
+
+// StepEvent streams structured events from runtime to client.
+message StepEvent {
+  oneof event {
+    TokenEvent token = 1;
+    ToolCallEvent tool_call = 2;
+    ToolResultEvent tool_result = 3;
+    MemoryOpEvent memory_op = 4;
+    StatusEvent status = 5;
+    OutputEvent output = 6;
+    ErrorEvent error = 7;
+    CreditRequest credit_request = 8;
+  }
+  // Monotonically increasing sequence number within the session.
+  uint64 sequence = 15;
+}
+
+// TokenEvent delivers incremental token output (streaming text).
+message TokenEvent {
+  string content = 1;
+  // Role of the token (e.g. "assistant", "thinking").
+  string role = 2;
+}
+
+// ToolCallEvent indicates the runtime is invoking a tool.
+message ToolCallEvent {
+  string tool_name = 1;
+  string arguments = 2; // JSON-encoded
+  string call_id = 3;
+}
+
+// ToolResultEvent carries the result of a tool invocation.
+message ToolResultEvent {
+  string call_id = 1;
+  string output = 2; // JSON-encoded
+  bool is_error = 3;
+}
+
+// MemoryOpEvent indicates a memory operation performed by the runtime.
+message MemoryOpEvent {
+  enum Operation {
+    OPERATION_UNSPECIFIED = 0;
+    READ = 1;
+    WRITE = 2;
+    SUMMARIZE = 3;
+    FORGET = 4;
+  }
+  Operation operation = 1;
+  string key = 2;
+  string value = 3; // JSON-encoded, empty for reads/forgets
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// StatusEvent communicates runtime state transitions.
+message StatusEvent {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    THINKING = 1;
+    EXECUTING_TOOL = 2;
+    WAITING_FOR_INPUT = 3;
+    PAUSED = 4;
+    COMPLETED = 5;
+    CANCELLED = 6;
+    FAILED = 7;
+  }
+  State state = 1;
+  string message = 2;
+}
+
+// OutputEvent delivers final or partial output.
+message OutputEvent {
+  string content = 1;
+  bool is_final = 2;
+}
+
+// ErrorEvent reports an error during execution.
+message ErrorEvent {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+// CreditRequest is sent by the runtime when it has exhausted credits and
+// needs more to continue.
+message CreditRequest {
+  string session_id = 1;
+  uint32 needed = 2;
+}
+
+// --- Cooperative cancellation ---
+
+message CancelRequest {
+  string session_id = 1;
+  // Timeout for cooperative cancellation acknowledgment.
+  // If the runtime does not acknowledge within this duration,
+  // the control plane performs a hard-kill.
+  uint32 timeout_ms = 2;
+}
+
+message CancelResponse {
+  enum AckState {
+    ACK_STATE_UNSPECIFIED = 0;
+    ACKNOWLEDGED = 1;
+    FORCED = 2;
+  }
+  AckState state = 1;
+  // Timestamp when cancellation was acknowledged or forced.
+  google.protobuf.Timestamp cancelled_at = 2;
+}
+
+// --- Checkpoint / Resume ---
+
+message CheckpointRequest {
+  string session_id = 1;
+}
+
+message CheckpointResponse {
+  // Opaque token produced by the runtime. The control plane stores it
+  // without interpretation. Used to resume the session later.
+  bytes checkpoint_token = 1;
+  google.protobuf.Timestamp created_at = 2;
+}
+
+message ResumeRequest {
+  bytes checkpoint_token = 1;
+}
+
+message ResumeResponse {
+  string session_id = 1;
+}
+
+// --- Capabilities & Health ---
+
+message GetCapabilitiesRequest {}
+
+message GetCapabilitiesResponse {
+  repeated string supported_features = 1;
+  string runtime_version = 2;
+  // Maximum concurrent sessions this runtime supports.
+  uint32 max_concurrent_sessions = 3;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  enum Status {
+    UNKNOWN = 0;
+    HEALTHY = 1;
+    DEGRADED = 2;
+    UNHEALTHY = 3;
+  }
+  Status status = 1;
+  string message = 2;
+  uint32 active_sessions = 3;
+}

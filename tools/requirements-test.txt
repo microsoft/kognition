@@ -1,0 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+pytest>=8.0.0
+pytest-timeout>=2.3.1,<3

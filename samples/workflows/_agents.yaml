@@ -1,0 +1,57 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Shared agents reused by every demo under samples/workflows/.
+# Apply this BEFORE any of the per-demo workflow manifests.
+#
+# Prerequisites in `default` namespace (must already exist):
+#   - SecretRef `foundry-creds`
+#   - Model     `gpt-6-luna`
+#
+# Apply: kubectl apply -f samples/workflows/_agents.yaml
+---
+# Generic conversational agent used by most demo steps.
+# Behaviour is driven entirely by the per-step `input` template,
+# so the same agent can play many roles across demos.
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-llm
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a focused workflow worker. Read the task in your input
+      carefully and respond with exactly what is requested. Be concise.
+      When asked to classify, output ONLY the requested label.
+      When asked to compose, return only the composed text — no preamble.
+  runtime:
+    class: default
+    timeout: 180s
+    maxTokens: 2048
+---
+# Classifier agent — short, deterministic outputs used by CEL edge conditions.
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-classifier
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a routing classifier. You will receive a user request.
+      Decide which category it belongs to and respond with EXACTLY ONE
+      word from this set: tech, billing, general.
+      No punctuation, no explanation, no other text.
+  runtime:
+    class: default
+    timeout: 120s
+    maxTokens: 16

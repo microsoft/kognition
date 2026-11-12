@@ -1,0 +1,40 @@
+{
+  "items": [
+    {
+      "id": "hello-agent",
+      "title": "Hello Agent",
+      "description": "Minimal OpenAI-backed agent with inline instructions. The fastest way to get a single agent running.",
+      "icon": "🟢",
+      "tags": ["starter", "agent", "openai"],
+      "primary": { "kind": "Agent", "name": "hello-agent" },
+      "file": "hello-agent.yaml"
+    },
+    {
+      "id": "research-with-tools",
+      "title": "Research Agent with Tools",
+      "description": "Agent equipped with web-search + calculator MCP tools and episodic memory. Great template for a tool-using assistant.",
+      "icon": "🔍",
+      "tags": ["agent", "tools", "memory"],
+      "primary": { "kind": "Agent", "name": "research-assistant" },
+      "file": "research-with-tools.yaml"
+    },
+    {
+      "id": "content-pipeline",
+      "title": "Content Pipeline Workflow",
+      "description": "Three-agent workflow: researcher → writer → reviewer, with an approval gate before review and a feedback loop for revisions.",
+      "icon": "📝",
+      "tags": ["workflow", "multi-agent", "approval"],
+      "primary": { "kind": "Workflow", "name": "content-pipeline" },
+      "file": "content-pipeline.yaml"
+    },
+    {
+      "id": "triage-router",
+      "title": "Triage Router Workflow",
+      "description": "Classifier agent routes incoming requests to one of three specialist handlers based on urgency. Shows conditional edges in action.",
+      "icon": "🧭",
+      "tags": ["workflow", "routing", "conditional"],
+      "primary": { "kind": "Workflow", "name": "triage-router" },
+      "file": "triage-router.yaml"
+    }
+  ]
+}

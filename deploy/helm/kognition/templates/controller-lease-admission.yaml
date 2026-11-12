@@ -1,0 +1,109 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if eq .Values.mode "kubernetes" }}
+{{- $controllerUser := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kognition.controllerServiceAccountName" .) }}
+{{- $gatewayUsers := list (printf "system:serviceaccount:%s:%s-tool-gateway" .Release.Namespace (include "kognition.fullname" .)) (printf "system:serviceaccount:%s:%s-memory-policy-gateway" .Release.Namespace (include "kognition.fullname" .)) (printf "system:serviceaccount:%s:%s-agent-communication-gateway" .Release.Namespace (include "kognition.fullname" .)) }}
+{{- $modelUser := printf "system:serviceaccount:%s:%s-model-gateway" .Release.Namespace (include "kognition.fullname" .) }}
+{{- if .Values.modelGateway.enabled }}{{- $gatewayUsers = append $gatewayUsers $modelUser }}{{- end }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-leases
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["coordination.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["leases"]
+        scope: Namespaced
+  matchConditions:
+    - name: controller-lease-writer
+      expression: request.userInfo.username == {{ $controllerUser | toJson }}
+  validations:
+    - expression: >-
+        [object, oldObject].all(candidate, candidate == null || (
+          has(candidate.metadata.labels) &&
+          'app.kubernetes.io/managed-by' in candidate.metadata.labels &&
+          candidate.metadata.labels['app.kubernetes.io/managed-by'] == 'kognition' &&
+          (!has(candidate.metadata.annotations) ||
+            (!('meta.helm.sh/release-name' in candidate.metadata.annotations) &&
+             !('meta.helm.sh/release-namespace' in candidate.metadata.annotations))) &&
+          (candidate.metadata.name in ['kognition-runtime-approval-binding-keys', 'kognition-runtime-approval-records'] ||
+           candidate.metadata.name.startsWith('kognition-tool-grant-rate-') ||
+           candidate.metadata.name.startsWith('kognition-usage-lock-') ||
+           ('kognition.dev/leader-election' in candidate.metadata.labels && candidate.metadata.labels['kognition.dev/leader-election'] == 'true'))))
+      message: Controller Lease writes require existing Kognition-owned coordination state; unowned and Helm-owned Leases cannot be adopted.
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-leases
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-leases
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-gateway-leases
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["coordination.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["leases"]
+        scope: Namespaced
+  matchConditions:
+    - name: gateway-lease-writer
+      expression: request.userInfo.username in {{ $gatewayUsers | toJson }}
+  validations:
+    - expression: >-
+        request.operation != 'DELETE' &&
+        request.namespace in {{ include "kognition.controllerNamespaces" . }} &&
+        [object, oldObject].all(candidate, candidate == null || (
+          candidate.metadata.namespace == request.namespace &&
+          has(candidate.metadata.labels) &&
+          'app.kubernetes.io/managed-by' in candidate.metadata.labels &&
+          candidate.metadata.labels['app.kubernetes.io/managed-by'] == 'kognition' &&
+          (!has(candidate.metadata.annotations) ||
+            (!('meta.helm.sh/release-name' in candidate.metadata.annotations) &&
+             !('meta.helm.sh/release-namespace' in candidate.metadata.annotations))) &&
+          (candidate.metadata.name == 'kognition-runtime-approval-records' ||
+           (request.namespace == {{ .Release.Namespace | toJson }} &&
+            (candidate.metadata.name == 'kognition-runtime-approval-binding-keys' ||
+             candidate.metadata.name.startsWith('kognition-tool-grant-rate-') ||
+             candidate.metadata.name.startsWith('kognition-usage-lock-'))))))
+      message: Gateway Lease writes require existing owned coordination names in their declared namespace scope; adoption and deletion are forbidden.
+      reason: Forbidden
+{{- if .Values.modelGateway.enabled }}
+    - expression: >-
+        request.userInfo.username != {{ $modelUser | toJson }} ||
+        (request.namespace == {{ .Release.Namespace | toJson }} &&
+         [object, oldObject].all(candidate, candidate == null ||
+           candidate.metadata.name.matches('^kognition-usage-lock-[0-9a-f]{24}$')))
+      message: The Model Gateway may coordinate only installation usage-accounting locks.
+      reason: Forbidden
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-gateway-leases
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kognition.fullname" . }}-{{ .Release.Namespace }}-gateway-leases
+  validationActions: [Deny]
+{{- end }}

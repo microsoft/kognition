@@ -1,0 +1,20 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- range $name, $agent := .Values.agents }}
+{{- if $agent.enabled }}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata:
+  name: {{ $name }}-{{ $.Values.model.name }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "kognition-multi-agent.labels" $ | nindent 4 }}
+spec:
+  agentRef:
+    name: {{ $name }}
+  modelRef:
+    name: {{ $.Values.model.name }}
+{{- end }}
+{{- end }}

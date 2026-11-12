@@ -1,0 +1,84 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: modelgrants.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: ModelGrant
+    listKind: ModelGrantList
+    plural: modelgrants
+    singular: modelgrant
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.agentRef.name
+      name: Agent
+      type: string
+    - jsonPath: .spec.modelRef.name
+      name: Model
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ModelGrant authorizes an agent to use a model.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ModelGrantSpec defines which agent can use which model.
+            properties:
+              agentRef:
+                description: LocalObjectReference references a resource by name within
+                  the same namespace.
+                properties:
+                  name:
+                    description: Name is the name of the referenced resource.
+                    type: string
+                required:
+                - name
+                type: object
+              modelRef:
+                description: LocalObjectReference references a resource by name within
+                  the same namespace.
+                properties:
+                  name:
+                    description: Name is the name of the referenced resource.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - agentRef
+            - modelRef
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

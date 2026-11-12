@@ -1,0 +1,121 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: approvaldecisions.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: ApprovalDecision
+    listKind: ApprovalDecisionList
+    plural: approvaldecisions
+    singular: approvaldecision
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.workflowRunRef.name
+      name: Run
+      type: string
+    - jsonPath: .spec.step
+      name: Step
+      type: string
+    - jsonPath: .spec.decision
+      name: Decision
+      type: string
+    - jsonPath: .spec.approver
+      name: Approver
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        required: [spec]
+        description: |-
+          ApprovalDecision records a single approve/deny vote against a WorkflowRun's
+          approval gate. The CRD-only controller lists ApprovalDecisions to enforce
+          WorkflowApprovalGate.RequiredApprovers and to detect denials.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ApprovalDecisionSpec is immutable after creation.
+            properties:
+              approver:
+                description: |-
+                  Approver is the identity of the approver. Distinct approver values count
+                  toward the gate's RequiredApprovers quorum.
+                type: string
+              decision:
+                description: Decision is "approve" or "deny".
+                enum:
+                - approve
+                - deny
+                type: string
+              iteration:
+                default: 0
+                description: Iteration scopes the decision to a specific cyclic-workflow
+                  iteration.
+                format: int32
+                type: integer
+              reason:
+                description: Reason is a free-form justification recorded in the audit
+                  log.
+                type: string
+              step:
+                description: Step is the destination step of the approval gate (WorkflowApprovalGate.To).
+                type: string
+              workflowRunRef:
+                description: |-
+                  WorkflowRunRef identifies the WorkflowRun (or Workflow) the decision
+                  applies to. Always namespace-scoped to the ApprovalDecision's namespace.
+                properties:
+                  name:
+                    description: Name is the name of the referenced resource.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - approver
+            - decision
+            - step
+            - workflowRunRef
+            type: object
+          status:
+            description: |-
+              ApprovalDecisionStatus records whether the reconciler has folded the
+              decision into the WorkflowRun's audit log.
+            properties:
+              observed:
+                type: boolean
+              observedAt:
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

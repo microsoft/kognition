@@ -1,0 +1,36 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# pgvector-backed KnowledgeBaseClass wired to the built-in kb-pgvector
+# Deployment and Secret that ships with the chart.
+#
+# Prereq: helm install kognition ./deploy/helm/kognition \
+#           --set kbPgvector.enabled=true \
+#           --set kbIngester.enabled=true \
+#           --set kbIngester.image.repository=<registry>/kognition-kb-ingester \
+#           --set kbIngester.image.tag=<tag>
+#
+# The Secret name defaults to "<release>-kb-pgvector". Adjust the
+# `connectionSecretRef.name` if you installed with a different release.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClass
+metadata:
+  name: pgvector-standard
+spec:
+  provisioner: pgvector
+  indexMode: dense
+  reclaimPolicy: Delete
+  embeddingModelRef:
+    name: text-embedding-3-small
+  chunkStrategy:
+    size: 512
+    overlap: 64
+    mode: recursive
+  vectorStore:
+    type: pgvector
+    pgvector:
+      connectionSecretRef:
+        name: kognition-kb-pgvector
+      table: kognition_kb_chunks
+      dimension: 1536

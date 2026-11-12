@@ -1,0 +1,18 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# AgentInstance Sample
+#
+# Demonstrates invoking an agent with a specific input.
+# Prerequisites: Deploy the simple-agent sample first.
+---
+kind: AgentInstance
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: hello-run-1
+spec:
+  agentRef:
+    name: hello-agent
+  revision: 1
+  sessionContext:
+    input: "What is the capital of France?"

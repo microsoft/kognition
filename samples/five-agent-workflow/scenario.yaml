@@ -1,0 +1,240 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# MVP-1 five-agent reference workflow.
+#
+# Prerequisites in the default namespace:
+#   - Model gpt-6-luna
+#   - SecretRef foundry-creds, referenced by that Model
+#
+# Apply every resource and start the run with one command:
+#   kognitionctl --mode kubernetes apply -f samples/five-agent-workflow/scenario.yaml
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: mvp1-planner
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: mvp1-five-agent-workflow
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      Create a concise execution plan for the supplied topic. Return three
+      numbered actions and no preamble.
+  runtime:
+    class: default
+    timeout: 300s
+    maxTokens: 512
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: mvp1-researcher
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: mvp1-five-agent-workflow
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      Follow the supplied plan and produce a factual research brief. Include
+      three findings and keep the response under 150 words.
+  runtime:
+    class: default
+    timeout: 300s
+    maxTokens: 768
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: mvp1-analyst
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: mvp1-five-agent-workflow
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      Analyze the supplied research. Identify the strongest conclusion, one
+      uncertainty, and one recommendation. Stay under 120 words.
+  runtime:
+    class: default
+    timeout: 300s
+    maxTokens: 768
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: mvp1-writer
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: mvp1-five-agent-workflow
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      Turn the supplied analysis into a short executive brief with a title,
+      summary, and recommendation. Stay under 180 words.
+  runtime:
+    class: default
+    timeout: 300s
+    maxTokens: 1024
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: mvp1-reviewer
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: mvp1-five-agent-workflow
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      Review the supplied executive brief for clarity and internal
+      consistency. Return the corrected final brief and end with
+      MVP1_COMPLETE.
+  runtime:
+    class: default
+    timeout: 300s
+    maxTokens: 1024
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata:
+  name: mvp1-planner-gpt-6-luna
+  namespace: default
+spec:
+  agentRef:
+    name: mvp1-planner
+  modelRef:
+    name: gpt-6-luna
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata:
+  name: mvp1-researcher-gpt-6-luna
+  namespace: default
+spec:
+  agentRef:
+    name: mvp1-researcher
+  modelRef:
+    name: gpt-6-luna
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata:
+  name: mvp1-analyst-gpt-6-luna
+  namespace: default
+spec:
+  agentRef:
+    name: mvp1-analyst
+  modelRef:
+    name: gpt-6-luna
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata:
+  name: mvp1-writer-gpt-6-luna
+  namespace: default
+spec:
+  agentRef:
+    name: mvp1-writer
+  modelRef:
+    name: gpt-6-luna
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata:
+  name: mvp1-reviewer-gpt-6-luna
+  namespace: default
+spec:
+  agentRef:
+    name: mvp1-reviewer
+  modelRef:
+    name: gpt-6-luna
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentCommunicationPolicy
+metadata:
+  name: mvp1-five-agent-communication
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: mvp1-planner
+    - name: mvp1-researcher
+    - name: mvp1-analyst
+    - name: mvp1-writer
+  allowTo:
+    - name: mvp1-researcher
+    - name: mvp1-analyst
+    - name: mvp1-writer
+    - name: mvp1-reviewer
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: mvp1-five-agent
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: mvp1-five-agent-workflow
+spec:
+  entryPoint: plan
+  steps:
+    - name: plan
+      agentRef:
+        name: mvp1-planner
+      input: "Plan an executive brief about: {{.Input}}"
+      timeout: 360s
+    - name: research
+      agentRef:
+        name: mvp1-researcher
+      input: "Research this topic using the plan below.\nTopic: {{.Input}}\nPlan:\n{{.Steps.plan.Output}}"
+      timeout: 360s
+    - name: analyze
+      agentRef:
+        name: mvp1-analyst
+      input: "Analyze this research brief:\n{{.Steps.research.Output}}"
+      timeout: 360s
+    - name: write
+      agentRef:
+        name: mvp1-writer
+      input: "Write an executive brief from this analysis:\n{{.Steps.analyze.Output}}"
+      timeout: 360s
+    - name: review
+      agentRef:
+        name: mvp1-reviewer
+      input: "Review and finalize this executive brief:\n{{.Steps.write.Output}}"
+      timeout: 360s
+  edges:
+    - from: plan
+      to: research
+    - from: research
+      to: analyze
+    - from: analyze
+      to: write
+    - from: write
+      to: review
+  budgets:
+    maxDuration: 15m
+    maxTokens: 20000
+---
+apiVersion: kognition.dev/v1alpha1
+kind: WorkflowRun
+metadata:
+  name: mvp1-five-agent-run
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: mvp1-five-agent-workflow
+spec:
+  workflowRef:
+    name: mvp1-five-agent
+  input: "practical governance for enterprise AI agents"

@@ -1,0 +1,478 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if eq .Values.mode "kubernetes" }}
+{{- $values := fromYaml (toYaml .Values) }}
+{{- $intentGatewayEnabled := dig "intentGateway" "enabled" true $values }}
+{{- $intentGatewayPort := dig "intentGateway" "service" "port" 8080 $values }}
+{{- $toolGatewayEnabled := dig "toolGateway" "enabled" false $values }}
+{{- $toolGatewayPort := dig "toolGateway" "service" "port" 8092 $values }}
+{{- $modelGatewayEnabled := dig "modelGateway" "enabled" false $values }}
+{{- $modelGatewayPort := dig "modelGateway" "service" "port" 8093 $values }}
+{{- $knowledgeGatewayEnabled := dig "knowledgeGateway" "enabled" false $values }}
+{{- $knowledgeGatewayPort := dig "knowledgeGateway" "service" "port" 8095 $values }}
+{{- $knowledgeGateway := default (dict) .Values.knowledgeGateway }}
+{{- $knowledgeProvider := default (dict) $knowledgeGateway.provider }}
+{{- $knowledgeConfiguration := default (dict) $knowledgeProvider.configuration }}
+{{- $knowledgeTLS := default (dict) $knowledgeGateway.tls }}
+{{- $knowledgeRuntimeTLS := default (dict) $knowledgeGateway.runtimeTLS }}
+{{- $runtimeNetworkPolicyEnabled := dig "networkPolicy" "enabled" false $values }}
+{{- $kubeletProbeIngressCIDRs := dig "networkPolicy" "kubeletProbeIngressCIDRs" (list) $values }}
+{{- $ciliumHostProbeIngress := dig "networkPolicy" "ciliumHostProbeIngress" false $values }}
+{{- $agentCommunicationGateway := default (dict) .Values.agentCommunicationGateway }}
+{{- $agentCommunicationGatewayEnabled := dig "enabled" false $agentCommunicationGateway }}
+{{- $agentCommunicationGatewayPort := dig "service" "port" 8094 $agentCommunicationGateway }}
+{{- $pluginHost := dig "k8sController" "pluginHost" (dict) $values }}
+{{- $pluginHostEnabled := dig "enabled" false $pluginHost }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kognition.fullname" . }}-k8s-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-controller
+spec:
+  replicas: {{ .Values.k8sController.replicas | default 0 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "kognition.name" . }}
+      app.kubernetes.io/component: k8s-controller
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "kognition.labels" . | nindent 8 }}
+        app.kubernetes.io/component: k8s-controller
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "kognition.controllerServiceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: k8s-controller
+          image: {{ include "kognition.image" (dict "global" .Values.global "image" .Values.k8sController.image "defaultTag" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.k8sController.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            {{- include "kognition.workloadIdentityStatusEnv" . | nindent 12 }}
+            {{- include "kognition.runtimeRecoveryEnv" . | nindent 12 }}
+            {{- include "kognition.artifactSigningEnv" . | nindent 12 }}
+            - name: KOGNITION_CONTROLLER_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: KOGNITION_MANAGED_NAMESPACES
+              value: {{ include "kognition.controllerNamespaces" . | fromJsonArray | join "," | quote }}
+            {{- if $pluginHostEnabled }}
+            - name: KOGNITION_PLUGIN_HOST_ENABLED
+              value: "true"
+            - name: KOGNITION_PLUGIN_SOCKET_DIR
+              value: {{ dig "socketDir" "/var/run/kognition/plugins" $pluginHost | quote }}
+            - name: KOGNITION_PLUGIN_HOST_VERSION
+              value: {{ dig "hostVersion" .Chart.AppVersion $pluginHost | quote }}
+            - name: KOGNITION_PLUGIN_DISCOVERY_INTERVAL
+              value: {{ dig "discoveryInterval" "10s" $pluginHost | quote }}
+            - name: KOGNITION_PLUGIN_PROBE_INTERVAL
+              value: {{ dig "probeInterval" "10s" $pluginHost | quote }}
+            - name: KOGNITION_PLUGIN_PROBE_TIMEOUT
+              value: {{ dig "probeTimeout" "5s" $pluginHost | quote }}
+            - name: KOGNITION_PLUGIN_CONNECT_TIMEOUT
+              value: {{ dig "connectTimeout" "10s" $pluginHost | quote }}
+            - name: KOGNITION_PLUGIN_RECONNECT_BACKOFF
+              value: {{ dig "reconnectBackoff" "1s" $pluginHost | quote }}
+            - name: KOGNITION_PLUGIN_MAX_RECONNECT_BACKOFF
+              value: {{ dig "maxReconnectBackoff" "30s" $pluginHost | quote }}
+            {{- end }}
+            - name: KOGNITION_CANARY_OPERATION_RETENTION
+              value: {{ .Values.canaryOperationRetention | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_TOMBSTONE_RETENTION
+              value: {{ .Values.runtimeApprovalTombstoneRetention | quote }}
+            - name: KOGNITION_RUNTIME_NETWORK_POLICY_ENABLED
+              value: {{ $runtimeNetworkPolicyEnabled | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_MAXIMUM_CLOCK_SKEW
+              value: {{ .Values.runtimeAuth.maximumClockSkew | quote }}
+            - name: KOGNITION_CILIUM_HOST_PROBE_INGRESS_ENABLED
+              value: {{ $ciliumHostProbeIngress | quote }}
+            {{- if $runtimeNetworkPolicyEnabled }}
+            - name: KOGNITION_KUBELET_PROBE_INGRESS_CIDRS
+              value: {{- if $kubeletProbeIngressCIDRs }} {{ join "," $kubeletProbeIngressCIDRs | quote }} {{- else }} "" {{- end }}
+            {{- end }}
+            - name: KOGNITION_CONTROLLER_SERVICE_ACCOUNT
+              value: {{ include "kognition.controllerServiceAccountName" . | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_DECISION_SERVICE_ACCOUNT
+              value: {{- if .Values.webhook.enabled }} {{ printf "%s-webhook" (include "kognition.fullname" .) | quote }} {{- else }} {{ include "kognition.controllerServiceAccountName" . | quote }} {{- end }}
+            - name: KOGNITION_RUNTIME_APPROVAL_TOOL_SERVICE_ACCOUNT
+              value: {{ ternary (printf "%s-tool-gateway" (include "kognition.fullname" .)) "" $toolGatewayEnabled | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_MEMORY_SERVICE_ACCOUNT
+              value: {{ ternary (printf "%s-memory-policy-gateway" (include "kognition.fullname" .)) "" (and .Values.memoryService.enabled .Values.memoryPolicyGateway.enabled) | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_COMMUNICATION_SERVICE_ACCOUNT
+              value: {{ ternary (printf "%s-agent-communication-gateway" (include "kognition.fullname" .)) "" $agentCommunicationGatewayEnabled | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_WRITER_SERVICE_ACCOUNTS
+              value: {{- if or $toolGatewayEnabled (and .Values.memoryService.enabled .Values.memoryPolicyGateway.enabled) $agentCommunicationGatewayEnabled }} {{ list (ternary (printf "%s-tool-gateway" (include "kognition.fullname" .)) "" $toolGatewayEnabled) (ternary (printf "%s-memory-policy-gateway" (include "kognition.fullname" .)) "" (and .Values.memoryService.enabled .Values.memoryPolicyGateway.enabled)) (ternary (printf "%s-agent-communication-gateway" (include "kognition.fullname" .)) "" $agentCommunicationGatewayEnabled) | compact | join "," | quote }} {{- else }} "" {{- end }}
+            {{- if $intentGatewayEnabled }}
+            - name: KOGNITION_INTENT_GATEWAY_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: KOGNITION_INTENT_GATEWAY_DEPLOYMENT
+              value: {{ include "kognition.fullname" . }}-intent-gateway
+            - name: KOGNITION_INTENT_GATEWAY_ENDPOINT
+              value: "http://{{ include "kognition.fullname" . }}-intent-gateway.{{ .Release.Namespace }}.svc.cluster.local:{{ $intentGatewayPort }}"
+            {{- end }}
+            {{- if .Values.k8sController.agentImage }}
+            - name: KOGNITION_AGENT_IMAGE
+              value: {{ .Values.k8sController.agentImage | quote }}
+            {{- end }}
+            {{- if .Values.k8sController.agentNamespace }}
+            - name: KOGNITION_AGENT_NAMESPACE
+              value: {{ .Values.k8sController.agentNamespace | quote }}
+            {{- end }}
+            {{- if .Values.k8sController.runtimeImages.autogen }}
+            - name: KOGNITION_RUNTIME_AUTOGEN_IMAGE
+              value: {{ .Values.k8sController.runtimeImages.autogen | quote }}
+            - name: KOGNITION_RUNTIME_TLS_SECRET_NAME
+              value: {{ required "AutoGen runtimeControlTLS.workerSecretName is required" .Values.k8sController.runtimeControlTLS.workerSecretName | quote }}
+            - name: KOGNITION_RUNTIME_CA_FILE
+              value: /etc/kognition/runtime-control-ca/ca.crt
+            {{- $_ := required "AutoGen runtimeControlTLS.existingCASecret is required" .Values.k8sController.runtimeControlTLS.existingCASecret }}
+            {{- end }}
+            {{- if .Values.k8sController.runtimeImages.mcp }}
+            - name: KOGNITION_RUNTIME_MCP_IMAGE
+              value: {{ .Values.k8sController.runtimeImages.mcp | quote }}
+            {{- end }}
+            {{- if .Values.memoryService.enabled }}
+            - name: KOGNITION_MEMORY_SERVICE_URL
+              value: "http://{{ include "kognition.fullname" . }}-memory-service.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.memoryService.service.port }}"
+            {{- if .Values.memoryPolicyGateway.enabled }}
+            - name: KOGNITION_MEMORY_POLICY_GATEWAY_URL
+              value: "http://{{ include "kognition.fullname" . }}-memory-policy-gateway.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.memoryPolicyGateway.service.port }}"
+            - name: KOGNITION_MEMORY_POLICY_GATEWAY_PORT
+              value: {{ .Values.memoryPolicyGateway.service.port | quote }}
+            - name: KOGNITION_MEMORY_CAPABILITY_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-memory-policy-gateway
+                  key: capability-hmac-key
+            - name: KOGNITION_MEMORY_CAPABILITY_HMAC_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-memory-policy-gateway
+                  key: capability-hmac-key-id
+            - name: KOGNITION_MEMORY_CAPABILITY_HMAC_PREVIOUS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-memory-policy-gateway
+                  key: capability-hmac-previous-key
+                  optional: true
+            - name: KOGNITION_MEMORY_CAPABILITY_HMAC_PREVIOUS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-memory-policy-gateway
+                  key: capability-hmac-previous-key-id
+                  optional: true
+            - name: MEMORY_SERVICE_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-memory-policy-gateway
+                  key: upstream-token
+            - name: KOGNITION_MEMORY_POLICY_GATEWAY_NAMESPACE
+              value: {{ .Release.Namespace }}
+            {{- end }}
+            {{- end }}
+            - name: KOGNITION_RUNTIME_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (printf "%s-runtime-auth" (include "kognition.fullname" .)) .Values.runtimeAuth.existingSecret }}
+                  key: runtime-control-token
+            - name: KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (printf "%s-runtime-auth" (include "kognition.fullname" .)) .Values.runtimeAuth.existingSecret }}
+                  key: runtime-approval-binding-keys.json
+            - name: KOGNITION_RUNTIME_AUTH_TOKEN_SECRET_NAME
+              value: {{ default (printf "%s-runtime-auth" (include "kognition.fullname" .)) .Values.runtimeAuth.existingSecret }}
+            - name: KOGNITION_RUNTIME_AUTH_TOKEN_SECRET_KEY
+              value: runtime-control-token
+            {{- if $toolGatewayEnabled }}
+            - name: KOGNITION_TOOL_GATEWAY_URL
+              value: "http://{{ include "kognition.fullname" . }}-tool-gateway.{{ .Release.Namespace }}.svc.cluster.local:{{ $toolGatewayPort }}"
+            - name: KOGNITION_TOOL_GATEWAY_PORT
+              value: {{ $toolGatewayPort | quote }}
+            - name: KOGNITION_TOOL_GATEWAY_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: KOGNITION_TOOL_CAPABILITY_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-tool-gateway
+                  key: capability-hmac-key
+            - name: KOGNITION_TOOL_CAPABILITY_HMAC_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-tool-gateway
+                  key: capability-hmac-key-id
+            - name: KOGNITION_TOOL_CAPABILITY_HMAC_PREVIOUS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-tool-gateway
+                  key: capability-hmac-previous-key
+                  optional: true
+            - name: KOGNITION_TOOL_CAPABILITY_HMAC_PREVIOUS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-tool-gateway
+                  key: capability-hmac-previous-key-id
+                  optional: true
+            {{- end }}
+            {{- if $modelGatewayEnabled }}
+            - name: KOGNITION_MODEL_GATEWAY_URL
+              value: "http://{{ include "kognition.fullname" . }}-model-gateway.{{ .Release.Namespace }}.svc.cluster.local:{{ $modelGatewayPort }}"
+            - name: KOGNITION_MODEL_GATEWAY_PORT
+              value: {{ $modelGatewayPort | quote }}
+            - name: KOGNITION_MODEL_GATEWAY_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: KOGNITION_MODEL_CAPABILITY_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-model-gateway
+                  key: capability-hmac-key
+            - name: KOGNITION_MODEL_CAPABILITY_HMAC_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-model-gateway
+                  key: capability-hmac-key-id
+            - name: KOGNITION_MODEL_CAPABILITY_HMAC_PREVIOUS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-model-gateway
+                  key: capability-hmac-previous-key
+                  optional: true
+            - name: KOGNITION_MODEL_CAPABILITY_HMAC_PREVIOUS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-model-gateway
+                  key: capability-hmac-previous-key-id
+                  optional: true
+            {{- end }}
+            {{- if $knowledgeGatewayEnabled }}
+            - name: KOGNITION_KNOWLEDGE_GATEWAY_URL
+              value: "https://{{ include "kognition.fullname" . }}-knowledge-gateway.{{ .Release.Namespace }}.svc.cluster.local:{{ $knowledgeGatewayPort }}"
+            - name: KOGNITION_KNOWLEDGE_GATEWAY_PORT
+              value: {{ $knowledgeGatewayPort | quote }}
+            - name: KOGNITION_KNOWLEDGE_GATEWAY_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: KOGNITION_KNOWLEDGE_GATEWAY_CA_SECRET_NAME
+              value: {{ required "knowledgeGateway.runtimeTLS.secretName is required" $knowledgeRuntimeTLS.secretName | quote }}
+            - name: KOGNITION_KNOWLEDGE_GATEWAY_CA_SECRET_KEY
+              value: {{ required "knowledgeGateway.runtimeTLS.trustBundleKey is required" $knowledgeRuntimeTLS.trustBundleKey | quote }}
+            - name: KOGNITION_KNOWLEDGE_CAPABILITY_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-knowledge-gateway
+                  key: capability-hmac-key
+            - name: KOGNITION_KNOWLEDGE_CAPABILITY_HMAC_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-knowledge-gateway
+                  key: capability-hmac-key-id
+            - name: KOGNITION_KNOWLEDGE_CAPABILITY_HMAC_PREVIOUS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-knowledge-gateway
+                  key: capability-hmac-previous-key
+                  optional: true
+            - name: KOGNITION_KNOWLEDGE_CAPABILITY_HMAC_PREVIOUS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-knowledge-gateway
+                  key: capability-hmac-previous-key-id
+                  optional: true
+            {{- end }}
+            {{- if $agentCommunicationGatewayEnabled }}
+            - name: KOGNITION_AGENT_COMMUNICATION_GATEWAY_URL
+              value: "http://{{ include "kognition.fullname" . }}-agent-communication-gateway.{{ .Release.Namespace }}.svc.cluster.local:{{ $agentCommunicationGatewayPort }}"
+            - name: KOGNITION_AGENT_COMMUNICATION_GATEWAY_PORT
+              value: {{ $agentCommunicationGatewayPort | quote }}
+            - name: KOGNITION_AGENT_COMMUNICATION_GATEWAY_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: KOGNITION_AGENT_DELEGATION_CAPABILITY_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-agent-communication-gateway
+                  key: capability-hmac-key
+            - name: KOGNITION_AGENT_DELEGATION_CAPABILITY_HMAC_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-agent-communication-gateway
+                  key: capability-hmac-key-id
+            - name: KOGNITION_AGENT_DELEGATION_CAPABILITY_HMAC_PREVIOUS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-agent-communication-gateway
+                  key: capability-hmac-previous-key
+                  optional: true
+            - name: KOGNITION_AGENT_DELEGATION_CAPABILITY_HMAC_PREVIOUS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-agent-communication-gateway
+                  key: capability-hmac-previous-key-id
+                  optional: true
+            {{- end }}
+            {{- if .Values.kbIngester.enabled }}
+            - name: KOGNITION_KB_INGESTER_IMAGE
+              value: {{ include "kognition.image" (dict "global" .Values.global "image" .Values.kbIngester.image "defaultTag" .Chart.AppVersion) | quote }}
+            {{- if .Values.kbIngester.serviceAccount }}
+            - name: KOGNITION_KB_INGESTER_SERVICE_ACCOUNT
+              value: {{ .Values.kbIngester.serviceAccount | quote }}
+            {{- end }}
+            {{- if $knowledgeGatewayEnabled }}
+            - name: KOGNITION_KNOWLEDGE_PROVIDER_NAME
+              value: {{ required "knowledgeGateway.provider.name is required" $knowledgeProvider.name | quote }}
+            - name: KOGNITION_KNOWLEDGE_PROVIDER_ADDRESS
+              value: {{ required "knowledgeGateway.provider.address is required" $knowledgeProvider.address | quote }}
+            - name: KOGNITION_KNOWLEDGE_PROVIDER_SERVER_NAME
+              value: {{ required "knowledgeGateway.provider.serverName is required" $knowledgeProvider.serverName | quote }}
+            - name: KOGNITION_KNOWLEDGE_PROVIDER_PEER_URI
+              value: {{ required "knowledgeGateway.provider.peerURI is required" $knowledgeProvider.peerURI | quote }}
+            - name: KOGNITION_KNOWLEDGE_CONFIGURATION_API_GROUP
+              value: {{ required "knowledgeGateway.provider.configuration.apiGroup is required" $knowledgeConfiguration.apiGroup | quote }}
+            - name: KOGNITION_KNOWLEDGE_CONFIGURATION_API_VERSION
+              value: {{ required "knowledgeGateway.provider.configuration.apiVersion is required" $knowledgeConfiguration.apiVersion | quote }}
+            - name: KOGNITION_KNOWLEDGE_CONFIGURATION_KIND
+              value: {{ required "knowledgeGateway.provider.configuration.kind is required" $knowledgeConfiguration.kind | quote }}
+            - name: KOGNITION_KNOWLEDGE_TLS_SECRET_NAME
+              value: {{ required "knowledgeGateway.tls.secretName is required" $knowledgeTLS.secretName | quote }}
+            - name: KOGNITION_KNOWLEDGE_TLS_CERTIFICATE_KEY
+              value: {{ required "knowledgeGateway.tls.certificateKey is required" $knowledgeTLS.certificateKey | quote }}
+            - name: KOGNITION_KNOWLEDGE_TLS_PRIVATE_KEY_KEY
+              value: {{ required "knowledgeGateway.tls.privateKeyKey is required" $knowledgeTLS.privateKeyKey | quote }}
+            - name: KOGNITION_KNOWLEDGE_TLS_TRUST_BUNDLE_KEY
+              value: {{ required "knowledgeGateway.tls.trustBundleKey is required" $knowledgeTLS.trustBundleKey | quote }}
+            {{- end }}
+            {{- end }}
+            {{- include "kognition.openTelemetryEnv" . | nindent 12 }}
+          args:
+            {{- if .Values.k8sController.leaderElection.enabled }}
+            - --leader-elect=true
+            {{- end }}
+            {{- if not .Values.webhook.enabled }}
+            - --disable-webhooks
+            {{- end }}
+          ports:
+            {{- if .Values.webhook.enabled }}
+            - name: webhook
+              containerPort: {{ .Values.webhook.port }}
+              protocol: TCP
+            {{- end }}
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          {{- if or .Values.workloadIdentityStatus.enabled .Values.webhook.enabled $pluginHostEnabled .Values.artifactSigning.existingSecret .Values.k8sController.runtimeImages.autogen .Values.runtimeRecovery.existingSecret }}
+          volumeMounts:
+            {{- include "kognition.workloadIdentityStatusMounts" . | nindent 12 }}
+            {{- include "kognition.runtimeRecoveryMount" . | nindent 12 }}
+            {{- include "kognition.artifactSigningMount" . | nindent 12 }}
+            {{- if .Values.k8sController.runtimeImages.autogen }}
+            - name: runtime-control-ca
+              mountPath: /etc/kognition/runtime-control-ca
+              readOnly: true
+            {{- end }}
+            {{- if .Values.webhook.enabled }}
+            - name: webhook-tls
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+            {{- end }}
+            {{- if $pluginHostEnabled }}
+            - name: plugin-sockets
+              mountPath: {{ dig "socketDir" "/var/run/kognition/plugins" $pluginHost | quote }}
+            {{- end }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            failureThreshold: 60
+            periodSeconds: 1
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.k8sController.resources | nindent 12 }}
+        {{- if $pluginHostEnabled }}
+        {{- range $sidecar := dig "sidecars" (list) $pluginHost }}
+        - name: {{ $sidecar.name }}
+          image: {{ $sidecar.image | quote }}
+          imagePullPolicy: {{ default "IfNotPresent" $sidecar.imagePullPolicy }}
+          securityContext:
+            {{- $sidecarSecurityContext := mergeOverwrite (deepCopy $.Values.containerSecurityContext) (default (dict) $sidecar.securityContext) }}
+            {{- toYaml $sidecarSecurityContext | nindent 12 }}
+          {{- with $sidecar.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $sidecar.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $sidecar.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: plugin-sockets
+              mountPath: {{ dig "socketDir" "/var/run/kognition/plugins" $pluginHost | quote }}
+          {{- with $sidecar.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+        {{- end }}
+      {{- if or .Values.workloadIdentityStatus.enabled .Values.webhook.enabled $pluginHostEnabled .Values.artifactSigning.existingSecret .Values.k8sController.runtimeImages.autogen .Values.runtimeRecovery.existingSecret }}
+      volumes:
+        {{- include "kognition.workloadIdentityStatusVolumes" . | nindent 8 }}
+        {{- include "kognition.runtimeRecoveryVolume" . | nindent 8 }}
+        {{- include "kognition.artifactSigningVolume" . | nindent 8 }}
+        {{- if .Values.k8sController.runtimeImages.autogen }}
+        - name: runtime-control-ca
+          secret:
+            secretName: {{ .Values.k8sController.runtimeControlTLS.existingCASecret | quote }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+        {{- end }}
+        {{- if .Values.webhook.enabled }}
+        - name: webhook-tls
+          secret:
+            secretName: {{ include "kognition.fullname" . }}-webhook-tls
+        {{- end }}
+        {{- if $pluginHostEnabled }}
+        - name: plugin-sockets
+          emptyDir: {}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.k8sController.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.k8sController.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.k8sController.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

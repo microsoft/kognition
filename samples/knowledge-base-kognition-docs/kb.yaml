@@ -1,0 +1,27 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# KnowledgeBase whose sources are this repo's top-level docs, served
+# from the in-cluster `kognition-docs` Service defined in docs-server.yaml.
+# The ingester Job fetches each URL, extracts text, chunks it, embeds
+# with `text-embedding-3-large`, and writes rows into `kognition_docs_chunks`
+# in the built-in pgvector StatefulSet.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBase
+metadata:
+  name: kognition-docs-kb
+  namespace: default
+  annotations:
+    kognition.dev/ingest-allow-private-networks: "true"
+spec:
+  knowledgeBaseClassName: kognition-docs-kb-class
+  sources:
+    - type: url
+      uri: http://kognition-docs.samples-kognition-docs-services.svc.cluster.local/README.md
+    - type: url
+      uri: http://kognition-docs.samples-kognition-docs-services.svc.cluster.local/PROJECT.md
+    - type: url
+      uri: http://kognition-docs.samples-kognition-docs-services.svc.cluster.local/BACKLOG.md
+    - type: url
+      uri: http://kognition-docs.samples-kognition-docs-services.svc.cluster.local/kognition-manifest.md

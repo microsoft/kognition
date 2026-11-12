@@ -1,0 +1,101 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if and .Values.runtime.enabled .Values.runtime.networkPolicy.enabled }}
+{{- $name := include "kognition-knowledge-azuresearch.fullname" . -}}
+{{- $apiServerCIDRs := .Values.runtime.networkPolicy.kubernetesApiEgressCIDRs -}}
+{{- if eq (len $apiServerCIDRs) 0 -}}
+{{- fail "runtime.networkPolicy.kubernetesApiEgressCIDRs must list the Kubernetes API endpoint CIDRs when the runtime network policy is enabled" -}}
+{{- end -}}
+{{- $gatewayPodSelector := required "runtime.networkPolicy.gatewayPodSelector is required when the runtime network policy is enabled" .Values.runtime.networkPolicy.gatewayPodSelector -}}
+{{- $indexingPodSelector := required "runtime.networkPolicy.indexingPodSelector is required when the runtime network policy is enabled" .Values.runtime.networkPolicy.indexingPodSelector -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition-knowledge-azuresearch.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "kognition-knowledge-azuresearch.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- if .Values.runtime.networkPolicy.gatewayNamespaceSelector }}
+              {{- toYaml .Values.runtime.networkPolicy.gatewayNamespaceSelector | nindent 14 }}
+              {{- else }}
+              kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+              {{- end }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $gatewayPodSelector | nindent 14 }}
+      ports:
+        - port: 9443
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- if .Values.runtime.networkPolicy.indexingNamespaceSelector }}
+              {{- toYaml .Values.runtime.networkPolicy.indexingNamespaceSelector | nindent 14 }}
+              {{- else }}
+              kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+              {{- end }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $indexingPodSelector | nindent 14 }}
+      ports:
+        - port: 9443
+          protocol: TCP
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- range $cidr := $apiServerCIDRs }}
+    - to:
+        - ipBlock:
+            cidr: {{ $cidr }}
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+    {{- if not .Values.runtime.networkPolicy.ciliumFQDN.enabled }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+{{- if .Values.runtime.networkPolicy.ciliumFQDN.enabled }}
+{{- $matchNames := required "runtime.networkPolicy.ciliumFQDN.matchNames must list the Entra and Azure AI Search host names when Cilium FQDN policy is enabled" .Values.runtime.networkPolicy.ciliumFQDN.matchNames }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ $name }}-azure-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition-knowledge-azuresearch.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/name: {{ include "kognition-knowledge-azuresearch.name" . }}
+      k8s:app.kubernetes.io/instance: {{ .Release.Name }}
+  egress:
+    - toFQDNs:
+        {{- range $host := $matchNames }}
+        - matchName: {{ $host | quote }}
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+{{- end }}
+{{- end }}

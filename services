@@ -1,0 +1,92 @@
+#!/usr/bin/env sh
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+set -eu
+
+ACTION="${1:-help}"
+SERVICE="${2:-}"
+
+show_usage() {
+  cat <<'EOF'
+Usage: services <start|stop|restart|log|status|list|down|help> [service-name]
+
+Examples:
+  services start
+  services start postgres
+  services stop
+  services log apiserver
+  services status controller-manager
+  services list
+EOF
+}
+
+invoke_compose() {
+  docker compose "$@"
+}
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is required but was not found in PATH." >&2
+  exit 1
+fi
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$SCRIPT_DIR"
+
+normalized=$(printf '%s' "$ACTION" | tr '[:upper:]' '[:lower:]')
+
+case "$normalized" in
+  start)
+    if [ -n "$SERVICE" ]; then
+      invoke_compose up -d "$SERVICE"
+    else
+      invoke_compose up -d
+    fi
+    ;;
+  stop)
+    if [ -n "$SERVICE" ]; then
+      invoke_compose stop "$SERVICE"
+    else
+      invoke_compose stop
+    fi
+    ;;
+  restart)
+    if [ -n "$SERVICE" ]; then
+      invoke_compose restart "$SERVICE"
+    else
+      invoke_compose restart
+    fi
+    ;;
+  log|logs)
+    if [ -n "$SERVICE" ]; then
+      invoke_compose logs -f "$SERVICE"
+    else
+      invoke_compose logs -f
+    fi
+    ;;
+  status)
+    if [ -n "$SERVICE" ]; then
+      invoke_compose ps "$SERVICE"
+    else
+      invoke_compose ps
+    fi
+    ;;
+  list)
+    invoke_compose config --services
+    ;;
+  down|end)
+    if [ -n "$SERVICE" ]; then
+      echo "'down' does not support a single service. Use 'stop <service>' instead." >&2
+      exit 1
+    fi
+    invoke_compose down
+    ;;
+  help)
+    show_usage
+    ;;
+  *)
+    echo "Unknown action '$ACTION'." >&2
+    show_usage
+    exit 1
+    ;;
+esac

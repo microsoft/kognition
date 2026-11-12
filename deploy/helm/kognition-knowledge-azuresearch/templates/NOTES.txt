@@ -1,0 +1,26 @@
+{{/* Copyright (c) Microsoft Corporation.
+     Licensed under the MIT License. */}}
+
+The Azure AI Search runtime is disabled by default. The CRD is installed independently.
+
+When runtime.enabled=true, provide an existing mTLS Secret, the exact SPIFFE URI
+of the trusted core client, and the Microsoft Entra tenant and client IDs
+federated to the adapter ServiceAccount. The AKS workload identity webhook must
+be installed and enabled. No Azure AI Search API key or Kubernetes credential
+Secret is supported.
+
+The runtime watches AzureSearchBackend and KnowledgeBase resources only in the
+Helm release namespace. Install one release in each tenant namespace that needs
+an Azure AI Search provider.
+
+The runtime NetworkPolicy is enabled by default. Configure
+runtime.networkPolicy.kubernetesApiEgressCIDRs with the API server endpoint
+CIDRs. By default, outbound HTTPS is allowed because standard NetworkPolicy
+cannot select DNS names. On Cilium clusters, enable ciliumFQDN and list both the
+Entra token host and every allowed Azure AI Search host in matchNames to replace
+that broad HTTPS rule with FQDN-restricted egress.
+
+Core-side TCP provider registration is not yet implemented. The Service created
+by this chart exposes the adapter but does not by itself enable core query dispatch.
+
+AzureSearchBackend CRD installed.

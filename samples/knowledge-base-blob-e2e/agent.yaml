@@ -1,0 +1,40 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClaim
+metadata:
+  name: azure-docs-claim
+  namespace: default
+spec:
+  knowledgeBaseName: azure-docs-kb
+  accessMode: ReadOnly
+---
+# Agent that reaches the KB through the claim. The dispatcher expands
+# the claim to a `KOGNITION_KB_RESOLVED` env var carrying the pgvector
+# DSN, table, embedding model, and API key. The runtime auto-attaches a
+# `knowledge_search` StructuredTool bound to those records so the LLM
+# can call it without any custom Tool CR.
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: azure-docs-agent
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are the Mark 7 product documentation assistant. For any
+      factual question about Mark 7, call `knowledge_search` with a
+      focused query before answering. If the tool returns
+      "No knowledge bases are attached to this agent." say so plainly
+      instead of inventing details.
+  knowledgeBaseClaims:
+    - name: azure-docs-claim
+      required: true
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 1024

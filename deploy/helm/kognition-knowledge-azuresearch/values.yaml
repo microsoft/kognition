@@ -1,0 +1,62 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+runtime:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: kognition-knowledge-azuresearch
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  providerVersion: ""
+  clientPeerURI: ""
+  tls:
+    secretName: ""
+    certificateKey: tls.crt
+    privateKeyKey: tls.key
+    trustBundleKey: ca.crt
+  workloadIdentity:
+    clientId: ""
+    tenantId: ""
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  service:
+    port: 9443
+  networkPolicy:
+    enabled: true
+    gatewayNamespaceSelector: {}
+    gatewayPodSelector:
+      app.kubernetes.io/component: knowledge-gateway
+    indexingNamespaceSelector: {}
+    indexingPodSelector:
+      kognition.dev/component: kb-ingester
+    kubernetesApiEgressCIDRs: []
+    ciliumFQDN:
+      enabled: false
+      matchNames: []
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    capabilities:
+      drop: ["ALL"]
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

@@ -1,0 +1,198 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: knowledgebaseclaims.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: KnowledgeBaseClaim
+    listKind: KnowledgeBaseClaimList
+    plural: knowledgebaseclaims
+    singular: knowledgebaseclaim
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.knowledgeBaseName
+      name: KnowledgeBase
+      type: string
+    - jsonPath: .spec.accessMode
+      name: AccessMode
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.boundKnowledgeBase
+      name: Bound
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        required: [spec]
+        description: |-
+          KnowledgeBaseClaim binds an agent (or agents) to an existing KnowledgeBase
+          in the same namespace, carrying per-claim access mode, retrieval overrides,
+          and usage quotas. Unlike MemoryClaim, a KnowledgeBaseClaim does not
+          provision a private backing store — the KnowledgeBase it references is a
+          shared corpus. Multiple claims may reference the same KnowledgeBase.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              KnowledgeBaseClaimSpec defines the desired binding between a claim and a
+              KnowledgeBase.
+            properties:
+              accessMode:
+                default: ReadOnly
+                description: |-
+                  AccessMode is "ReadOnly" (default) or "ReadWrite". ReadWrite grants any
+                  tool wired through this claim permission to add or delete documents on
+                  the underlying KnowledgeBase.
+                enum:
+                - ReadOnly
+                - ReadWrite
+                type: string
+              knowledgeBaseName:
+                description: |-
+                  KnowledgeBaseName is the KnowledgeBase in the same namespace this claim
+                  binds to.
+                type: string
+              retrieval:
+                description: |-
+                  Retrieval overrides class-level and KnowledgeBase-level defaults for
+                  queries made through this claim. Overrides never mutate the corpus.
+                properties:
+                  filter:
+                    additionalProperties:
+                      type: string
+                    description: Filter is a set of key=value constraints applied
+                      to document metadata.
+                    type: object
+                  hybridWeights:
+                    description: |-
+                      HybridWeights tunes the mix of keyword vs vector scoring when the
+                      underlying class supports hybrid retrieval.
+                    properties:
+                      keyword:
+                        description: Keyword weight (0.0 - 1.0 as a decimal string).
+                        type: string
+                      vector:
+                        description: Vector weight (0.0 - 1.0 as a decimal string).
+                        type: string
+                    type: object
+                  minScore:
+                    description: |-
+                      MinScore filters out results below this relevance score. Decimal string
+                      (e.g. "0.35") to keep the CRD field type-stable across providers.
+                    type: string
+                  mode:
+                    type: string
+                    enum:
+                    - keyword
+                    - dense
+                    - hybrid
+                  topK:
+                    description: TopK is the maximum number of results returned per
+                      query.
+                    format: int32
+                    type: integer
+                type: object
+              usage:
+                description: Usage caps enforced by governance/quota admission at
+                  query time.
+                properties:
+                  maxQueriesPerMinute:
+                    description: |-
+                      MaxQueriesPerMinute caps queries per minute across all consumers of this
+                      claim.
+                    format: int32
+                    type: integer
+                  maxTokensReturned:
+                    description: MaxTokensReturned caps the total tokens returned
+                      per query.
+                    format: int32
+                    type: integer
+                type: object
+            required:
+            - knowledgeBaseName
+            type: object
+          status:
+            description: |-
+              KnowledgeBaseClaimStatus describes the observed state of a
+              KnowledgeBaseClaim.
+            properties:
+              boundKnowledgeBase:
+                description: |-
+                  BoundKnowledgeBase mirrors spec.knowledgeBaseName once binding succeeds.
+                  It is cleared if the underlying KnowledgeBase is deleted.
+                type: string
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  properties:
+                    lastTransitionTime:
+                      format: date-time
+                      type: string
+                    message:
+                      type: string
+                    observedGeneration:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      type: string
+                    status:
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the .metadata.generation this status was produced
+                  from.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the lifecycle phase (Pending|Bound|Lost).
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

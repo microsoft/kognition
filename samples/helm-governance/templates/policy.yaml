@@ -1,0 +1,19 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if .Values.policy.enabled }}
+apiVersion: kognition.dev/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: {{ .Release.Name }}-policy
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "kognition-governance.labels" . | nindent 4 }}
+spec:
+  enforce: {{ .Values.policy.enforce }}
+  scope: workspace
+  {{- if .Values.policy.safetyRules }}
+  safetyRules:
+    {{- toYaml .Values.policy.safetyRules | nindent 4 }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,50 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Routing Sample
+#
+# AgentService exposes an agent for communication.
+# IntentGateway routes requests to agents/workflows by pattern.
+---
+kind: AgentService
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: research-service
+spec:
+  agentRef:
+    name: research-agent
+  loadBalancingStrategy: round-robin
+  port: 8080
+---
+kind: AgentService
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: summarizer-service
+spec:
+  agentRef:
+    name: summarizer-agent
+  loadBalancingStrategy: round-robin
+  port: 8080
+---
+kind: IntentGateway
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: main-gateway
+spec:
+  routes:
+    - pattern: "research *"
+      targetRef:
+        name: research-and-summarize
+      targetKind: Workflow
+    - pattern: "summarize *"
+      targetRef:
+        name: summarizer-agent
+      targetKind: Agent
+    - pattern: "code review *"
+      targetRef:
+        name: reviewer
+      targetKind: Agent
+    - pattern: "*"
+      targetRef:
+        name: hello-agent
+      targetKind: Agent

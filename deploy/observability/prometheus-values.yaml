@@ -1,0 +1,35 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Development-only values for kube-prometheus-stack 88.5.2, installed by
+# `make observability-install`. Kognition monitoring resources live in the
+# platform namespace and opt in through the release label below.
+
+alertmanager:
+  enabled: false
+
+kube-state-metrics:
+  metricLabelsAllowlist:
+    - pods=[kognition.dev/agent-name,kognition.dev/agent-namespace,kognition.dev/agent-instance]
+
+grafana:
+  grafana.ini:
+    feature_toggles:
+      grafanaAPIServerWithExperimentalAPIs: true
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelector:
+      matchLabels:
+        release: kognition-observability
+    serviceMonitorNamespaceSelector: {}
+    ruleSelector:
+      matchLabels:
+        release: kognition-observability
+    ruleNamespaceSelector: {}

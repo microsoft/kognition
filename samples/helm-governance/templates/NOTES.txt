@@ -1,0 +1,29 @@
+{{/* Copyright (c) Microsoft Corporation.
+     Licensed under the MIT License. */}}
+
+Kognition Governance deployed!
+
+Namespace: {{ .Values.namespace }}
+Release:   {{ .Release.Name }}
+
+Resources created:
+{{- if .Values.workspace.enabled }}
+  ✓ Workspace: {{ .Release.Name }}
+{{- end }}
+{{- if .Values.quota.enabled }}
+  ✓ CognitiveQuota: {{ .Release.Name }}-quota
+{{- end }}
+{{- if .Values.limitRange.enabled }}
+  ✓ CognitiveLimitRange: {{ .Release.Name }}-limits
+{{- end }}
+{{- if .Values.policy.enabled }}
+  ✓ AgentPolicy: {{ .Release.Name }}-policy
+{{- end }}
+{{- range .Values.admissionPolicies }}
+{{- if .enabled }}
+  ✓ CognitiveAdmissionPolicy: {{ .name }}
+{{- end }}
+{{- end }}
+
+To verify:
+  kubectl get workspaces,cognitivequotas,cognitivelimitranges,agentpolicies -n {{ .Values.namespace }}

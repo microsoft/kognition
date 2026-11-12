@@ -1,0 +1,24 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if and (eq .Values.mode "kubernetes") .Values.webhook.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kognition.fullname" . }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  type: ClusterIP
+  ports:
+    - name: https
+      port: 443
+      targetPort: {{ .Values.webhook.port }}
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: {{ include "kognition.name" . }}
+    app.kubernetes.io/component: resource-webhooks
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

@@ -1,0 +1,752 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- /*
+NetworkPolicies for Kognition. Off by default (networkPolicy.enabled); requires
+a CNI that enforces NetworkPolicy (Calico, Cilium, ...).
+
+Design:
+  * Per-component policies — each selects one named component, so dynamically
+    created agent/ingester pods (which are not selected) keep working.
+  * Ingress is locked down to Kognition workloads. Control-plane pods carry
+    app.kubernetes.io/part-of=kognition; dynamic pods (agents, ingester Jobs)
+    carry app.kubernetes.io/managed-by=kognition. Cross-namespace peers are
+    matched with namespaceSelector:{} + that managed-by label.
+  * Egress is constrained to DNS, the database, and external HTTPS (443) so
+    model-provider (CPI) and mem0 calls keep working.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+{{- $instance := .Release.Name }}
+{{- $kubeletProbeIngressCIDRs := .Values.networkPolicy.kubeletProbeIngressCIDRs }}
+{{- $ciliumHostProbeIngress := .Values.networkPolicy.ciliumHostProbeIngress }}
+{{- if and (eq (len $kubeletProbeIngressCIDRs) 0) (not $ciliumHostProbeIngress) }}
+{{- fail "networkPolicy.kubeletProbeIngressCIDRs must list the node CIDRs used by kubelet probes when NetworkPolicies are enabled" }}
+{{- end }}
+{{- $toolGateway := default (dict) .Values.toolGateway }}
+{{- $toolGatewayPrivateEgress := default (list) $toolGateway.privateEgress }}
+{{- $modelGateway := default (dict) .Values.modelGateway }}
+{{- $modelGatewayPort := dig "service" "port" 8093 $modelGateway }}
+{{- $modelGatewayPrivateEgress := default (list) $modelGateway.privateEgress }}
+{{- $knowledgeGateway := default (dict) .Values.knowledgeGateway }}
+{{- $knowledgeGatewayPort := dig "service" "port" 8095 $knowledgeGateway }}
+{{- $agentCommunicationGateway := default (dict) .Values.agentCommunicationGateway }}
+{{- $agentCommunicationGatewayPort := dig "service" "port" 8094 $agentCommunicationGateway }}
+{{- if and .Values.postgres.enabled (or (eq .Values.mode "standalone") (eq .Values.memoryService.backendType "pgvector") (and (eq .Values.mode "kubernetes") .Values.memoryService.enabled .Values.memoryPolicyGateway.enabled)) }}
+---
+# PostgreSQL: only reachable by same-namespace control-plane components.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: postgres
+      app.kubernetes.io/instance: {{ $instance }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: kognition
+      ports:
+        - port: 5432
+          protocol: TCP
+    {{- include "kognition.kubeletProbeIngress" (dict "cidrs" $kubeletProbeIngressCIDRs "port" 5432) | nindent 4 }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+{{- end }}
+{{- if .Values.kbPgvector.enabled }}
+---
+# kb-pgvector: reachable by ingester Jobs and agent pods (managed-by kognition,
+# any namespace) and same-namespace control plane.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-kb-pgvector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kb-pgvector
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: kb-pgvector
+      app.kubernetes.io/instance: {{ $instance }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: kognition
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: kognition
+      ports:
+        - port: 5432
+          protocol: TCP
+    {{- range $peer := .Values.kbPgvector.providerIngress }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ required "kbPgvector provider ingress namespace is required" $peer.namespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- required "kbPgvector provider ingress podSelector is required" $peer.podSelector | toYaml | nindent 14 }}
+      ports:
+        - port: 5432
+          protocol: TCP
+    {{- end }}
+    {{- include "kognition.kubeletProbeIngress" (dict "cidrs" $kubeletProbeIngressCIDRs "port" 5432) | nindent 4 }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+{{- end }}
+{{- if eq .Values.mode "standalone" }}
+---
+# API server: HTTP reachable by Kognition workloads (+ configurable extra peers).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-apiserver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: apiserver
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: apiserver
+      app.kubernetes.io/instance: {{ $instance }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: kognition
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: kognition
+        {{- with .Values.networkPolicy.apiServerExtraIngress }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - port: 8080
+          protocol: TCP
+    {{- if .Values.observability.metrics.serviceMonitor.enabled }}
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 9090
+          protocol: TCP
+    {{- end }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: postgres
+              app.kubernetes.io/instance: {{ $instance }}
+      ports:
+        - port: 5432
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: kb-pgvector
+              app.kubernetes.io/instance: {{ $instance }}
+      ports:
+        - port: 5432
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: memory-service
+              app.kubernetes.io/instance: {{ $instance }}
+      ports:
+        - port: 8090
+          protocol: TCP
+    # External HTTPS for model-provider (CPI) calls.
+    # Tool endpoints are dynamically declared resources. Endpoint validation
+    # permits private destinations only with explicit Tool opt-in, so the
+    # gateway, rather than each runtime pod, owns unrestricted target egress.
+    - to:
+      - ipBlock:
+        cidr: 0.0.0.0/0
+---
+# Controller manager: no inbound server; constrain egress to DNS, DB, and HTTPS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-controller-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: controller-manager
+      app.kubernetes.io/instance: {{ $instance }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: postgres
+              app.kubernetes.io/instance: {{ $instance }}
+      ports:
+        - port: 5432
+          protocol: TCP
+    # External HTTPS for model-provider (CPI) calls during reconciliation.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- if .Values.workloadIdentityStatus.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ required "workloadIdentityStatus.runtimeNamespace is required" .Values.workloadIdentityStatus.runtimeNamespace | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: kognition
+            matchExpressions:
+              - key: kognition.dev/agent
+                operator: Exists
+      ports:
+        - port: 8097
+          protocol: TCP
+    {{- end }}
+{{- end }}
+{{- if .Values.memoryService.enabled }}
+---
+# Memory service: reachable only by the policy gateway and control plane;
+# agent runtimes use the gateway for every data-plane request.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-memory-service
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-service
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: memory-service
+      app.kubernetes.io/instance: {{ $instance }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        {{- if and (eq .Values.mode "kubernetes") .Values.memoryPolicyGateway.enabled }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: memory-policy-gateway
+              app.kubernetes.io/instance: {{ $instance }}
+        {{- else }}
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: kognition
+        {{- end }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: kognition
+      ports:
+        - port: 8090
+          protocol: TCP
+    {{- include "kognition.kubeletProbeIngress" (dict "cidrs" $kubeletProbeIngressCIDRs "port" 8090) | nindent 4 }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if .Values.postgres.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: postgres
+              app.kubernetes.io/instance: {{ $instance }}
+      ports:
+        - port: 5432
+          protocol: TCP
+    {{- end }}
+    {{- range $index, $rule := .Values.memoryService.privateEgress }}
+    {{- $namespaceSelector := required (printf "memoryService.privateEgress[%d].namespaceSelector is required" $index) $rule.namespaceSelector }}
+    {{- $podSelector := required (printf "memoryService.privateEgress[%d].podSelector is required" $index) $rule.podSelector }}
+    {{- $ports := required (printf "memoryService.privateEgress[%d].ports is required" $index) $rule.ports }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $podSelector | nindent 14 }}
+      ports:
+        {{- range $port := $ports }}
+        - port: {{ $port }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    # External HTTPS for the mem0 backend.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+{{- end }}
+{{- if and (eq .Values.mode "kubernetes") .Values.memoryService.enabled .Values.memoryPolicyGateway.enabled }}
+---
+# Memory policy gateway accepts runtime requests and can reach the raw memory service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-memory-policy-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-policy-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: memory-policy-gateway
+      app.kubernetes.io/instance: {{ $instance }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: kognition
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: kognition
+        {{- if .Values.observability.metrics.serviceMonitor.enabled }}
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+        {{- end }}
+      ports:
+        - port: 8091
+          protocol: TCP
+    {{- include "kognition.kubeletProbeIngress" (dict "cidrs" $kubeletProbeIngressCIDRs "port" 8091) | nindent 4 }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: memory-service
+              app.kubernetes.io/instance: {{ $instance }}
+      ports:
+        - port: {{ .Values.memoryService.service.port }}
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: postgres
+              app.kubernetes.io/instance: {{ $instance }}
+      ports:
+        - port: 5432
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+{{- end }}
+{{- if and (eq .Values.mode "kubernetes") $toolGateway.enabled }}
+---
+# Tool Gateway accepts agent runtime requests and owns egress to tool endpoints.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-tool-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tool-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: tool-gateway
+      app.kubernetes.io/instance: {{ $instance }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: kognition
+      ports:
+        - port: {{ $toolGateway.service.port }}
+          protocol: TCP
+    {{- include "kognition.kubeletProbeIngress" (dict "cidrs" $kubeletProbeIngressCIDRs "port" $toolGateway.service.port) | nindent 4 }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- range $index, $rule := $toolGateway.privateEgress }}
+    {{- $namespaceSelector := required (printf "toolGateway.privateEgress[%d].namespaceSelector is required" $index) $rule.namespaceSelector }}
+    {{- $podSelector := required (printf "toolGateway.privateEgress[%d].podSelector is required" $index) $rule.podSelector }}
+    {{- $ports := required (printf "toolGateway.privateEgress[%d].ports is required" $index) $rule.ports }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $podSelector | nindent 14 }}
+      ports:
+        {{- range $port := $ports }}
+        - port: {{ $port }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+{{- end }}
+{{- if and (eq .Values.mode "kubernetes") $agentCommunicationGateway.enabled }}
+---
+# Agent Communication Gateway accepts runtime delegation requests and may call
+# only Kognition-managed agent runtimes over their fixed control port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-agent-communication-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-communication-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: agent-communication-gateway
+      app.kubernetes.io/instance: {{ $instance }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: kognition
+      ports:
+        - port: {{ $agentCommunicationGatewayPort }}
+          protocol: TCP
+    {{- include "kognition.kubeletProbeIngress" (dict "cidrs" $kubeletProbeIngressCIDRs "port" $agentCommunicationGatewayPort) | nindent 4 }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: kognition
+      ports:
+        - port: 8080
+          protocol: TCP
+{{- end }}
+{{- if and (eq .Values.mode "kubernetes") $knowledgeGateway.enabled }}
+{{- $providerNetworkPolicy := required "knowledgeGateway.provider.networkPolicy is required" $knowledgeGateway.provider.networkPolicy }}
+{{- $providerNamespaceSelector := required "knowledgeGateway.provider.networkPolicy.namespaceSelector is required" $providerNetworkPolicy.namespaceSelector }}
+{{- $providerPodSelector := required "knowledgeGateway.provider.networkPolicy.podSelector is required" $providerNetworkPolicy.podSelector }}
+{{- $apiServerCIDRs := required "knowledgeGateway.provider.kubernetesApiEgressCIDRs must list the Kubernetes API endpoint CIDRs when NetworkPolicies are enabled" $knowledgeGateway.provider.kubernetesApiEgressCIDRs }}
+---
+# Knowledge Gateway accepts capability-bound runtime requests, resolves the
+# committed binding through Kubernetes, and owns query embedding provider egress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-knowledge-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: knowledge-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: knowledge-gateway
+      app.kubernetes.io/instance: {{ $instance }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: kognition
+        {{- if .Values.observability.metrics.serviceMonitor.enabled }}
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+        {{- end }}
+      ports:
+        - port: {{ $knowledgeGatewayPort }}
+          protocol: TCP
+    {{- include "kognition.kubeletProbeIngress" (dict "cidrs" $kubeletProbeIngressCIDRs "port" $knowledgeGatewayPort) | nindent 4 }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- range $cidr := $apiServerCIDRs }}
+    - to:
+      - ipBlock:
+          cidr: {{ $cidr }}
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- end }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $providerNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $providerPodSelector | nindent 14 }}
+      ports:
+        - port: {{ default 9443 $knowledgeGateway.provider.port }}
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+{{- end }}
+{{- if and (eq .Values.mode "kubernetes") $modelGateway.enabled }}
+---
+# Model Gateway accepts capability-bound runtime requests and owns public
+# provider egress, so runtime Pods never need provider credentials or endpoints.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-model-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: model-gateway
+      app.kubernetes.io/instance: {{ $instance }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: kognition
+      ports:
+        - port: {{ $modelGatewayPort }}
+          protocol: TCP
+    {{- include "kognition.kubeletProbeIngress" (dict "cidrs" $kubeletProbeIngressCIDRs "port" $modelGatewayPort) | nindent 4 }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+    {{- range $index, $rule := $modelGatewayPrivateEgress }}
+    {{- $namespaceSelector := required (printf "modelGateway.privateEgress[%d].namespaceSelector is required" $index) $rule.namespaceSelector }}
+    {{- $podSelector := required (printf "modelGateway.privateEgress[%d].podSelector is required" $index) $rule.podSelector }}
+    {{- $ports := required (printf "modelGateway.privateEgress[%d].ports is required" $index) $rule.ports }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $podSelector | nindent 14 }}
+      ports:
+        {{- range $port := $ports }}
+        - port: {{ $port }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+{{- end }}
+{{- if eq .Values.mode "kubernetes" }}
+---
+# K8s controller: webhook/metrics/health inbound; egress to DNS, the Kubernetes
+# API, and external HTTPS (CPI).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-k8s-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-controller
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: k8s-controller
+      app.kubernetes.io/instance: {{ $instance }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Webhook (from the API server) + metrics/health (from scrapers). Source IPs
+    # for these vary by cluster, so ports are opened without a peer restriction.
+    - ports:
+        - port: {{ .Values.webhook.port }}
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+        - port: 8081
+          protocol: TCP
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Kubernetes API server and external HTTPS (CPI) — both on 443.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+    # Dispatcher invokes and polls dynamically managed runtime Pods.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchExpressions:
+              - key: kognition.dev/agent
+                operator: Exists
+      ports:
+        - port: 8080
+          protocol: TCP
+    {{- if .Values.workloadIdentityStatus.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ required "workloadIdentityStatus.runtimeNamespace is required" .Values.workloadIdentityStatus.runtimeNamespace | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: kognition
+            matchExpressions:
+              - key: kognition.dev/agent
+                operator: Exists
+      ports:
+        - port: 8097
+          protocol: TCP
+    {{- end }}
+    {{- if .Values.memoryService.enabled }}
+    # MemoryClaim provisioning and controller-side memory lifecycle calls use
+    # the release-local memory service rather than public egress.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: memory-service
+              app.kubernetes.io/instance: {{ $instance }}
+      ports:
+        - port: 8090
+          protocol: TCP
+    {{- end }}
+    {{- if $knowledgeGateway.enabled }}
+    {{- $providerNetworkPolicy := required "knowledgeGateway.provider.networkPolicy is required" $knowledgeGateway.provider.networkPolicy }}
+    # Provider-backed cleanup calls CPI directly from the controller.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- required "knowledgeGateway.provider.networkPolicy.namespaceSelector is required" $providerNetworkPolicy.namespaceSelector | toYaml | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- required "knowledgeGateway.provider.networkPolicy.podSelector is required" $providerNetworkPolicy.podSelector | toYaml | nindent 14 }}
+      ports:
+        - port: {{ default 9443 $knowledgeGateway.provider.port }}
+          protocol: TCP
+    {{- end }}
+    # Tool reconciliation validates explicitly approved private endpoints.
+    # Keep this list identical to the Tool Gateway's private egress allowlist.
+    {{- range $index, $rule := $toolGatewayPrivateEgress }}
+    {{- $namespaceSelector := required (printf "toolGateway.privateEgress[%d].namespaceSelector is required" $index) $rule.namespaceSelector }}
+    {{- $podSelector := required (printf "toolGateway.privateEgress[%d].podSelector is required" $index) $rule.podSelector }}
+    {{- $ports := required (printf "toolGateway.privateEgress[%d].ports is required" $index) $rule.ports }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $podSelector | nindent 14 }}
+      ports:
+        {{- range $port := $ports }}
+        - port: {{ $port }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    # Model reconciliation validates explicitly approved private providers.
+    # Keep this list identical to the Model Gateway's private egress allowlist.
+    {{- range $index, $rule := $modelGatewayPrivateEgress }}
+    {{- $namespaceSelector := required (printf "modelGateway.privateEgress[%d].namespaceSelector is required" $index) $rule.namespaceSelector }}
+    {{- $podSelector := required (printf "modelGateway.privateEgress[%d].podSelector is required" $index) $rule.podSelector }}
+    {{- $ports := required (printf "modelGateway.privateEgress[%d].ports is required" $index) $rule.ports }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $podSelector | nindent 14 }}
+      ports:
+        {{- range $port := $ports }}
+        - port: {{ $port }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}

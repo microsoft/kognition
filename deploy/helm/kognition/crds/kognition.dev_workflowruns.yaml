@@ -1,0 +1,496 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: workflowruns.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: WorkflowRun
+    listKind: WorkflowRunList
+    plural: workflowruns
+    singular: workflowrun
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.workflowRef.name
+      name: Workflow
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.activeStep
+      name: Active
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: WorkflowRun represents a single execution of a Workflow.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: WorkflowRunSpec defines the desired state of a WorkflowRun.
+            properties:
+              input:
+                description: Input is the initial input for the workflow.
+                type: string
+              parameters:
+                additionalProperties:
+                  type: string
+                description: Parameters are runtime parameters passed to the workflow.
+                type: object
+              workflowRef:
+                description: WorkflowRef references the Workflow to execute.
+                properties:
+                  name:
+                    description: Name is the name of the referenced resource.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - workflowRef
+            type: object
+          status:
+            description: WorkflowRunStatus describes the observed state of a WorkflowRun.
+            properties:
+              activeStep:
+                description: ActiveStep is the name of the currently executing step.
+                type: string
+              activeSteps:
+                description: ActiveSteps lists the names of concurrently executing
+                  steps.
+                items:
+                  type: string
+                type: array
+              approvalRecords:
+                description: |-
+                  ApprovalRecords is the audit log of approve/reject decisions recorded
+                  against this run's approval gates.
+                items:
+                  description: |-
+                    WorkflowApprovalRecord captures a single approve/reject decision against an
+                    approval gate, including who made it and when.
+                  properties:
+                    approver:
+                      type: string
+                    comment:
+                      type: string
+                    decision:
+                      type: string
+                    step:
+                      type: string
+                    timestamp:
+                      type: string
+                  required:
+                  - decision
+                  - step
+                  - timestamp
+                  type: object
+                type: array
+              completedSteps:
+                description: CompletedSteps lists the names of steps that have finished.
+                items:
+                  type: string
+                type: array
+              completionTime:
+                description: CompletionTime is when the run completed.
+                format: date-time
+                type: string
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              output:
+                description: Output is the final output of the workflow.
+                type: string
+              phase:
+                description: Phase is the current lifecycle phase.
+                type: string
+              snapshotSpec:
+                description: |-
+                  SnapshotSpec is the resolved WorkflowSpec snapshotted on first execution.
+                  Used to continue execution if the parent Workflow template is deleted.
+                properties:
+                  approvalGates:
+                    description: ApprovalGates define manual approval checkpoints
+                      before selected steps.
+                    items:
+                      description: WorkflowApprovalGate pauses execution on a specific
+                        edge until approved.
+                      properties:
+                        from:
+                          description: From is the source step of the edge requiring
+                            approval.
+                          type: string
+                        requiredApprovers:
+                          description: |-
+                            RequiredApprovers is the minimum number of distinct approvers needed
+                            to open this gate. Zero or 1 means a single approval suffices.
+                          format: int32
+                          type: integer
+                        timeout:
+                          description: |-
+                            Timeout is the maximum duration (e.g. "30m", "2h") the gate may remain
+                            pending before being auto-rejected. Empty means no timeout.
+                          type: string
+                        to:
+                          description: To is the destination step of the edge requiring
+                            approval.
+                          type: string
+                      required:
+                      - from
+                      - to
+                      type: object
+                    type: array
+                  budgets:
+                    description: Budgets enforce workflow-level resource limits.
+                    properties:
+                      maxDuration:
+                        description: MaxDuration is the maximum wall-clock time (e.g.
+                          "30m").
+                        type: string
+                      maxIterations:
+                        description: MaxIterations is the maximum number of step iterations.
+                        format: int32
+                        type: integer
+                      maxTokens:
+                        description: MaxTokens is the maximum total tokens for the
+                          workflow.
+                        format: int64
+                        type: integer
+                      maxTokensPerCycle:
+                        description: MaxTokensPerCycle is the maximum tokens per iteration
+                          cycle.
+                        format: int64
+                        type: integer
+                    type: object
+                  continueOnError:
+                    description: |-
+                      ContinueOnError allows the workflow to continue executing remaining parallel steps
+                      when a step fails, rather than failing immediately.
+                    type: boolean
+                  edges:
+                    description: Edges defines directed transitions between steps.
+                    items:
+                      description: WorkflowEdge defines a directed transition between
+                        workflow steps.
+                      properties:
+                        condition:
+                          description: Condition is a CEL expression for conditional
+                            transitions.
+                          type: string
+                        from:
+                          description: From is the source step name.
+                          type: string
+                        to:
+                          description: To is the destination step name.
+                          type: string
+                      required:
+                      - from
+                      - to
+                      type: object
+                    type: array
+                  emergent:
+                    description: Emergent config enables planner-driven DAG mutation
+                      with bounded budgets.
+                    properties:
+                      budgets:
+                        description: Budgets bounds planner-driven DAG mutations.
+                        properties:
+                          maxCost:
+                            description: MaxCost is the maximum cost budget (e.g.
+                              "$0.50").
+                            type: string
+                          maxSteps:
+                            description: MaxSteps is the maximum number of emergent
+                              steps the planner may add.
+                            format: int32
+                            type: integer
+                          maxTokens:
+                            description: MaxTokens is the maximum tokens the planner
+                              may spend on emergent steps.
+                            format: int64
+                            type: integer
+                        type: object
+                      enabled:
+                        description: Enabled activates emergent behavior.
+                        type: boolean
+                    type: object
+                  entryPoint:
+                    description: EntryPoint is the name of the first step.
+                    type: string
+                  failFast:
+                    description: FailFast causes the workflow to cancel all pending
+                      steps immediately when any step fails.
+                    type: boolean
+                  historyLimit:
+                    description: |-
+                      HistoryLimit is the maximum number of completed WorkflowRuns to retain.
+                      0 (default) means no limit.
+                    format: int32
+                    type: integer
+                  maxConcurrentRuns:
+                    description: |-
+                      MaxConcurrentRuns limits the number of WorkflowRuns that may execute
+                      concurrently for this Workflow. 0 (default) means unlimited.
+                    format: int32
+                    type: integer
+                  maxParallelSteps:
+                    description: |-
+                      MaxParallelSteps limits the number of steps that can run concurrently.
+                      0 (default) means unlimited parallelism.
+                    format: int32
+                    type: integer
+                  memoryClaim:
+                    description: |-
+                      MemoryClaim, when set, causes the WorkflowRunReconciler to materialize a
+                      per-run MemoryClaim shared across every step in the run.
+                    properties:
+                      accessMode:
+                        description: AccessMode is the requested access mode for the
+                          claim.
+                        type: string
+                      memoryClassName:
+                        description: MemoryClassName references the MemoryClass that
+                          backs the claim.
+                        type: string
+                    required:
+                    - memoryClassName
+                    type: object
+                  memoryRetentionPolicy:
+                    description: |-
+                      MemoryRetentionPolicy controls the fate of the per-run MemoryClaim when
+                      the WorkflowRun reaches a terminal phase. Defaults to Delete.
+                    enum:
+                    - Delete
+                    - Retain
+                    type: string
+                  parameters:
+                    additionalProperties:
+                      type: string
+                    description: Parameters are user-supplied key-value pairs available
+                      to step input templates.
+                    type: object
+                  steps:
+                    description: Steps defines the workflow steps (agent invocations).
+                    items:
+                      description: |-
+                        WorkflowStep defines a single step in a workflow DAG.
+                        Steps are pure execution nodes; all topology is expressed through Edges.
+                      properties:
+                        agentRef:
+                          description: |-
+                            AgentRef references the Agent to invoke for this step.
+                            Required when type="agent"; optional when type="tool" (acts as the
+                            identity principal for ToolGrant evaluation when present).
+                          properties:
+                            name:
+                              description: Name is the name of the referenced resource.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        condition:
+                          description: |-
+                            Condition is a CEL expression that gates step dispatch.
+                            If present and evaluates to false, the step is set to Skipped.
+                          type: string
+                        continueOnError:
+                          description: ContinueOnError allows this step to fail without
+                            failing the workflow.
+                          type: boolean
+                        input:
+                          description: Input is the input to the agent for this step.
+                          type: string
+                        memoryClaim:
+                          description: MemoryClaim overrides the workflow-level MemoryClaim
+                            for this step.
+                          properties:
+                            accessMode:
+                              description: AccessMode is the requested access mode
+                                for the claim.
+                              type: string
+                            memoryClassName:
+                              description: MemoryClassName references the MemoryClass
+                                that backs the claim.
+                              type: string
+                          required:
+                          - memoryClassName
+                          type: object
+                        name:
+                          description: Name is the unique step identifier within this
+                            workflow.
+                          type: string
+                        retry:
+                          description: Retry configures retry behavior for this step.
+                          properties:
+                            backoff:
+                              description: Backoff is the backoff duration between
+                                retries (e.g. "10s").
+                              type: string
+                            backoffMultiplier:
+                              description: BackoffMultiplier scales backoff exponentially
+                                per attempt. Default 2.0.
+                              type: number
+                            maxAttempts:
+                              description: |-
+                                MaxAttempts is the maximum total number of attempts (initial + retries).
+                                Values <= 1 disable retry; the step is attempted at most once.
+                              format: int32
+                              type: integer
+                            maxBackoff:
+                              description: MaxBackoff caps the computed backoff duration
+                                (e.g. "1m").
+                              type: string
+                          type: object
+                        timeout:
+                          description: Timeout is the maximum duration for this step
+                            (e.g. "5m").
+                          type: string
+                        toolRef:
+                          description: |-
+                            ToolRef references the Tool to invoke for this step.
+                            Required when type="tool"; must be empty when type="agent".
+                          properties:
+                            name:
+                              description: Name is the name of the referenced resource.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type:
+                          description: Type selects the dispatch mechanism for this
+                            step. Defaults to "agent".
+                          enum:
+                          - agent
+                          - tool
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                required:
+                - steps
+                type: object
+              startTime:
+                description: StartTime is when the run started.
+                format: date-time
+                type: string
+              stepStatuses:
+                description: StepStatuses reports the status of individual workflow
+                  steps.
+                items:
+                  description: WorkflowStepStatus reports the status of an individual
+                    workflow step.
+                  properties:
+                    attempts:
+                      description: Attempts is the number of execution attempts for
+                        this step.
+                      format: int32
+                      type: integer
+                    name:
+                      description: Name is the step identifier.
+                      type: string
+                    nextRetryAt:
+                      description: NextRetryAt is the time at which the next retry
+                        is eligible to dispatch.
+                      format: date-time
+                      type: string
+                    output:
+                      description: Output is the step's output.
+                      type: string
+                    phase:
+                      description: Phase is the step's current phase.
+                      type: string
+                    startedAt:
+                      description: StartedAt is the time the current attempt started.
+                      format: date-time
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,74 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Simple Agent Sample
+# Minimal viable deployment against Azure AI Foundry:
+#   ModelClass (foundry) + Model (gpt-6-luna) + Agent (hello-agent).
+#
+# Prerequisite (applied separately by the cluster operator):
+#   - SecretRef `foundry-creds` in the `default` namespace (Azure AD
+#     client-secret credentials for Foundry). Apply the repo-root
+#     `foundry-creds.yaml` — it is gitignored and holds the real values
+#     from your `.env` file. Do NOT redeclare it here.
+---
+kind: ModelClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: foundry
+spec:
+  provisioner: foundry
+  latencyClass: low
+  costTier: standard
+  contextWindow: 128000
+  modalities:
+    - text
+
+---
+kind: Model
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: gpt-6-luna
+  namespace: default
+spec:
+  className: foundry
+  modelID: gpt-6-luna
+  provider: foundry
+  endpoint: https://ai-foundry-do-titi.cognitiveservices.azure.com
+  capabilities:
+    - chat
+    - tool-calling
+  credentialRef:
+    name: foundry-creds
+  parameters:
+    apiVersion: "2024-12-01-preview"
+
+---
+kind: ModelGrant
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: hello-agent-gpt-6-luna
+  namespace: default
+spec:
+  agentRef:
+    name: hello-agent
+  modelRef:
+    name: gpt-6-luna
+
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: hello-agent
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a helpful assistant powered by Azure AI Foundry.
+      Answer questions concisely and accurately.
+      When unsure, say so rather than making things up.
+  runtime:
+    class: default
+    timeout: 30s
+    maxTokens: 4096

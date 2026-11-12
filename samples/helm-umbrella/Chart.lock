@@ -1,0 +1,9 @@
+dependencies:
+- name: kognition
+  repository: file://../../deploy/helm/kognition
+  version: 0.1.0
+- name: kognition-governance
+  repository: file://../helm-governance
+  version: 0.1.0
+digest: sha256:a2e33c2006f95b072657fe6b624bd95dd68c78ed94ecb480e73395926d0aa91a
+generated: "2026-06-26T10:06:15.752824-03:00"

@@ -1,0 +1,150 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Explicit model authorization for sample Agents. ModelGrant is intentionally
+# one Agent/model pair so samples exercise the same fail-closed policy as a
+# production deployment.
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-analyze-dataset-agent-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: analyze-dataset-agent}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-analyze-dataset-publisher-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: analyze-dataset-publisher}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-analyze-dataset-researcher-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: analyze-dataset-researcher}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-analyze-dataset-writer-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: analyze-dataset-writer}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-azure-docs-agent-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: azure-docs-agent}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-foundry-hello-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: foundry-hello}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-kognition-docs-agent-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: kognition-docs-agent}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-memory-explorer-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: memory-explorer}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-memory-explorer-peer-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: memory-explorer-peer}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-monitored-agent-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: monitored-agent}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-notes-agent-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: notes-agent}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-openai-hello-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: openai-hello}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-orbital-docs-agent-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: orbital-docs-agent}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-research-agent-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: research-agent}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-researcher-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: researcher}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-reviewer-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: reviewer}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-s3-docs-agent-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: s3-docs-agent}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-summarizer-agent-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: summarizer-agent}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-tool-user-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: tool-user}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-wfdemo-classifier-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: wfdemo-classifier}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-wfdemo-llm-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: wfdemo-llm}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-write-blog-post-agent-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: write-blog-post-agent}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-write-blog-post-publisher-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: write-blog-post-publisher}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-write-blog-post-researcher-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: write-blog-post-researcher}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-write-blog-post-writer-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: write-blog-post-writer}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-writer-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: writer}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-demo-researcher-gpt-6-luna, namespace: kognition-demo}
+spec: {agentRef: {name: researcher}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-demo-reviewer-gpt-6-luna, namespace: kognition-demo}
+spec: {agentRef: {name: reviewer}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-demo-writer-gpt-6-luna, namespace: kognition-demo}
+spec: {agentRef: {name: writer}, modelRef: {name: gpt-6-luna}}

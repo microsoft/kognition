@@ -1,0 +1,183 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- define "kognition.ciliumProbeIngress" -}}
+ingress:
+  - fromEntities:
+      - host
+      - remote-node
+      - health
+    toPorts:
+      - ports:
+          - port: {{ .port | quote }}
+            protocol: TCP
+{{- end }}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.ciliumHostProbeIngress }}
+{{- $instance := .Release.Name }}
+{{- if .Values.postgres.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-postgres-probes
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/component: postgres
+      k8s:app.kubernetes.io/instance: {{ $instance }}
+  {{- include "kognition.ciliumProbeIngress" (dict "port" 5432) | nindent 2 }}
+{{- end }}
+{{- if .Values.kbPgvector.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-kb-pgvector-probes
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/component: kb-pgvector
+      k8s:app.kubernetes.io/instance: {{ $instance }}
+  {{- include "kognition.ciliumProbeIngress" (dict "port" 5432) | nindent 2 }}
+{{- end }}
+{{- if .Values.memoryService.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-memory-service-probes
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/component: memory-service
+      k8s:app.kubernetes.io/instance: {{ $instance }}
+  {{- include "kognition.ciliumProbeIngress" (dict "port" .Values.memoryService.service.port) | nindent 2 }}
+{{- end }}
+{{- if and (eq .Values.mode "kubernetes") .Values.memoryService.enabled .Values.memoryPolicyGateway.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-memory-policy-gateway-probes
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/component: memory-policy-gateway
+      k8s:app.kubernetes.io/instance: {{ $instance }}
+  {{- include "kognition.ciliumProbeIngress" (dict "port" 8091) | nindent 2 }}
+{{- end }}
+{{- if and (eq .Values.mode "kubernetes") .Values.toolGateway.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-tool-gateway-probes
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/component: tool-gateway
+      k8s:app.kubernetes.io/instance: {{ $instance }}
+  {{- include "kognition.ciliumProbeIngress" (dict "port" .Values.toolGateway.service.port) | nindent 2 }}
+{{- end }}
+{{- if and (eq .Values.mode "kubernetes") .Values.agentCommunicationGateway.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-agent-communication-gateway-probes
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/component: agent-communication-gateway
+      k8s:app.kubernetes.io/instance: {{ $instance }}
+  {{- include "kognition.ciliumProbeIngress" (dict "port" 8094) | nindent 2 }}
+{{- end }}
+{{- if and (eq .Values.mode "kubernetes") .Values.modelGateway.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-model-gateway-probes
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/component: model-gateway
+      k8s:app.kubernetes.io/instance: {{ $instance }}
+  {{- include "kognition.ciliumProbeIngress" (dict "port" .Values.modelGateway.service.port) | nindent 2 }}
+{{- end }}
+{{- if and (eq .Values.mode "kubernetes") .Values.knowledgeGateway.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-knowledge-gateway-probes
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/component: knowledge-gateway
+      k8s:app.kubernetes.io/instance: {{ $instance }}
+  {{- include "kognition.ciliumProbeIngress" (dict "port" .Values.knowledgeGateway.service.port) | nindent 2 }}
+{{- end }}
+{{- if eq .Values.mode "kubernetes" }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-k8s-controller-probes
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/component: k8s-controller
+      k8s:app.kubernetes.io/instance: {{ $instance }}
+  {{- include "kognition.ciliumProbeIngress" (dict "port" 8081) | nindent 2 }}
+{{- end }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-runtime-probes
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/managed-by: kognition
+  {{- include "kognition.ciliumProbeIngress" (dict "port" 8080) | nindent 2 }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-kube-apiserver-egress
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/component: k8s-controller
+      k8s:app.kubernetes.io/instance: {{ $instance }}
+  egress:
+    - toEntities:
+        - kube-apiserver
+{{- if and (eq .Values.mode "kubernetes") .Values.knowledgeGateway.enabled }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "kognition.fullname" . }}-knowledge-gateway-kube-apiserver-egress
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/component: knowledge-gateway
+      k8s:app.kubernetes.io/instance: {{ $instance }}
+  egress:
+    - toEntities:
+        - kube-apiserver
+{{- end }}
+{{- end }}

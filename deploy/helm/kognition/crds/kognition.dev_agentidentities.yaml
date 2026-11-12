@@ -1,0 +1,106 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: agentidentities.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: AgentIdentity
+    listKind: AgentIdentityList
+    plural: agentidentities
+    singular: agentidentity
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.agentRef.name
+      name: Agent
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: AgentIdentity provides workload identity (SPIFFE) for an agent.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: AgentIdentitySpec defines the identity configuration.
+            properties:
+              agentRef:
+                description: AgentRef references the agent this identity belongs to.
+                properties:
+                  name:
+                    description: Name is the name of the referenced resource.
+                    type: string
+                required:
+                - name
+                type: object
+              spiffeID:
+                description: SPIFFEID is the workload identity URI.
+                type: string
+            required:
+            - agentRef
+            type: object
+          status:
+            description: AgentIdentityStatus describes the observed state of an identity.
+            properties:
+              phase:
+                description: Phase is the current lifecycle phase.
+                type: string
+              workloadIdentity:
+                properties:
+                  agentUID:
+                    type: string
+                  spiffeID:
+                    type: string
+                  trustDomain:
+                    type: string
+                  notBefore:
+                    format: date-time
+                    type: string
+                  expiresAt:
+                    format: date-time
+                    type: string
+                  sourceGeneration:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  ready:
+                    type: boolean
+                  reason:
+                    type: string
+                required:
+                - ready
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

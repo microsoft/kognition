@@ -1,0 +1,20 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- /*
+Rendered whenever Postgres-backed components are enabled. Consumed by the
+migrations Job (every install/upgrade, idempotent), which is the sole path
+for applying schema to both in-chart and external Postgres.
+*/ -}}
+{{- if or (eq .Values.mode "standalone") (eq .Values.memoryService.backendType "pgvector") (and (eq .Values.mode "kubernetes") .Values.memoryService.enabled .Values.memoryPolicyGateway.enabled) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kognition.fullname" . }}-migrations
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+data:
+  {{- (.Files.Glob "migrations/*").AsConfig | nindent 2 }}
+{{- end }}

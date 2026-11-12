@@ -1,0 +1,19 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: v2
+name: kognition-platform
+description: Umbrella Helm chart for full Kognition platform deployment with multiple pipelines
+type: application
+version: 1.0.0
+appVersion: "0.1.0"
+dependencies:
+  - name: kognition
+    version: ">=0.1.0"
+    repository: "file://../../deploy/helm/kognition"
+    condition: platform.enabled
+  - name: kognition-governance
+    version: "0.1.0"
+    repository: "file://../helm-governance"
+    alias: governance
+    condition: governance.enabled

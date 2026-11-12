@@ -1,0 +1,220 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if eq .Values.mode "kubernetes" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kognition.fullname" . }}-controller
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-controller
+rules:
+  - apiGroups: ["kognition.dev"]
+    resources: ["memoryclasses", "memoryclasses/status", "knowledgebaseclasses", "knowledgebaseclasses/status", "modelclasses", "modelclasses/status", "toolclasses", "toolclasses/status", "autonomyclasses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["knowledgebindingrecords"]
+    verbs: ["get", "create"]
+  {{- if .Values.knowledgeGateway.enabled }}
+  - apiGroups: ["knowledge.kognition.dev"]
+    resources: ["knowledgebaseclasses"]
+    verbs: ["get"]
+  {{- end }}
+{{- range $namespace := (include "kognition.controllerNamespaces" . | fromJsonArray) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kognition.fullname" $ }}-controller
+  namespace: {{ $namespace | quote }}
+  labels:
+    {{- include "kognition.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: k8s-controller
+rules:
+  - apiGroups: ["kognition.dev"]
+    resources:
+      - agents
+      - agents/status
+      - agentinstances
+      - agentinstances/status
+      - agentjobs
+      - agentjobs/status
+      - agentpolicies
+      - agentpolicies/status
+      - cognitiveadmissionpolicies
+      - cognitivequotas
+      - cognitivequotas/status
+      - cognitivelimitranges
+      - workspaces
+      - workspaces/status
+      - agentidentities
+      - agentidentities/status
+      - agentroles
+      - agentrolebindings
+      - agentcommunicationpolicies
+      - memoryclaims
+      - memoryclaims/status
+      - memorygrants
+      - memoryvolumes
+      - memoryvolumes/status
+      - memories
+      - memories/status
+      - memoryrecords
+      - memoryrecords/status
+      - knowledgebases
+      - knowledgebases/status
+      - knowledgebaseclaims
+      - knowledgebaseclaims/status
+      - knowledgebaseindexruns
+      - knowledgebaseindexruns/status
+      - knowledgebaseindexschedules
+      - knowledgebaseindexschedules/status
+      - models
+      - models/status
+      - modelgrants
+      - modelautoscalers
+      - modelautoscalers/status
+      - agentautoscalers
+      - agentautoscalers/status
+      - secretrefs
+      - secretrefs/status
+      - tools
+      - tools/status
+      - toolgrants
+      - toolgrants/status
+      - toolinvocationruns
+      - toolinvocationruns/status
+      - workflows
+      - workflows/status
+      - workflowruns
+      - workflowruns/status
+      - evaluations
+      - evaluations/status
+      - evaluationruns
+      - evaluationruns/status
+      - evaluationdatasets
+      - evaluationdatasets/status
+      - approvaldecisions
+      - approvaldecisions/status
+      - autonomyreviews
+      - autonomyreviews/status
+      - trustprofiles
+      - trustprofileindices
+      - trustprofiles/status
+      - agentservices
+      - agentservices/status
+      - intentgateways
+      - intentgateways/status
+      - prompts
+      - prompts/status
+      - solutions
+      - solutions/status
+      - crossnamespacegrants
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["modelinvocationprofiles"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["runtimeapprovals"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["runtimeapprovals/status"]
+    verbs: ["get", "update"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["runtimeapprovaltombstones"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- if $.Values.knowledgeGateway.enabled }}
+  # Uncached reads used to bind provider ingestion to immutable launch state.
+  - apiGroups: ["knowledge.kognition.dev"]
+    resources: ["knowledgebases"]
+    verbs: ["get"]
+  - apiGroups: [{{ required "knowledgeGateway.provider.configuration.apiGroup is required" $.Values.knowledgeGateway.provider.configuration.apiGroup | quote }}]
+    resources: [{{ required "knowledgeGateway.provider.configuration.resource is required" $.Values.knowledgeGateway.provider.configuration.resource | quote }}]
+    verbs: ["get"]
+  {{- end }}
+  - apiGroups: ["kognition.dev"]
+    resources: ["runtimeapprovalquotatickets"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  # Core resources needed by the controller
+  - apiGroups: [""]
+    resources:
+      - events
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  {{- if eq $namespace $.Release.Namespace }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ default (printf "%s-runtime-auth" (include "kognition.fullname" $)) $.Values.runtimeAuth.existingSecret | quote }}
+      {{- if $.Values.knowledgeGateway.enabled }}
+      - {{ required "knowledgeGateway.tls.secretName is required" $.Values.knowledgeGateway.tls.secretName | quote }}
+      - {{ required "knowledgeGateway.runtimeTLS.secretName is required" $.Values.knowledgeGateway.runtimeTLS.secretName | quote }}
+      {{- end }}
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["update"]
+  {{- else }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch", "delete"]
+  {{- end }}
+  - apiGroups: [""]
+    resources:
+      - configmaps
+    verbs: ["get", "list", "watch", "create", "delete"]
+  {{- if ne $namespace $.Release.Namespace }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["kognition-knowledge-gateway-ca"]
+    verbs: ["update"]
+  - apiGroups: [""]
+    resources:
+      - pods
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources:
+      - pods/attach
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources:
+      - services
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Deployments for agent runtime pods
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Namespace-local runtime NetworkPolicies for dynamically created agents.
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - networkpolicies
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Jobs for KnowledgeBase ingestion runs
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
+  # Leader election
+  - apiGroups: ["coordination.k8s.io"]
+    resources:
+      - leases
+    verbs: ["get", "create", "update"]
+{{- end }}
+{{- end }}

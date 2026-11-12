@@ -1,0 +1,324 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: tools.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: Tool
+    listKind: ToolList
+    plural: tools
+    singular: tool
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.protocol
+      name: Protocol
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Tool declares an executable tool that agents can invoke.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ToolSpec defines the desired state of a Tool.
+            properties:
+              className:
+                description: ClassName references the ToolClass provisioner.
+                type: string
+              description:
+                description: Description is a human-readable description of the tool.
+                type: string
+              digestPin:
+                description: DigestPin is an optional pinned tool digest in "sha256:<hex>"
+                  format.
+                type: string
+              endpoint:
+                description: Endpoint is the tool's network endpoint (URL or address).
+                type: string
+              executionPolicy:
+                description: ExecutionPolicy controls gateway-enforced resilience
+                  behavior.
+                properties:
+                  circuitBreaker:
+                    description: ToolCircuitBreaker opens after transient failures
+                      until cooldown expires.
+                    properties:
+                      cooldown:
+                        type: string
+                      failureThreshold:
+                        format: int32
+                        type: integer
+                    type: object
+                  idempotent:
+                    type: boolean
+                  maxConcurrent:
+                    format: int32
+                    type: integer
+                  retryMaxAttempts:
+                    format: int32
+                    type: integer
+                  timeout:
+                    type: string
+                type: object
+              healthProbe:
+                description: HealthProbe configures periodic health checks for the
+                  tool endpoint.
+                properties:
+                  command:
+                    description: Command is the argv executed inside the tool sandbox
+                      for exec probes.
+                    items:
+                      type: string
+                    type: array
+                  failureThreshold:
+                    description: FailureThreshold is consecutive failures before marking
+                      Degraded.
+                    format: int32
+                    type: integer
+                  interval:
+                    description: Interval is the period between probes (Go duration,
+                      e.g. "30s").
+                    type: string
+                  successThreshold:
+                    description: SuccessThreshold is consecutive successes before
+                      marking Ready.
+                    format: int32
+                    type: integer
+                  timeout:
+                    description: Timeout is the per-probe timeout (Go duration, e.g.
+                      "5s").
+                    type: string
+                  type:
+                    description: Type selects the probe mechanism.
+                    enum:
+                    - mcp-ping
+                    - http-get
+                    - tcp
+                    - exec
+                    type: string
+                required:
+                - type
+                type: object
+                x-kubernetes-validations:
+                - message: healthProbe.command is required and must contain only non-empty
+                    arguments when type is exec
+                  rule: self.type != 'exec' || (has(self.command) && size(self.command)
+                    > 0 && self.command.all(arg, size(arg) > 0))
+                - message: healthProbe.command is only valid when type is exec
+                  rule: self.type == 'exec' || !has(self.command) || size(self.command)
+                    == 0
+              inputSchema:
+                description: |-
+                  InputSchema defines the expected input as a JSON Schema.
+                  Deprecated: use Schema.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              metadata:
+                additionalProperties:
+                  type: string
+                description: Metadata contains additional implementation metadata
+                  for the tool.
+                type: object
+              protocol:
+                description: Protocol is the tool interface protocol. Defaults to
+                  MCP.
+                enum:
+                - MCP
+                - OpenAPI
+                - browser
+                - shell
+                type: string
+              sandbox:
+                description: Sandbox configures the tool's execution sandbox.
+                properties:
+                  cpuMilli:
+                    description: CPUMilli is the CPU limit in millicores.
+                    format: int64
+                    type: integer
+                  memoryMB:
+                    description: MemoryMB is the memory limit in megabytes.
+                    format: int64
+                    type: integer
+                  networkPolicy:
+                    description: NetworkPolicy restricts network access ("none", "egress-only",
+                      "full").
+                    type: string
+                  timeout:
+                    description: |-
+                      Timeout is the maximum wall-clock duration for one sandboxed invocation.
+                      Uses Go duration syntax (for example, "2s", "500ms").
+                    type: string
+                type: object
+              schema:
+                description: |-
+                  Schema defines the tool contract. For OpenAPI tools this is the source
+                  OpenAPI document used for MCP adaptation.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              secretRefs:
+                description: |-
+                  SecretRefs references Secrets containing tool credentials.
+                  Each entry specifies a Secret name and a key within that Secret.
+                items:
+                  description: ToolSecretRef references a Secret by name and a specific
+                    key within it.
+                  properties:
+                    key:
+                      description: Key is the key within the Secret to use.
+                      type: string
+                    name:
+                      description: Name is the name of the Secret resource.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+              signature:
+                description: Signature is a cosign-compatible supply-chain signature
+                  for verification.
+                type: string
+              trusted:
+                description: Trusted enables in-process execution for low-latency
+                  trusted tools.
+                type: boolean
+            required:
+            - className
+            type: object
+          status:
+            description: ToolStatus describes the observed state of a Tool.
+            properties:
+              compiledMCP:
+                description: CompiledMCP is the invocation definition produced for
+                  an available Tool.
+                properties:
+                  description:
+                    type: string
+                  endpoint:
+                    type: string
+                  inputSchema:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                  name:
+                    type: string
+                  transport:
+                    description: Transport defines the communication protocol between
+                      agent and tool.
+                    type: string
+                required:
+                - name
+                - transport
+                type: object
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastHealthCheck:
+                description: LastHealthCheck is the RFC3339 timestamp of the latest
+                  evaluation.
+                type: string
+              observedDigest:
+                description: ObservedDigest is the endpoint contract digest used for
+                  pin verification.
+                type: string
+              observedSpecDigest:
+                description: ObservedSpecDigest identifies the complete Tool spec
+                  evaluated by the controller.
+                type: string
+              phase:
+                description: Phase is the current lifecycle phase.
+                type: string
+              ready:
+                description: Ready indicates the tool is provisioned and responding.
+                type: boolean
+              resolvedProtocol:
+                description: ResolvedProtocol is the protocol selected after adaptation.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

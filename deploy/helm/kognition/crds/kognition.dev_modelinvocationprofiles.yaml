@@ -1,0 +1,96 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: modelinvocationprofiles.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: ModelInvocationProfile
+    listKind: ModelInvocationProfileList
+    plural: modelinvocationprofiles
+    singular: modelinvocationprofile
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Operation
+          type: string
+          jsonPath: .spec.operation
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required: [operation]
+              x-kubernetes-validations:
+                - rule: self == oldSelf
+                  message: invocation profile spec is immutable; create a new revision
+                - rule: "self.operation != 'chat' || (has(self.defaults) && has(self.defaults.maxCompletionTokens))"
+                  message: chat profiles require a completion-token default
+              properties:
+                operation:
+                  type: string
+                  enum: [chat, embedding]
+                defaults:
+                  type: object
+                  properties:
+                    maxCompletionTokens:
+                      type: integer
+                      format: int64
+                      minimum: 1
+                      maximum: 2147483647
+                    temperature:
+                      type: number
+                      minimum: 0
+                      maximum: 2
+                    reasoning:
+                      type: string
+                      enum: [providerDefault, disabled, required]
+                    dimensions:
+                      type: integer
+                      format: int64
+                      minimum: 1
+                      maximum: 65536
+                requirements:
+                  type: object
+                  properties:
+                    toolCalling:
+                      type: string
+                      enum: [optional, required, forbidden]
+                    structuredOutput:
+                      type: string
+                      enum: [optional, required, forbidden]
+                    reasoning:
+                      type: string
+                      enum: [disabled, required]
+                limits:
+                  type: object
+                  properties:
+                    maxCompletionTokens:
+                      type: integer
+                      format: int64
+                      minimum: 1
+                      maximum: 2147483647
+                parameterHandling:
+                  type: object
+                  properties:
+                    unknown:
+                      type: string
+                      enum: [Reject]
+                    unsupported:
+                      type: string
+                      enum: [Reject]

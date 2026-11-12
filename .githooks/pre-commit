@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+set -euo pipefail
+
+# Keep this hook lightweight; commit message validation runs in commit-msg.
+# This exists to satisfy local hook setup and can host future staged-file checks.
+exit 0

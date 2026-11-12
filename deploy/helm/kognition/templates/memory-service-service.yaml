@@ -1,0 +1,23 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if .Values.memoryService.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kognition.fullname" . }}-memory-service
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-service
+spec:
+  type: {{ .Values.memoryService.service.type }}
+  ports:
+    - port: {{ .Values.memoryService.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/component: memory-service
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

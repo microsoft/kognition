@@ -1,0 +1,197 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+suite: Standalone mode rendering
+templates:
+  - templates/apiserver-deployment.yaml
+  - templates/controller-manager-deployment.yaml
+  - templates/apiserver-service.yaml
+  - templates/secret.yaml
+  - templates/postgres-statefulset.yaml
+  - templates/migrations-configmap.yaml
+  - templates/serviceaccount.yaml
+  - templates/runtime-auth-secret.yaml
+tests:
+  - it: should harden the apiserver database wait container
+    template: templates/apiserver-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+
+  - it: should harden the controller database wait container
+    template: templates/controller-manager-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+
+  # --- Standalone resources render with defaults ---
+  - it: should render apiserver deployment in standalone mode
+    template: templates/apiserver-deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-kognition-apiserver
+
+  - it: should render controller-manager deployment in standalone mode
+    template: templates/controller-manager-deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Deployment
+
+  - it: should render apiserver service in standalone mode
+    template: templates/apiserver-service.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Service
+
+  - it: should render db secret in standalone mode
+    template: templates/secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Secret
+
+  - it: should provision RuntimeApproval keys in standalone mode
+    template: templates/runtime-auth-secret.yaml
+    set:
+      runtimeAuth.create: true
+    asserts:
+      - isKind:
+          of: Secret
+      - exists:
+          path: data["runtime-approval-binding-keys.json"]
+
+  - it: should not manage an operator-provided runtime auth secret
+    template: templates/runtime-auth-secret.yaml
+    set:
+      runtimeAuth.existingSecret: platform-runtime-auth
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should not generate runtime credentials by default
+    template: templates/runtime-auth-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should use an operator-provided runtime auth secret
+    template: templates/apiserver-deployment.yaml
+    set:
+      runtimeAuth.existingSecret: platform-runtime-auth
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON
+            valueFrom:
+              secretKeyRef:
+                name: platform-runtime-auth
+                key: runtime-approval-binding-keys.json
+
+  - it: should inject RuntimeApproval keys and probe readiness
+    template: templates/apiserver-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-kognition-runtime-auth
+                key: runtime-approval-binding-keys.json
+
+  - it: should render postgres statefulset when postgres enabled
+    template: templates/postgres-statefulset.yaml
+    asserts:
+      - hasDocuments:
+          count: 3  # StatefulSet + Secret + Service
+
+  - it: should render migrations configmap when postgres enabled
+    template: templates/migrations-configmap.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+
+  - it: should render serviceaccount when create is true
+    template: templates/serviceaccount.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ServiceAccount
+
+  # --- Standalone resources do NOT render in kubernetes mode ---
+  - it: should NOT render apiserver deployment in kubernetes mode
+    template: templates/apiserver-deployment.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should NOT render controller-manager deployment in kubernetes mode
+    template: templates/controller-manager-deployment.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should NOT render apiserver service in kubernetes mode
+    template: templates/apiserver-service.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should render db secret for the default kubernetes memory policy stack
+    template: templates/secret.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: should render postgres for the default kubernetes memory policy stack
+    template: templates/postgres-statefulset.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: should render migrations for the default kubernetes memory policy stack
+    template: templates/migrations-configmap.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - hasDocuments:
+          count: 1

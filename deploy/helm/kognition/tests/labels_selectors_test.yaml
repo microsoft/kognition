@@ -1,0 +1,128 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+suite: Labels and selectors alignment
+templates:
+  - templates/k8s-controller-deployment.yaml
+  - templates/apiserver-deployment.yaml
+  - templates/controller-manager-deployment.yaml
+  - templates/webhook-service.yaml
+  - templates/apiserver-service.yaml
+  - templates/postgres-statefulset.yaml
+tests:
+  # Regression Bug #1: kognition.labels must include app.kubernetes.io/name
+  - it: k8s-controller deployment should have app.kubernetes.io/name in metadata labels
+    template: templates/k8s-controller-deployment.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: kognition
+
+  - it: apiserver deployment should have app.kubernetes.io/name in metadata labels
+    template: templates/apiserver-deployment.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: kognition
+
+  - it: controller-manager deployment should have app.kubernetes.io/name in metadata labels
+    template: templates/controller-manager-deployment.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: kognition
+
+  # Regression Bug #2: k8s-controller should NOT have duplicate name label
+  - it: k8s-controller pod template labels should include name from kognition.labels
+    template: templates/k8s-controller-deployment.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: kognition
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: k8s-controller
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  # --- Selector/Service alignment ---
+  # k8s-controller selector matches pod template labels
+  - it: k8s-controller selector labels should be subset of pod template labels
+    template: templates/k8s-controller-deployment.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: kognition
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: k8s-controller
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  # Regression Bug #7: webhook service selector must include instance
+  - it: webhook service selector should match k8s-controller pod labels
+    template: templates/webhook-service.yaml
+    set:
+      mode: kubernetes
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: kognition
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: k8s-controller
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  # apiserver service selector matches apiserver deployment
+  - it: apiserver service selector should match apiserver pod labels
+    template: templates/apiserver-service.yaml
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: apiserver
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  # apiserver deployment selector matches pod template
+  - it: apiserver deployment selector should match pod template labels
+    template: templates/apiserver-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: apiserver
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  # controller-manager deployment selector matches pod template
+  - it: controller-manager deployment selector should match pod template labels
+    template: templates/controller-manager-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: controller-manager
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  # postgres statefulset selector matches pod template
+  - it: postgres statefulset selector should match pod template labels
+    template: templates/postgres-statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: postgres
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME

@@ -1,0 +1,44 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Workspace Sample
+#
+# Multi-tenant isolation with retention policies and supply-chain requirements.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: development
+---
+kind: Workspace
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: production
+  namespace: production
+spec:
+  displayName: Production Workspace
+  requireSignedArtifacts: true
+  retention:
+    traceTTL: 720h       # 30 days
+    auditLogTTL: 2160h   # 90 days
+    costRecordTTL: 2160h # 90 days
+    eventTTL: 168h       # 7 days
+---
+kind: Workspace
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: development
+  namespace: development
+spec:
+  displayName: Development Workspace
+  requireSignedArtifacts: false
+  retention:
+    traceTTL: 24h
+    auditLogTTL: 168h   # 7 days
+    costRecordTTL: 168h # 7 days
+    eventTTL: 24h

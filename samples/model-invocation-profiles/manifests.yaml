@@ -1,0 +1,48 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: kognition.dev/v1alpha1
+kind: ModelInvocationProfile
+metadata:
+  name: portable-chat-v1
+  namespace: default
+spec:
+  operation: chat
+  defaults:
+    maxCompletionTokens: 4096
+  limits:
+    maxCompletionTokens: 16384
+  requirements:
+    toolCalling: required
+  parameterHandling:
+    unknown: Reject
+    unsupported: Reject
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelInvocationProfile
+metadata:
+  name: nonreasoning-tools-v1
+  namespace: default
+spec:
+  operation: chat
+  defaults:
+    maxCompletionTokens: 4096
+    reasoning: disabled
+  limits:
+    maxCompletionTokens: 16384
+  requirements:
+    toolCalling: required
+    reasoning: disabled
+  parameterHandling:
+    unknown: Reject
+    unsupported: Reject
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelInvocationProfile
+metadata:
+  name: embedding-1536-v1
+  namespace: default
+spec:
+  operation: embedding
+  defaults:
+    dimensions: 1536

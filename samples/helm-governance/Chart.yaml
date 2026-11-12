@@ -1,0 +1,9 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: v2
+name: kognition-governance
+description: Helm chart for deploying Kognition governance resources (policies, quotas, RBAC, admission)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

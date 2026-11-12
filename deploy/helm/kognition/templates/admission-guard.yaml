@@ -1,0 +1,318 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if eq .Values.mode "kubernetes" }}
+{{- $profile := .Values.admissionGuard.stdioIsolationProfile }}
+{{- if not (has $profile (list "network-policy" "cilium")) }}
+{{- fail "admissionGuard.stdioIsolationProfile must be network-policy or cilium" }}
+{{- end }}
+{{- $name := printf "%s-admission-guard" (include "kognition.fullname" . | trunc 47 | trimSuffix "-") }}
+{{- $controller := include "kognition.controllerServiceAccountName" . }}
+{{- if or (eq $name $controller) (eq $name (include "kognition.serviceAccountName" .)) }}
+{{- fail "admission guard ServiceAccount must be distinct from controller and platform identities" }}
+{{- end }}
+{{- $namespaces := without (include "kognition.controllerNamespaces" . | fromJsonArray) .Release.Namespace }}
+{{- $secret := default (printf "%s-tls" $name) .Values.admissionGuard.tls.existingSecret }}
+{{- $controllerSecrets := list (default (printf "%s-runtime-auth" (include "kognition.fullname" .)) .Values.runtimeAuth.existingSecret) }}
+{{- if .Values.knowledgeGateway.enabled }}
+{{- $controllerSecrets = concat $controllerSecrets (list .Values.knowledgeGateway.tls.secretName .Values.knowledgeGateway.runtimeTLS.secretName) }}
+{{- end }}
+{{- if has $secret $controllerSecrets }}
+{{- fail "admission guard TLS Secret must not be readable by the controller" }}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: admission-guard
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      {{- if eq $profile "cilium" }}
+      annotations:
+        kognition.dev/stdio-isolation-profile: cilium
+      {{- end }}
+      labels:
+        {{- include "kognition.labels" . | nindent 8 }}
+        app.kubernetes.io/component: admission-guard
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ $name }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: admission-guard
+          image: {{ include "kognition.image" (dict "image" .Values.k8sController.image "defaultTag" .Chart.AppVersion "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.k8sController.image.pullPolicy }}
+          args:
+            - admission-guard
+            - --release-name={{ .Release.Name }}
+            - --installation-namespace={{ .Release.Namespace }}
+            - --controller-service-account={{ $controller }}
+            - --workload-namespaces={{ join "," $namespaces }}
+            - --baseline-policy-name={{ printf "%s-stdio-baseline" (include "kognition.fullname" . | trunc 48 | trimSuffix "-") }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          ports:
+            - name: https
+              containerPort: 9443
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /readyz
+              port: https
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ $secret }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: admission-guard
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: admission-guard
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - port: 9443
+          protocol: TCP
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+{{- end }}
+{{- range $namespace := $namespaces }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-stdio-baseline" (include "kognition.fullname" $ | trunc 48 | trimSuffix "-") }}
+  namespace: {{ $namespace }}
+  labels:
+    app.kubernetes.io/instance: {{ $.Release.Name | quote }}
+    {{- include "kognition.labels" $ | nindent 4 }}
+  annotations:
+    meta.helm.sh/release-name: {{ $.Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ $.Release.Namespace | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: kognition
+    matchExpressions:
+      - key: kognition.dev/stdio-invocation
+        operator: Exists
+  policyTypes: [Egress]
+  egress: []
+{{- if eq $profile "cilium" }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ printf "%s-stdio-deny" (include "kognition.fullname" $ | trunc 48 | trimSuffix "-") }}
+  namespace: {{ $namespace }}
+  labels:
+    app.kubernetes.io/instance: {{ $.Release.Name | quote }}
+    {{- include "kognition.labels" $ | nindent 4 }}
+  annotations:
+    meta.helm.sh/release-name: {{ $.Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ $.Release.Namespace | quote }}
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app.kubernetes.io/managed-by: kognition
+    matchExpressions:
+      - key: k8s:kognition.dev/stdio-invocation
+        operator: Exists
+  egressDeny:
+    - toEntities: [all]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "kognition.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "kognition.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- if not .Values.admissionGuard.tls.existingSecret }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+spec:
+  secretName: {{ $secret }}
+  duration: 8760h
+  renewBefore: 720h
+  issuerRef:
+    name: {{ $name }}
+    kind: Issuer
+  dnsNames:
+    - {{ $name }}.{{ .Release.Namespace }}.svc
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    {{- if .Values.global.aksAdmissionsEnforcerOptOut }}
+    admissions.enforcer/disabled: "true"
+    {{- end }}
+  {{- if not .Values.admissionGuard.tls.existingSecret }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s" .Release.Namespace $name | quote }}
+  {{- end }}
+webhooks:
+  {{- range $kind := list "attach" "sandbox" }}
+  - name: {{ $kind }}.guard.kognition.dev
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: Fail
+    timeoutSeconds: 5
+    matchPolicy: Equivalent
+    clientConfig:
+      {{- if $.Values.admissionGuard.tls.existingSecret }}
+      caBundle: {{ required "admissionGuard.tls.caBundle is required with an existing TLS Secret" $.Values.admissionGuard.tls.caBundle | quote }}
+      {{- end }}
+      service:
+        namespace: {{ $.Release.Namespace }}
+        name: {{ $name }}
+        path: /guard
+        port: 443
+    matchConditions:
+      {{- if eq $kind "attach" }}
+      - name: controller-identity
+        expression: {{ printf "request.userInfo.username == 'system:serviceaccount:%s:%s'" $.Release.Namespace $controller | quote }}
+      {{- else }}
+      - name: enrolled-workload-namespace
+        expression: {{ printf "request.namespace in %s" (toJson $namespaces) | quote }}
+      - name: reserved-sandbox-name
+        expression: >-
+          (has(object.metadata.name) && object.metadata.name.startsWith('kognition-stdio-invocation-')) ||
+          (has(object.metadata.generateName) && object.metadata.generateName.startsWith('kognition-stdio-invocation-')) ||
+          (oldObject != null && has(oldObject.metadata.name) && oldObject.metadata.name.startsWith('kognition-stdio-invocation-'))
+      {{- end }}
+    rules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        scope: Namespaced
+        {{- if eq $kind "attach" }}
+        operations: [CONNECT]
+        resources: [pods/attach]
+        {{- else }}
+        operations: [CREATE, UPDATE]
+        resources: [pods, pods/ephemeralcontainers]
+        {{- end }}
+  {{- end }}
+{{- end }}

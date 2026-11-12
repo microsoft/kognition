@@ -1,0 +1,7 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: v2
+name: sg05-legacy
+version: 0.1.0
+description: Isolated legacy installer acceptance fixture

@@ -1,0 +1,134 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Content Pipeline Workflow — researcher → writer → reviewer with approval gate
+# and a revision feedback loop. Requires OPENAI_API_KEY env var on the controller.
+---
+kind: ModelClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: openai
+spec:
+  provisioner: openai
+  latencyClass: low
+  costTier: standard
+  contextWindow: 128000
+  modalities:
+    - text
+---
+kind: SecretRef
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: openai-api-key
+spec:
+  backendType: env
+  backendRef: OPENAI_API_KEY
+  key: OPENAI_API_KEY
+---
+kind: Model
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: gpt-4o
+spec:
+  className: openai
+  modelID: gpt-4o
+  provider: openai-compatible
+  endpoint: https://api.openai.com/v1
+  capabilities:
+    - chat
+    - tool-calling
+  credentialRef:
+    name: openai-api-key
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: researcher
+spec:
+  modelRef:
+    name: gpt-4o
+  instructions:
+    inline: |
+      You are a research specialist. Given a topic, produce a research brief with:
+      - Executive Summary
+      - Key Findings (bulleted)
+      - Sources and References
+      - Open Questions
+      Be thorough but concise.
+  runtime:
+    timeout: 60s
+    maxTokens: 8192
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: writer
+spec:
+  modelRef:
+    name: gpt-4o
+  instructions:
+    inline: |
+      You are a professional technical writer. Given a research brief (or
+      reviewer feedback with a previous draft), produce a well-structured
+      article with Title, Introduction, Body sections, Conclusion, References.
+      Incorporate revision feedback when present, preserving noted strengths.
+  runtime:
+    timeout: 60s
+    maxTokens: 8192
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: reviewer
+spec:
+  modelRef:
+    name: gpt-4o
+  instructions:
+    inline: |
+      You are a senior editor. Evaluate the article for clarity, accuracy,
+      structure, and engagement. Respond with:
+      - Overall Assessment: approved | revision-needed
+      - Strengths
+      - Issues (severity: critical | minor)
+      - Specific Suggestions
+      Only set "approved" when the article is publication-ready.
+  runtime:
+    timeout: 45s
+    maxTokens: 4096
+---
+kind: Workflow
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: content-pipeline
+spec:
+  entryPoint: researcher
+  steps:
+    - name: researcher
+      agentRef:
+        name: researcher
+      input: "Research the following topic thoroughly: {{.goal}}"
+      timeout: 90s
+    - name: writer
+      agentRef:
+        name: writer
+      input: "Write an article based on this research:\n{{.steps.researcher.output}}"
+      timeout: 90s
+    - name: reviewer
+      agentRef:
+        name: reviewer
+      input: "Review this article:\n{{.steps.writer.output}}"
+      timeout: 60s
+  edges:
+    - from: researcher
+      to: writer
+    - from: writer
+      to: reviewer
+    - from: reviewer
+      to: writer
+      condition: "output contains 'revision-needed'"
+  approvalGates:
+    - from: writer
+      to: reviewer
+  budgets:
+    maxDuration: 10m
+    maxTokens: 50000

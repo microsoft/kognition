@@ -1,0 +1,87 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Demo: Run-Scoped Shared Memory
+#
+# Exercises:
+#   - spec.memoryClaim — controller materializes a fresh per-WorkflowRun MemoryClaim
+#     shared across every step in that run
+#   - spec.memoryRetentionPolicy — Delete (garbage-collected when the run finishes)
+#     vs Retain (the materialized claim survives the run for inspection/replay)
+#   - MemoryClass selection (uses cluster's `redis-fast` MemoryClass)
+#
+# Topology:
+#   writer ──→ reader
+#
+# Each WorkflowRun gets its OWN MemoryClaim (named after the run); both
+# steps see the same backing store. Across runs, claims are independent.
+#
+# Verify after triggering a run (claim name is deterministic: <run-name>-memory):
+#   kubectl -n default get memoryclaim <your-run-name>-memory -o yaml
+#
+# Trigger:
+#   kind: WorkflowRun
+#   spec:
+#     workflowRef: { name: wfdemo-shared-memory }
+#     input: "session: customer-onboarding"
+#
+# Then re-run with `memoryRetentionPolicy: Retain` (edit + reapply) and observe
+# the MemoryClaim survives after the run completes.
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-shared-memory-communication
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: wfdemo-llm
+  allowTo:
+    - name: wfdemo-llm
+---
+kind: Workflow
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-shared-memory
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+    workflow.kognition.dev/feature: shared-memory
+spec:
+  memoryClaim:
+    # `redis-fast` is a cluster MemoryClass that already exists in this cluster.
+    # Swap for `pgvector-default` or `ephemeral` to compare backing stores.
+    memoryClassName: redis-fast
+    accessMode: ReadWriteMany
+  # Delete  → the per-run MemoryClaim is garbage-collected when the run reaches
+  #           a terminal phase.
+  # Retain  → the claim outlives the run; useful for post-mortem inspection
+  #           or for chaining a follow-up run that reads the prior context.
+  memoryRetentionPolicy: Delete
+  steps:
+    - name: writer
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        You are session step 1. The workflow run input is:
+        "{{.Input}}"
+        Produce a one-line note that the next step would benefit from
+        knowing. Be specific and unique to this run.
+      timeout: 180s
+    - name: reader
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        You are session step 2 in the same shared-memory run. Step 1 wrote:
+
+        {{.Steps.writer.Output}}
+
+        Acknowledge the note and produce a one-sentence follow-up plan.
+      timeout: 180s
+  edges:
+    - from: writer
+      to: reader
+  budgets:
+    maxDuration: 5m
+    maxTokens: 4000

@@ -1,0 +1,107 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Kognition Governance Demo Sample
+#
+# Layers the six remaining CRD kinds on top of the existing k8s-mode-demo
+# (samples/k8s-mode-demo.yaml). Apply after that demo so every kognition.dev
+# resource kind has at least one live instance in the cluster.
+#
+# Adds:
+#   - Workspace                 (kognition-demo)
+#   - Controller-managed AgentIdentity resources for the demo Agents
+#   - AgentRole                 (tool-invoker)
+#   - AgentRoleBinding          (binds writer to tool-invoker)
+#   - CognitiveAdmissionPolicy  (warn-only safety policy)
+#   - CognitiveLimitRange       (per-namespace session defaults)
+#
+# Apply with:
+#   kubectl apply -f samples/k8s-mode-demo.yaml
+#   kubectl apply -f samples/governance-demo.yaml
+#
+# Inspect with:
+#   kubectl -n kognition-demo get workspaces,agentidentities,agentroles,agentrolebindings
+#   kubectl -n kognition-demo get cognitiveadmissionpolicies,cognitivelimitranges
+---
+# Workspace declares multi-tenant isolation metadata for the kognition-demo
+# namespace. The controller materialises a default-deny
+# AgentCommunicationPolicy on first reconcile.
+apiVersion: kognition.dev/v1alpha1
+kind: Workspace
+metadata:
+  name: kognition-demo
+  namespace: kognition-demo
+spec:
+  displayName: Kognition Demo Workspace
+  requireSignedArtifacts: false
+  retention:
+    traceTTL: 168h
+    auditLogTTL: 720h
+    costRecordTTL: 720h
+    eventTTL: 168h
+---
+# AgentRole grants permission to invoke Tools. Evaluated by the RBAC engine
+# when an agent attempts a tool call.
+apiVersion: kognition.dev/v1alpha1
+kind: AgentRole
+metadata:
+  name: tool-invoker
+  namespace: kognition-demo
+rules:
+  - resources:
+      - Tool
+    verbs:
+      - get
+      - invoke
+---
+# AgentRoleBinding binds the writer agent (the only one with tools) to the
+# tool-invoker role.
+apiVersion: kognition.dev/v1alpha1
+kind: AgentRoleBinding
+metadata:
+  name: writer-tool-invoker
+  namespace: kognition-demo
+spec:
+  roleRef:
+    name: tool-invoker
+  subjects:
+    - kind: Agent
+      name: writer
+---
+# CognitiveAdmissionPolicy provides a warn-only OPA/Rego rule that flags
+# obviously unsafe agent specs (FailurePolicy=Ignore so it never blocks).
+apiVersion: kognition.dev/v1alpha1
+kind: CognitiveAdmissionPolicy
+metadata:
+  name: no-empty-instructions
+  namespace: kognition-demo
+spec:
+  failurePolicy: Ignore
+  matchKinds:
+    - Agent
+  matchOperations:
+    - CREATE
+    - UPDATE
+  rego: |
+    package kognition.admission
+
+    deny[msg] {
+      input.kind == "Agent"
+      not input.spec.instructions.inline
+      not input.spec.instructions.configMapRef
+      msg := "Agent must define spec.instructions.inline or spec.instructions.configMapRef"
+    }
+---
+# CognitiveLimitRange sets per-namespace default session limits applied to
+# new agents by the limit-range defaulter admission hook.
+apiVersion: kognition.dev/v1alpha1
+kind: CognitiveLimitRange
+metadata:
+  name: demo-session-limits
+  namespace: kognition-demo
+spec:
+  limits:
+    - type: Agent
+      tokensPerSession: 16384
+      timeoutSeconds: 120
+      maxConcurrentSessions: 5

@@ -1,0 +1,82 @@
+{
+  "key": "0123456789abcdef0123456789abcdef",
+  "domain": "kognition.dev/runtime-approval/action/v1",
+  "accepted": [
+    {
+      "name": "object ordering",
+      "input": "{\"z\":2,\"a\":{\"y\":true,\"x\":1}}",
+      "canonical": "{\"a\":{\"x\":1,\"y\":true},\"z\":2}",
+      "tag": "aOJauR_a-2eo-ZdrjFHjPZBHG2HJINrObc-fJ0V7_DA"
+    },
+    {
+      "name": "decimal number",
+      "input": "{\"value\":1.0}",
+      "canonical": "{\"value\":1}",
+      "tag": "hpBZyqDi5b05qL8dUPq1zVVfAL2F0w-zyK-VsrxkWEo"
+    },
+    {
+      "name": "scientific number",
+      "input": "{\"value\":10e-1}",
+      "canonical": "{\"value\":1}",
+      "tag": "hpBZyqDi5b05qL8dUPq1zVVfAL2F0w-zyK-VsrxkWEo"
+    },
+    {
+      "name": "signed zero",
+      "input": "{\"value\":-0}",
+      "canonical": "{\"value\":0}",
+      "tag": "VWHctsOJ-pFO9yyPCsKVtXafiy6gzEuI8tkNAdiZK_s"
+    },
+    {
+      "name": "arbitrary precision",
+      "input": "{\"value\":123456789012345678901234567890.00}",
+      "canonical": "{\"value\":12345678901234567890123456789e1}",
+      "tag": "dy7h6XHhe5-bZ4R8JyXdZSbVaBl3z_4rfcW_X9BKntI"
+    },
+    {
+      "name": "unicode",
+      "input": "{\"emoji\":\"\\ud83d\\ude00\",\"accent\":\"caf\\u00e9\"}",
+      "canonical": "{\"accent\":\"café\",\"emoji\":\"😀\"}",
+      "tag": "hmtIIav0kBkwW6kWxsLfbodmA7HoCfFqkAGHKT5mmic"
+    },
+    {
+      "name": "nested array",
+      "input": "{\"empty\":null,\"array\":[3,{\"b\":2,\"a\":1}]}",
+      "canonical": "{\"array\":[3,{\"a\":1,\"b\":2}],\"empty\":null}",
+      "tag": "IsNvy1OxY3esoYJSjfMYDdDHK98PFK4VeXPog84AYCU"
+    }
+  ],
+  "actions": [
+    {
+      "name": "complete envelope unicode and authorization ordering",
+      "action": {
+        "plane": "Tool",
+        "operation": "invoke",
+        "workspace": "team-a",
+        "invocationID": "invocation-a",
+        "agentRef": {"kind":"Agent","scope":"Namespaced","namespace":"team-a","name":"agent-a","uid":"agent-uid","resourceVersion":1},
+        "agentIdentityRef": {"kind":"AgentIdentity","scope":"Namespaced","namespace":"team-a","name":"identity-a","uid":"identity-uid","resourceVersion":2},
+        "agentInstanceRef": {"kind":"AgentInstance","scope":"Namespaced","namespace":"team-a","name":"instance-a","uid":"instance-uid","resourceVersion":3},
+        "sessionRef": "session-<>&  ",
+        "targetRef": {"kind":"Tool","scope":"Namespaced","namespace":"team-a","name":"tool-a","uid":"tool-uid","resourceVersion":4},
+        "autonomyClassRef": {"kind":"AutonomyClass","scope":"Cluster","name":"supervised","uid":"class-uid","resourceVersion":5},
+        "authorizationRefs": [
+          {"kind":"ToolGrant","scope":"Namespaced","namespace":"team-a","name":"grant-b","uid":"grant-b-uid","resourceVersion":7},
+          {"kind":"ToolGrant","scope":"Namespaced","namespace":"team-a","name":"grant-a","uid":"grant-a-uid","resourceVersion":6}
+        ],
+        "payload": {"text":"<>&  ","value":1.0}
+      },
+      "canonical": "{\"agentIdentityRef\":{\"kind\":\"AgentIdentity\",\"name\":\"identity-a\",\"namespace\":\"team-a\",\"resourceVersion\":2,\"scope\":\"Namespaced\",\"uid\":\"identity-uid\"},\"agentInstanceRef\":{\"kind\":\"AgentInstance\",\"name\":\"instance-a\",\"namespace\":\"team-a\",\"resourceVersion\":3,\"scope\":\"Namespaced\",\"uid\":\"instance-uid\"},\"agentRef\":{\"kind\":\"Agent\",\"name\":\"agent-a\",\"namespace\":\"team-a\",\"resourceVersion\":1,\"scope\":\"Namespaced\",\"uid\":\"agent-uid\"},\"authorizationRefs\":[{\"kind\":\"ToolGrant\",\"name\":\"grant-a\",\"namespace\":\"team-a\",\"resourceVersion\":6,\"scope\":\"Namespaced\",\"uid\":\"grant-a-uid\"},{\"kind\":\"ToolGrant\",\"name\":\"grant-b\",\"namespace\":\"team-a\",\"resourceVersion\":7,\"scope\":\"Namespaced\",\"uid\":\"grant-b-uid\"}],\"autonomyClassRef\":{\"kind\":\"AutonomyClass\",\"name\":\"supervised\",\"resourceVersion\":5,\"scope\":\"Cluster\",\"uid\":\"class-uid\"},\"format\":\"kognition-runtime-action-v1\",\"invocationID\":\"invocation-a\",\"operation\":\"invoke\",\"payload\":{\"text\":\"<>&\\u2028\\u2029\",\"value\":1},\"plane\":\"Tool\",\"sessionRef\":\"session-<>&\\u2028\\u2029\",\"targetRef\":{\"kind\":\"Tool\",\"name\":\"tool-a\",\"namespace\":\"team-a\",\"resourceVersion\":4,\"scope\":\"Namespaced\",\"uid\":\"tool-uid\"},\"workspace\":\"team-a\"}",
+      "tag": "exhqxx9zvpu6CP9HxZVH0Alpgl4pEqKn1cbXb_4qgzI"
+    }
+  ],
+  "rejected": [
+    {
+      "name": "duplicate object key",
+      "input": "{\"a\":1,\"a\":2}"
+    },
+    {
+      "name": "unpaired surrogate",
+      "input": "{\"value\":\"\\ud800\"}"
+    }
+  ]
+}

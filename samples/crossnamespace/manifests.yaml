@@ -1,0 +1,61 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# CrossNamespaceGrant Sample
+#
+# Allows resources in one namespace to be referenced by another.
+---
+# Namespaces that own the grants below. Each CrossNamespaceGrant is created in
+# its source namespace, so those namespaces must exist first.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shared-models
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform
+---
+# Share specific model and all tools from shared-models to team-b
+kind: CrossNamespaceGrant
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: share-model-to-team-b
+  namespace: shared-models
+spec:
+  from: shared-models
+  to: team-b
+  resources:
+    - kind: Model
+      name: gpt-6-luna
+    - kind: Tool
+      name: "*"
+---
+# Grant calculator and web-search tools to all namespaces
+kind: CrossNamespaceGrant
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: global-tools
+  namespace: platform
+spec:
+  from: platform
+  to: "*"
+  resources:
+    - kind: Tool
+      name: calculator
+    - kind: Tool
+      name: web-search
+---
+# Share a specific memory class across teams
+kind: CrossNamespaceGrant
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: share-memory-to-analytics
+  namespace: shared-models
+spec:
+  from: shared-models
+  to: analytics
+  resources:
+    - kind: MemoryClaim
+      name: shared-knowledge-base

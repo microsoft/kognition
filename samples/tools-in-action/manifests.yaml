@@ -1,0 +1,145 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Tools In Action
+#
+# End-to-end demonstration of an Agent that executes HTTP-backed tools through
+# the Kognition Tool Gateway. The runtime receives Tool schema/version metadata,
+# exchanges its session capability for an exact invocation capability, and does
+# not receive the target endpoint.
+#
+# Prerequisites (apply in this order):
+#   1. kubectl apply -f samples/workflows/tool-sandbox.yaml
+#      (deploys the tool-sandbox pod/service and the sandbox-openapi ToolClass)
+#   2. SecretRef `foundry-creds` in `default` namespace (Azure AI Foundry creds)
+#      and Model `gpt-6-luna` in `default` namespace (Phase=Ready)
+#
+# Apply:
+#   kubectl apply -f samples/tools-in-action/manifests.yaml
+#
+# Try it:
+#   kognitionctl chat tool-user "what is 17 * 23?" --mode kubernetes
+#   kognitionctl chat tool-user "what time is it right now?" --mode kubernetes
+#
+# Expected behavior:
+#   - First message: the model calls sandbox-calculator through the Tool Gateway
+#     with expression="17*23" and returns 391.
+#   - Second message: the model calls sandbox-datetime and reports UTC time.
+---
+# sandbox-calculator: safe arithmetic evaluator served by tool-sandbox.
+kind: Tool
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: sandbox-calculator
+  namespace: default
+spec:
+  className: sandbox-openapi
+  protocol: OpenAPI
+  description: Evaluate a mathematical expression (supports + - * / // % ** and parentheses).
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/calculator
+  metadata:
+    allowPrivateNetwork: "true"
+  inputSchema:
+    type: object
+    properties:
+      expression:
+        type: string
+        description: A pure-arithmetic expression, e.g. "17 * 23".
+    required:
+      - expression
+---
+# sandbox-datetime: current UTC date/time served by tool-sandbox.
+kind: Tool
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: sandbox-datetime
+  namespace: default
+spec:
+  className: sandbox-openapi
+  protocol: OpenAPI
+  description: Returns the current date and time as an ISO-8601 UTC string.
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/datetime
+  metadata:
+    allowPrivateNetwork: "true"
+  inputSchema:
+    type: object
+    properties:
+      timezone:
+        type: string
+        description: Accepted for forward compatibility; always returned as UTC today.
+    required: []
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: tool-user
+  namespace: default
+  labels:
+    kognition.dev/sample-tool-demo: "true"
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a helpful assistant with access to two tools:
+        - sandbox_calculator(expression): evaluate arithmetic precisely.
+        - sandbox_datetime(timezone): get the current UTC date/time.
+
+      Rules:
+        - If the user asks for any arithmetic, ALWAYS call sandbox_calculator.
+          Do NOT compute in your head.
+        - If the user asks for the current time or date, ALWAYS call
+          sandbox_datetime.
+        - Quote the tool result verbatim in your answer.
+  tools:
+    - ref:
+        name: sandbox-calculator
+    - ref:
+        name: sandbox-datetime
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 1024
+---
+# Kubernetes mode synthesizes ToolGrants from this enforced policy. The Tool
+# Gateway evaluates this policy during capability exchange and invocation.
+kind: AgentPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: tool-user-tool-grants
+  namespace: default
+spec:
+  scope: agent
+  enforce: true
+  targetAgents:
+    - tool-user
+  toolGrants:
+    - toolRef: sandbox-calculator
+      allow: true
+    - toolRef: sandbox-datetime
+      allow: true
+---
+# Gateway invocation also requires AgentRole authorization for the Tool kind.
+kind: AgentRole
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: tool-user-tool-invoker
+  namespace: default
+rules:
+  - resources:
+      - Tool
+    verbs:
+      - get
+      - invoke
+---
+kind: AgentRoleBinding
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: tool-user-tool-invoker
+  namespace: default
+spec:
+  roleRef:
+    name: tool-user-tool-invoker
+  subjects:
+    - kind: Agent
+      name: tool-user

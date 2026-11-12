@@ -1,0 +1,39 @@
+{{/* Copyright (c) Microsoft Corporation.
+     Licensed under the MIT License. */}}
+
+Thank you for installing {{ .Chart.Name }}!
+
+Your multi-agent content pipeline has been deployed to namespace "{{ .Values.namespace }}".
+
+Resources created:
+{{- if .Values.modelClass.create }}
+  - ModelClass: {{ .Values.modelClass.name }}
+{{- end }}
+  - SecretRef:  {{ .Values.credentials.name }}
+  - Model:      {{ .Values.model.name }}
+{{- range $name, $agent := .Values.agents }}
+{{- if $agent.enabled }}
+  - Agent:      {{ $name }}
+{{- end }}
+{{- end }}
+  - Workflow:   {{ .Values.workflow.name }}
+
+To trigger the workflow, create an AgentInstance:
+
+  cat <<EOF | kubectl apply -f -
+  apiVersion: kognition.dev/v1alpha1
+  kind: AgentInstance
+  metadata:
+    name: content-run-1
+    namespace: {{ .Values.namespace }}
+  spec:
+    agentRef:
+      name: {{ .Values.workflow.entryPoint }}
+    workflowRef:
+      name: {{ .Values.workflow.name }}
+    goal: "Explain the benefits of Kubernetes-native AI orchestration"
+  EOF
+
+Monitor progress:
+
+  kubectl get agentinstances -n {{ .Values.namespace }} -w

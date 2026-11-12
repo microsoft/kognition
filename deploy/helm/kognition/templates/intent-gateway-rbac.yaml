@@ -1,0 +1,59 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- $values := fromYaml (toYaml .Values) }}
+{{- $intentGatewayEnabled := dig "intentGateway" "enabled" true $values }}
+{{- $intentGatewayServiceAccountCreate := dig "intentGateway" "serviceAccount" "create" true $values }}
+{{- $intentGatewayServiceAccountName := dig "intentGateway" "serviceAccount" "name" "" $values }}
+{{- $intentGatewayServiceAccountAnnotations := dig "intentGateway" "serviceAccount" "annotations" (dict) $values }}
+{{- if and (eq .Values.mode "kubernetes") $intentGatewayEnabled }}
+{{- $serviceAccountName := default (printf "%s-intent-gateway" (include "kognition.fullname" .)) $intentGatewayServiceAccountName }}
+{{- if $intentGatewayServiceAccountCreate }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $serviceAccountName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: intent-gateway
+  {{- with $intentGatewayServiceAccountAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kognition.fullname" . }}-intent-gateway
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: intent-gateway
+rules:
+  - apiGroups: ["kognition.dev"]
+    resources: ["intentgateways", "workflows", "agentservices", "secretrefs"]
+    verbs: ["get"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["agents"]
+    verbs: ["get", "list"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["solutions"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kognition.fullname" . }}-intent-gateway
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: intent-gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kognition.fullname" . }}-intent-gateway
+subjects:
+  - kind: ServiceAccount
+    name: {{ $serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -1,0 +1,44 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: kognition.dev/v1alpha1
+kind: AgentCommunicationPolicy
+metadata:
+  name: content-pipeline-researcher-to-writer
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "kognition-multi-agent.labels" . | nindent 4 }}
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: researcher
+  allowTo:
+    - name: writer
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentCommunicationPolicy
+metadata:
+  name: content-pipeline-writer-to-reviewer
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "kognition-multi-agent.labels" . | nindent 4 }}
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: writer
+  allowTo:
+    - name: reviewer
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentCommunicationPolicy
+metadata:
+  name: content-pipeline-reviewer-to-writer
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "kognition-multi-agent.labels" . | nindent 4 }}
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: reviewer
+  allowTo:
+    - name: writer

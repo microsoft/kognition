@@ -1,0 +1,152 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: toolgrants.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: ToolGrant
+    listKind: ToolGrantList
+    plural: toolgrants
+    singular: toolgrant
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.agentRef.name
+      name: Agent
+      type: string
+    - jsonPath: .spec.toolRef.name
+      name: Tool
+      type: string
+    - jsonPath: .status.active
+      name: Active
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ToolGrant authorizes agents to use a tool with specific verbs.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ToolGrantSpec defines fine-grained tool access with verb
+              taxonomy.
+            properties:
+              agentRef:
+                description: AgentRef directly references an agent.
+                properties:
+                  name:
+                    description: Name is the name of the referenced resource.
+                    type: string
+                required:
+                - name
+                type: object
+              agentSelector:
+                additionalProperties:
+                  type: string
+                description: AgentSelector selects agents by label using matchLabels
+                  semantics.
+                type: object
+              argumentConstraints:
+                description: ArgumentConstraints is a JSON Schema subset that restricts
+                  input arguments.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              conditions:
+                description: Conditions defines time-bound and label-based grant conditions.
+                properties:
+                  requiredAgentLabels:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  validFrom:
+                    type: string
+                  validUntil:
+                    type: string
+                type: object
+              rateLimits:
+                description: RateLimits defines per-grant call rate caps.
+                properties:
+                  callsPerDay:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  callsPerHour:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  callsPerMinute:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
+              toolRef:
+                description: ToolRef references the target tool.
+                properties:
+                  name:
+                    description: Name is the name of the referenced resource.
+                    type: string
+                required:
+                - name
+                type: object
+              verbs:
+                description: Verbs is the non-empty set of granted actions.
+                items:
+                  description: ToolGrantVerb identifies an action permitted by a ToolGrant.
+                  enum:
+                  - invoke
+                  - discover
+                  - inspect
+                  type: string
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: set
+            required:
+            - toolRef
+            - verbs
+            type: object
+            x-kubernetes-validations:
+            - message: agentRef and agentSelector are mutually exclusive
+              rule: '!(has(self.agentRef) && has(self.agentSelector))'
+          status:
+            description: ToolGrantStatus describes the observed state of a ToolGrant.
+            properties:
+              active:
+                type: boolean
+              grantedAgents:
+                format: int32
+                type: integer
+              lastEvaluatedTime:
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,35 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# The embedding model the KBClass references. `text-embedding-3-small`
+# returns 1536-dim vectors, matching the pgvector column dimension in
+# the chart's default kbPgvector deployment.
+apiVersion: kognition.dev/v1alpha1
+kind: Model
+metadata:
+  name: text-embedding-3-small
+  namespace: default
+spec:
+  provider: openai
+  modelId: text-embedding-3-small
+  endpoint: https://api.openai.com/v1
+  credentialRef:
+    name: openai-embed-creds
+---
+# API key for the embedding model. The ingester and the runtime both
+# read the "apiKey" key.
+apiVersion: kognition.dev/v1alpha1
+kind: SecretRef
+metadata:
+  name: openai-embed-creds
+  namespace: default
+spec:
+  type: api-key
+  # kognitionctl / the admission webhook writes the JSON blob into
+  # metadata.annotations["kognition.dev/internal-secret-data"]. When
+  # applying by hand, use the admission-webhook path (kubectl apply
+  # through the kognition apiserver) or bake the annotation yourself:
+  #
+  #   metadata.annotations:
+  #     kognition.dev/internal-secret-data: '{"type":"api-key","apiKey":"sk-..."}'

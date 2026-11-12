@@ -1,0 +1,125 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- $values := fromYaml (toYaml .Values) }}
+{{- $intentGatewayEnabled := dig "intentGateway" "enabled" true $values }}
+{{- $intentGatewayReplicas := dig "intentGateway" "replicaCount" 1 $values }}
+{{- $intentGatewayRepository := dig "intentGateway" "image" "repository" "kognition-intent-gateway" $values }}
+{{- $intentGatewayTag := dig "intentGateway" "image" "tag" "" $values }}
+{{- $intentGatewayDigest := dig "intentGateway" "image" "digest" "" $values }}
+{{- $intentGatewayPullPolicy := dig "intentGateway" "image" "pullPolicy" "IfNotPresent" $values }}
+{{- $intentGatewayServiceAccountName := dig "intentGateway" "serviceAccount" "name" "" $values }}
+{{- $intentGatewayResources := dig "intentGateway" "resources" (dict "requests" (dict "cpu" "50m" "memory" "64Mi") "limits" (dict "cpu" "250m" "memory" "256Mi")) $values }}
+{{- $intentGatewayNodeSelector := dig "intentGateway" "nodeSelector" (dict) $values }}
+{{- $intentGatewayTolerations := dig "intentGateway" "tolerations" (list) $values }}
+{{- $intentGatewayAffinity := dig "intentGateway" "affinity" (dict) $values }}
+{{- if and (eq .Values.mode "kubernetes") $intentGatewayEnabled }}
+{{- $serviceAccountName := default (printf "%s-intent-gateway" (include "kognition.fullname" .)) $intentGatewayServiceAccountName }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kognition.fullname" . }}-intent-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: intent-gateway
+spec:
+  replicas: {{ $intentGatewayReplicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "kognition.name" . }}
+      app.kubernetes.io/component: intent-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "kognition.labels" . | nindent 8 }}
+        app.kubernetes.io/component: intent-gateway
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ $serviceAccountName }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: intent-gateway
+          image: {{ include "kognition.image" (dict "global" .Values.global "image" (dict "repository" $intentGatewayRepository "tag" $intentGatewayTag "digest" $intentGatewayDigest) "defaultTag" .Chart.AppVersion) }}
+          imagePullPolicy: {{ $intentGatewayPullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: grpc
+              containerPort: 8081
+              protocol: TCP
+          env:
+            - name: LISTEN_ADDR
+              value: ":8080"
+            - name: KOGNITION_GRPC_ADDR
+              value: ":8081"
+            {{- if (dig "intentGateway" "auth" "enabled" false $values) }}
+            - name: KOGNITION_AUTH_ENABLED
+              value: "true"
+            {{- with (dig "intentGateway" "auth" "oidc" "issuer" "" $values) }}
+            - name: KOGNITION_OIDC_ISSUER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with (dig "intentGateway" "auth" "oidc" "audience" "" $values) }}
+            - name: KOGNITION_OIDC_AUDIENCE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with (dig "intentGateway" "auth" "oidc" "usernameClaim" "" $values) }}
+            - name: KOGNITION_OIDC_USERNAME_CLAIM
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with (dig "intentGateway" "auth" "oidc" "groupsClaim" "" $values) }}
+            - name: KOGNITION_OIDC_GROUPS_CLAIM
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with (dig "intentGateway" "auth" "oidc" "requiredGroups" (list) $values) }}
+            {{- if gt (len .) 0 }}
+            - name: KOGNITION_OIDC_REQUIRED_GROUPS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- $bootstrapName := dig "intentGateway" "auth" "bootstrapToken" "secretName" "" $values }}
+            {{- if $bootstrapName }}
+            - name: KOGNITION_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $bootstrapName | quote }}
+                  key: {{ dig "intentGateway" "auth" "bootstrapToken" "secretKey" "token" $values | quote }}
+            {{- end }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml $intentGatewayResources | nindent 12 }}
+          {{- with $intentGatewayNodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $intentGatewayTolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $intentGatewayAffinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

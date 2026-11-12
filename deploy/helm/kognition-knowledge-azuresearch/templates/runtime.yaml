@@ -1,0 +1,204 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if .Values.runtime.enabled }}
+{{- $name := include "kognition-knowledge-azuresearch.fullname" . -}}
+{{- $serviceAccountName := include "kognition-knowledge-azuresearch.serviceAccountName" . -}}
+{{- $tlsSecretName := required "runtime.tls.secretName is required when the runtime is enabled" .Values.runtime.tls.secretName -}}
+{{- $clientPeerURI := required "runtime.clientPeerURI is required when the runtime is enabled" .Values.runtime.clientPeerURI -}}
+{{- $clientId := required "runtime.workloadIdentity.clientId is required when the runtime is enabled" .Values.runtime.workloadIdentity.clientId -}}
+{{- $tenantId := required "runtime.workloadIdentity.tenantId is required when the runtime is enabled" .Values.runtime.workloadIdentity.tenantId -}}
+{{- if .Values.runtime.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $serviceAccountName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition-knowledge-azuresearch.labels" . | nindent 4 }}
+  annotations:
+    azure.workload.identity/client-id: {{ $clientId | quote }}
+    azure.workload.identity/tenant-id: {{ $tenantId | quote }}
+    {{- with .Values.runtime.serviceAccount.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+automountServiceAccountToken: true
+---
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition-knowledge-azuresearch.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["knowledge.kognition.dev"]
+    resources: ["knowledgebases"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["azuresearch.knowledge.kognition.dev"]
+    resources: ["azuresearchbackends"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition-knowledge-azuresearch.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kognition-knowledge-azuresearch.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["knowledge.kognition.dev"]
+    resources: ["knowledgebaseclasses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kognition-knowledge-azuresearch.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition-knowledge-azuresearch.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "kognition-knowledge-azuresearch.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: grpc
+      port: {{ .Values.runtime.service.port }}
+      targetPort: grpc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition-knowledge-azuresearch.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.runtime.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "kognition-knowledge-azuresearch.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "kognition-knowledge-azuresearch.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: {{ $serviceAccountName }}
+      securityContext:
+        {{- toYaml .Values.runtime.podSecurityContext | nindent 8 }}
+      {{- with .Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: adapter
+          image: "{{ .Values.runtime.image.repository }}:{{ default .Chart.AppVersion .Values.runtime.image.tag }}"
+          imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.runtime.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: grpc
+              containerPort: 9443
+            - name: admin
+              containerPort: 9092
+          env:
+            - name: KOGNITION_KNOWLEDGE_LISTEN_ADDRESS
+              value: ":9443"
+            - name: KOGNITION_KNOWLEDGE_ADMIN_ADDRESS
+              value: ":9092"
+            - name: KOGNITION_KNOWLEDGE_PROVIDER_VERSION
+              value: {{ default .Chart.AppVersion .Values.runtime.providerVersion | quote }}
+            - name: KOGNITION_KNOWLEDGE_WATCH_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: KOGNITION_KNOWLEDGE_TLS_CERT_FILE
+              value: /var/run/kognition/tls/tls.crt
+            - name: KOGNITION_KNOWLEDGE_TLS_KEY_FILE
+              value: /var/run/kognition/tls/tls.key
+            - name: KOGNITION_KNOWLEDGE_TLS_CA_FILE
+              value: /var/run/kognition/tls/ca.crt
+            - name: KOGNITION_KNOWLEDGE_CLIENT_PEER_URI
+              value: {{ $clientPeerURI | quote }}
+            - name: AZURE_TENANT_ID
+              value: {{ $tenantId | quote }}
+            - name: AZURE_CLIENT_ID
+              value: {{ $clientId | quote }}
+            - name: AZURE_FEDERATED_TOKEN_FILE
+              value: /var/run/secrets/azure/tokens/azure-identity-token
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: admin
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: admin
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.runtime.resources | nindent 12 }}
+          volumeMounts:
+            - name: tls
+              mountPath: /var/run/kognition/tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ $tlsSecretName }}
+            items:
+              - key: {{ .Values.runtime.tls.certificateKey }}
+                path: tls.crt
+              - key: {{ .Values.runtime.tls.privateKeyKey }}
+                path: tls.key
+              - key: {{ .Values.runtime.tls.trustBundleKey }}
+                path: ca.crt
+      {{- with .Values.runtime.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.runtime.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.runtime.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,101 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: cognitivelimitranges.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: CognitiveLimitRange
+    listKind: CognitiveLimitRangeList
+    plural: cognitivelimitranges
+    singular: cognitivelimitrange
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: CognitiveLimitRange defines default and max limits for resources
+          in a namespace.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: CognitiveLimitRangeSpec defines limit range configuration.
+            properties:
+              limits:
+                description: Limits defines the limit range items.
+                items:
+                  description: LimitRangeItem defines a single limit range entry.
+                  properties:
+                    default:
+                      additionalProperties:
+                        format: int64
+                        type: integer
+                      description: Default defines default resource values.
+                      type: object
+                    max:
+                      additionalProperties:
+                        format: int64
+                        type: integer
+                      description: Max defines maximum resource values.
+                      type: object
+                    maxConcurrentSessions:
+                      description: MaxConcurrentSessions limits simultaneous sessions
+                        per agent.
+                      format: int64
+                      type: integer
+                    min:
+                      additionalProperties:
+                        format: int64
+                        type: integer
+                      description: Min defines minimum resource values.
+                      type: object
+                    timeoutSeconds:
+                      description: TimeoutSeconds is the max duration in seconds for
+                        a single agent session.
+                      format: int64
+                      type: integer
+                    tokensPerSession:
+                      description: TokensPerSession is the max tokens an agent can
+                        use per session.
+                      format: int64
+                      type: integer
+                    type:
+                      description: Type identifies what this limit applies to.
+                      type: string
+                  required:
+                  - type
+                  type: object
+                type: array
+            required:
+            - limits
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}

@@ -1,0 +1,109 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Demo: Parallel Dispatch
+#
+# Exercises:
+#   - Fan-out from a single planner step to N parallel workers
+#   - Fan-in (join) into an aggregator
+#   - spec.maxParallelSteps cap (set to 2 here so you can SEE
+#     serialization happen even with 3 worker branches)
+#   - Per-step phase visibility in `kubectl describe workflowrun`
+#
+# Topology:
+#
+#                 ┌──→ workerEn ──┐
+#   planner ──────┼──→ workerEs ──┼──→ aggregator
+#                 └──→ workerFr ──┘
+#
+# At any instant only 2 workers run; the 3rd waits its turn (maxParallelSteps).
+#
+# Note on step names: Step names are surfaced verbatim in status entries and
+# Go text/template dot-notation (`.Steps.workerEn.Output`), which requires
+# valid Go identifier chars. Kubernetes object names composed from step names
+# are DNS1123-sanitized by the controller (lowercased, non-alnum → '-'), so
+# camelCase step names are safe: `workerEn` produces an AgentJob whose
+# metadata.name segment is `workeren`.
+#
+# Trigger:
+#   kind: WorkflowRun
+#   spec:
+#     workflowRef: { name: wfdemo-parallel }
+#     input: "Agentic AI in enterprise software"
+#
+# Watch:
+#   kubectl get workflowrun <name> -o yaml | yq .status.stepStatuses
+---
+kind: Workflow
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-parallel
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+    workflow.kognition.dev/feature: parallel-dispatch
+spec:
+  maxParallelSteps: 2
+  steps:
+    - name: planner
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        Produce a single-paragraph briefing on this topic:
+        "{{.Input}}"
+        Output ONLY the paragraph — no headings, no preamble.
+      timeout: 180s
+    - name: workerEn
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        Translate the following briefing to English (or polish if already English),
+        then summarize it in EXACTLY two bullets:
+        ---
+        {{.Steps.planner.Output}}
+      timeout: 180s
+    - name: workerEs
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        Traduce el siguiente brief al español y resúmelo en EXACTAMENTE dos viñetas:
+        ---
+        {{.Steps.planner.Output}}
+      timeout: 180s
+    - name: workerFr
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        Traduis le brief suivant en français et résume-le en EXACTEMENT deux puces :
+        ---
+        {{.Steps.planner.Output}}
+      timeout: 180s
+    - name: aggregator
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        Combine these three localized summaries into a single multilingual
+        bulletin. Preserve all three languages, label each section.
+        --- EN ---
+        {{.Steps.workerEn.Output}}
+        --- ES ---
+        {{.Steps.workerEs.Output}}
+        --- FR ---
+        {{.Steps.workerFr.Output}}
+      timeout: 180s
+  edges:
+    - from: planner
+      to: workerEn
+    - from: planner
+      to: workerEs
+    - from: planner
+      to: workerFr
+    - from: workerEn
+      to: aggregator
+    - from: workerEs
+      to: aggregator
+    - from: workerFr
+      to: aggregator
+  budgets:
+    maxDuration: 8m
+    maxTokens: 20000

@@ -1,0 +1,9 @@
+{{/* Copyright (c) Microsoft Corporation.
+     Licensed under the MIT License. */}}
+
+This chart installs the namespaced PgvectorBackend configuration CRD only.
+It does not deploy an adapter, database, registration, or credentials.
+Core runtime dispatch and ingestion still reject backendRef configurations.
+
+Helm does not upgrade or remove CRDs placed in crds/. Review CRD upgrades separately.
+Do not delete the CRD while configurations or committed knowledge bindings exist.

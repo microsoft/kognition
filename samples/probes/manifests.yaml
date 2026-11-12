@@ -1,0 +1,39 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Probes Sample
+#
+# Health, readiness, and reasoning probes for agent observability.
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: monitored-agent
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a reliable assistant. Always provide accurate, concise answers.
+  runtime:
+    class: default
+    timeout: 30s
+    maxTokens: 4096
+  probes:
+    healthProbe:
+      intervalSeconds: 30
+      timeoutSeconds: 5
+      failureThreshold: 3
+      successThreshold: 1
+    readinessProbe:
+      intervalSeconds: 30
+      timeoutSeconds: 10
+      failureThreshold: 3
+      successThreshold: 1
+    reasoningProbe:
+      intervalSeconds: 300
+      timeoutSeconds: 30
+      failureThreshold: 2
+      canaryTask: "What is 2 + 2?"
+      expectedOutcome: "4"
+      maxTokens: 256

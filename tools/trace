@@ -1,0 +1,362 @@
+#!/usr/bin/env bash
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BACKLOG_FILE="${ROOT_DIR}/BACKLOG.md"
+
+usage() {
+  echo "usage: tools/trace <ID>"
+  echo "examples:"
+  echo "  tools/trace FR-0001"
+  echo "  tools/trace T-0001"
+}
+
+if [[ $# -ne 1 ]]; then
+  usage
+  exit 2
+fi
+
+QUERY_ID="$1"
+if [[ ! "${QUERY_ID}" =~ ^(FR|NFR|US|T|TC)-[0-9]{4}$ ]]; then
+  echo "Unsupported ID format: ${QUERY_ID}"
+  usage
+  exit 2
+fi
+
+if [[ ! -f "${BACKLOG_FILE}" ]]; then
+  echo "Backlog file not found: ${BACKLOG_FILE}"
+  exit 2
+fi
+
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "${TMP_DIR}"' EXIT
+
+DATA_FILE="${TMP_DIR}/trace-data.tsv"
+
+awk -F'|' '
+function trim(s) {
+  gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+  return s
+}
+function add_parent(parents, id, us) {
+  if (id == "" || us == "") {
+    return
+  }
+  if (parents[id] == "") {
+    parents[id] = us
+  } else if (parents[id] !~ ("(^|,)" us "(,|$)")) {
+    parents[id] = parents[id] "," us
+  }
+}
+function add_us_trace(us, id) {
+  if (id == "") {
+    return
+  }
+  if (us_traces[us] == "") {
+    us_traces[us] = id
+  } else if (us_traces[us] !~ ("(^|,)" id "(,|$)")) {
+    us_traces[us] = us_traces[us] "," id
+  }
+}
+function add_fr_to_us(id, us) {
+  if (id == "" || us == "") {
+    return
+  }
+  if (fr_to_us[id] == "") {
+    fr_to_us[id] = us
+  } else if (fr_to_us[id] !~ ("(^|,)" us "(,|$)")) {
+    fr_to_us[id] = fr_to_us[id] "," us
+  }
+}
+function add_us_task(us, task) {
+  if (us == "" || task == "") {
+    return
+  }
+  if (us_to_tasks[us] == "") {
+    us_to_tasks[us] = task
+  } else if (us_to_tasks[us] !~ ("(^|,)" task "(,|$)")) {
+    us_to_tasks[us] = us_to_tasks[us] "," task
+  }
+}
+function add_us_tc(us, tc) {
+  if (us == "" || tc == "") {
+    return
+  }
+  if (us_to_tcs[us] == "") {
+    us_to_tcs[us] = tc
+  } else if (us_to_tcs[us] !~ ("(^|,)" tc "(,|$)")) {
+    us_to_tcs[us] = us_to_tcs[us] "," tc
+  }
+}
+function add_id_tc(id, tc) {
+  if (id == "" || tc == "") {
+    return
+  }
+  if (id_to_tcs[id] == "") {
+    id_to_tcs[id] = tc
+  } else if (id_to_tcs[id] !~ ("(^|,)" tc "(,|$)")) {
+    id_to_tcs[id] = id_to_tcs[id] "," tc
+  }
+}
+BEGIN {
+  current_us = ""
+  in_tasks = 0
+  in_tcs = 0
+}
+/^#### / && /US-[0-9]{4}/ {
+  in_tasks = 0
+  in_tcs = 0
+  if (match($0, /US-[0-9]{4}/)) {
+    current_us = substr($0, RSTART, RLENGTH)
+    defined_us[current_us] = 1
+  }
+  next
+}
+/^#### / {
+  in_tasks = 0
+  in_tcs = 0
+  current_us = ""
+  next
+}
+current_us != "" && /^\*\*Tasks:\*\*/ {
+  in_tasks = 1
+  in_tcs = 0
+  next
+}
+current_us != "" && /^\*\*Test Cases:\*\*/ {
+  in_tasks = 0
+  in_tcs = 1
+  next
+}
+current_us != "" && /^\*\*Traces:\*\*/ {
+  line = $0
+  while (match(line, /(FR|NFR)-[0-9]{4}/)) {
+    id = substr(line, RSTART, RLENGTH)
+    add_us_trace(current_us, id)
+    add_fr_to_us(id, current_us)
+    line = substr(line, RSTART + RLENGTH)
+  }
+  next
+}
+current_us != "" && in_tasks && /^\|/ {
+  if (match($2, /T-[0-9]{4}/)) {
+    task = substr($2, RSTART, RLENGTH)
+    us = current_us
+    if (match($4, /US-[0-9]{4}/)) {
+      us = substr($4, RSTART, RLENGTH)
+    }
+    add_parent(task_to_us, task, us)
+    add_us_task(us, task)
+  }
+  next
+}
+current_us != "" && in_tcs && /^\|/ {
+  if (!match($2, /TC-[0-9]{4}/)) {
+    next
+  }
+  tc = substr($2, RSTART, RLENGTH)
+  traces = trim($4)
+  add_parent(tc_to_us, tc, current_us)
+  add_us_tc(current_us, tc)
+  line = traces
+  while (match(line, /(FR|NFR)-[0-9]{4}/)) {
+    id = substr(line, RSTART, RLENGTH)
+    add_id_tc(id, tc)
+    line = substr(line, RSTART + RLENGTH)
+  }
+  next
+}
+END {
+  for (k in defined_us) {
+    print "US_DEFINED\t" k "\t1"
+  }
+  for (k in us_traces) {
+    print "US_TRACE\t" k "\t" us_traces[k]
+  }
+  for (k in fr_to_us) {
+    print "FR_TO_US\t" k "\t" fr_to_us[k]
+  }
+  for (k in us_to_tasks) {
+    print "US_TO_TASKS\t" k "\t" us_to_tasks[k]
+  }
+  for (k in us_to_tcs) {
+    print "US_TO_TCS\t" k "\t" us_to_tcs[k]
+  }
+  for (k in task_to_us) {
+    print "TASK_TO_US\t" k "\t" task_to_us[k]
+  }
+  for (k in tc_to_us) {
+    print "TC_TO_US\t" k "\t" tc_to_us[k]
+  }
+  for (k in id_to_tcs) {
+    print "ID_TO_TCS\t" k "\t" id_to_tcs[k]
+  }
+}
+' "${BACKLOG_FILE}" > "${DATA_FILE}"
+
+lookup() {
+  local kind="$1"
+  local key="$2"
+  awk -F'\t' -v kind="${kind}" -v key="${key}" '$1==kind && $2==key { print $3; exit }' "${DATA_FILE}"
+}
+
+collect_tokens() {
+  local csv="$1"
+  if [[ -z "${csv}" ]]; then
+    return
+  fi
+  tr ',' '\n' <<<"${csv}" | awk 'NF>0'
+}
+
+print_section() {
+  local title="$1"
+  local csv="$2"
+  echo "${title}:"
+  if [[ -z "${csv}" ]]; then
+    echo "  - (none)"
+    return
+  fi
+  collect_tokens "${csv}" | sort -u | while IFS= read -r item; do
+    echo "  - ${item}"
+  done
+}
+
+join_csv() {
+  awk 'NF { if (out=="") { out=$0 } else { out=out "," $0 } } END { print out }'
+}
+
+QUERY_KIND="${QUERY_ID%%-*}"
+US_CSV=""
+TASK_CSV=""
+TC_CSV=""
+FR_CSV=""
+NFR_CSV=""
+
+case "${QUERY_KIND}" in
+  FR|NFR)
+    US_CSV="$(lookup "FR_TO_US" "${QUERY_ID}")"
+    if [[ -z "${US_CSV}" ]]; then
+      echo "No chain found for ${QUERY_ID}."
+      exit 1
+    fi
+
+    while IFS= read -r us; do
+      t="$(lookup "US_TO_TASKS" "${us}")"
+      c="$(lookup "US_TO_TCS" "${us}")"
+      if [[ -n "${t}" ]]; then
+        TASK_CSV+="${TASK_CSV:+,}${t}"
+      fi
+      if [[ -n "${c}" ]]; then
+        TC_CSV+="${TC_CSV:+,}${c}"
+      fi
+      traces="$(lookup "US_TRACE" "${us}")"
+      if [[ -n "${traces}" ]]; then
+        while IFS= read -r id; do
+          if [[ "${id}" == FR-* ]]; then
+            FR_CSV+="${FR_CSV:+,}${id}"
+          elif [[ "${id}" == NFR-* ]]; then
+            NFR_CSV+="${NFR_CSV:+,}${id}"
+          fi
+        done < <(collect_tokens "${traces}")
+      fi
+    done < <(collect_tokens "${US_CSV}" | sort -u)
+    ;;
+  US)
+    if [[ -z "$(lookup "US_DEFINED" "${QUERY_ID}")" ]]; then
+      echo "No chain found for ${QUERY_ID}."
+      exit 1
+    fi
+    US_CSV="${QUERY_ID}"
+    TASK_CSV="$(lookup "US_TO_TASKS" "${QUERY_ID}")"
+    TC_CSV="$(lookup "US_TO_TCS" "${QUERY_ID}")"
+    traces="$(lookup "US_TRACE" "${QUERY_ID}")"
+    while IFS= read -r id; do
+      [[ -z "${id}" ]] && continue
+      if [[ "${id}" == FR-* ]]; then
+        FR_CSV+="${FR_CSV:+,}${id}"
+      elif [[ "${id}" == NFR-* ]]; then
+        NFR_CSV+="${NFR_CSV:+,}${id}"
+      fi
+    done < <(collect_tokens "${traces}")
+    ;;
+  T|TC)
+    if [[ "${QUERY_KIND}" == "T" ]]; then
+      US_CSV="$(lookup "TASK_TO_US" "${QUERY_ID}")"
+      TASK_CSV="${QUERY_ID}"
+    else
+      US_CSV="$(lookup "TC_TO_US" "${QUERY_ID}")"
+      TC_CSV="${QUERY_ID}"
+    fi
+    if [[ -z "${US_CSV}" ]]; then
+      echo "No chain found for ${QUERY_ID}."
+      exit 1
+    fi
+    while IFS= read -r us; do
+      if [[ "${QUERY_KIND}" == "T" ]]; then
+        linked="$(lookup "US_TO_TCS" "${us}")"
+        TC_CSV+="${linked:+${TC_CSV:+,}${linked}}"
+      else
+        linked="$(lookup "US_TO_TASKS" "${us}")"
+        TASK_CSV+="${linked:+${TASK_CSV:+,}${linked}}"
+      fi
+      traces="$(lookup "US_TRACE" "${us}")"
+      while IFS= read -r id; do
+        [[ -z "${id}" ]] && continue
+        if [[ "${id}" == FR-* ]]; then
+          FR_CSV+="${FR_CSV:+,}${id}"
+        elif [[ "${id}" == NFR-* ]]; then
+          NFR_CSV+="${NFR_CSV:+,}${id}"
+        fi
+      done < <(collect_tokens "${traces}")
+    done < <(collect_tokens "${US_CSV}" | sort -u)
+    ;;
+  *)
+    echo "Unsupported ID type for ${QUERY_ID}"
+    exit 2
+    ;;
+esac
+
+echo "Trace Chain for ${QUERY_ID}"
+print_section "US" "${US_CSV}"
+print_section "Tasks" "${TASK_CSV}"
+print_section "Test Cases" "${TC_CSV}"
+print_section "FR" "${FR_CSV}"
+print_section "NFR" "${NFR_CSV}"
+
+# Collect commit references by scanning commit subjects for any chain ID.
+COMMIT_KEYS="$(
+  {
+    echo "${QUERY_ID}"
+    collect_tokens "${US_CSV}"
+    collect_tokens "${TASK_CSV}"
+    collect_tokens "${TC_CSV}"
+    collect_tokens "${FR_CSV}"
+    collect_tokens "${NFR_CSV}"
+  } | awk 'NF' | sort -u
+)"
+
+echo "Commits:"
+if git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  KEYS_FILE="${TMP_DIR}/commit-keys.txt"
+  printf '%s\n' "${COMMIT_KEYS}" | awk 'NF' > "${KEYS_FILE}"
+
+  git -C "${ROOT_DIR}" log --pretty=format:'%h %s' | awk '
+    NR == FNR { keys[$0] = 1; next }
+    {
+      subject = substr($0, index($0, " ") + 1)
+      for (key in keys) {
+        if (index(subject, key)) {
+          print "  - " $0
+          matched = 1
+          break
+        }
+      }
+    }
+    END { if (!matched) print "  - (none found)" }
+  ' "${KEYS_FILE}" -
+else
+  echo "  - (git history unavailable)"
+fi

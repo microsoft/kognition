@@ -1,0 +1,36 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- $gateway := default (dict) .Values.agentCommunicationGateway }}
+{{- $monitoring := default (dict) $gateway.monitoring }}
+{{- $dashboard := default (dict) $monitoring.grafanaDashboard }}
+{{- if and (eq .Values.mode "kubernetes") $gateway.enabled $dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kognition.fullname" . }}-agent-communication-gateway-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    {{- with $dashboard.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  agent-communication-gateway.json: |
+    {
+      "title": "Kognition Agent Communication Gateway",
+      "schemaVersion": 39,
+      "panels": [
+        {
+          "title": "Delegation Rate by Operation and Outcome",
+          "type": "timeseries",
+          "targets": [{"expr": "sum by (operation, outcome) (rate(kognition_agent_communication_gateway_requests_total[5m]))"}]
+        },
+        {
+          "title": "P95 Delegation Latency",
+          "type": "timeseries",
+          "targets": [{"expr": "histogram_quantile(0.95, sum by (le, operation, outcome) (rate(kognition_agent_communication_gateway_request_duration_seconds_bucket[5m])))"}]
+        }
+      ]
+    }
+{{- end }}

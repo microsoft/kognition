@@ -1,0 +1,151 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+suite: Conditional rendering
+templates:
+  - templates/postgres-statefulset.yaml
+  - templates/migrations-configmap.yaml
+  - templates/apiserver-deployment.yaml
+  - templates/controller-manager-deployment.yaml
+  - templates/webhook-service.yaml
+  - templates/validating-webhook-configuration.yaml
+  - templates/mutating-webhook-configuration.yaml
+  - templates/webhook-certificate.yaml
+  - templates/k8s-controller-deployment.yaml
+  - templates/serviceaccount.yaml
+tests:
+  # --- postgres.enabled=false ---
+  - it: should NOT render postgres statefulset when postgres is disabled
+    template: templates/postgres-statefulset.yaml
+    set:
+      postgres.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should NOT render migrations configmap when postgres is disabled
+    template: templates/migrations-configmap.yaml
+    set:
+      postgres.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # Regression Bug #5: init containers gated on postgres.enabled
+  - it: should NOT have wait-for-postgres init container when postgres is disabled
+    template: templates/apiserver-deployment.yaml
+    set:
+      postgres.enabled: false
+    asserts:
+      - isNull:
+          path: spec.template.spec.initContainers
+
+  - it: should NOT have wait-for-postgres init container in controller-manager when postgres disabled
+    template: templates/controller-manager-deployment.yaml
+    set:
+      postgres.enabled: false
+    asserts:
+      - isNull:
+          path: spec.template.spec.initContainers
+
+  - it: should have wait-for-postgres init container when postgres is enabled
+    template: templates/apiserver-deployment.yaml
+    set:
+      postgres.enabled: true
+    asserts:
+      - isNotNull:
+          path: spec.template.spec.initContainers
+      - lengthEqual:
+          path: spec.template.spec.initContainers
+          count: 1
+
+  # --- webhook.enabled=false ---
+  - it: should NOT render webhook service when webhook is disabled
+    template: templates/webhook-service.yaml
+    set:
+      mode: kubernetes
+      webhook.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should NOT render validating webhook when webhook is disabled
+    template: templates/validating-webhook-configuration.yaml
+    set:
+      mode: kubernetes
+      webhook.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should NOT render mutating webhook when webhook is disabled
+    template: templates/mutating-webhook-configuration.yaml
+    set:
+      mode: kubernetes
+      webhook.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should NOT render webhook certificate when webhook is disabled
+    template: templates/webhook-certificate.yaml
+    set:
+      mode: kubernetes
+      webhook.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # Regression Bug #6: webhook port/volumes gated on webhook.enabled
+  - it: should NOT have webhook port in k8s-controller when webhook is disabled
+    template: templates/k8s-controller-deployment.yaml
+    set:
+      mode: kubernetes
+      webhook.enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            containerPort: 9443
+            name: webhook
+
+  - it: should NOT have webhook volumes in k8s-controller when webhook is disabled
+    template: templates/k8s-controller-deployment.yaml
+    set:
+      mode: kubernetes
+      webhook.enabled: false
+    asserts:
+      - isNull:
+          path: spec.template.spec.volumes
+
+  - it: should have webhook port in k8s-controller when webhook is enabled
+    template: templates/k8s-controller-deployment.yaml
+    set:
+      mode: kubernetes
+      webhook.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            containerPort: 9443
+            name: webhook
+
+  # --- certManager.enabled=false ---
+  - it: should NOT render webhook certificate when certManager is disabled
+    template: templates/webhook-certificate.yaml
+    set:
+      mode: kubernetes
+      webhook.enabled: true
+      webhook.certManager.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # --- serviceAccount.create=false ---
+  - it: should NOT render serviceaccount when create is false
+    template: templates/serviceaccount.yaml
+    set:
+      serviceAccount.create: false
+    asserts:
+      - hasDocuments:
+          count: 0

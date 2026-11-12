@@ -1,0 +1,169 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Demo: Tool Steps via HTTP (OpenAPI + MCP)
+#
+# Exercises step.type=tool with two HTTP-backed protocols that the controller's
+# ToolDispatcher executes directly. Both tools live in the tool-sandbox pod
+# deployed by tool-sandbox.yaml — apply that file first.
+#
+#   - sandbox-timestamp (protocol: OpenAPI)  → POST /timestamp on tool-sandbox svc
+#   - sandbox-greet     (protocol: MCP)      → POST /mcp     on tool-sandbox svc
+#
+# Topology:
+#   ts   (tool: sandbox-timestamp, OpenAPI) ──┐
+#                                             ├──→ compose (agent)
+#   hi   (tool: sandbox-greet,     MCP)     ──┘
+#
+# Prerequisites (apply in order):
+#   1. kubectl apply -f samples/workflows/_agents.yaml       (wfdemo-llm agent)
+#   2. kubectl apply -f samples/workflows/tool-sandbox.yaml  (HTTP server)
+#   3. kubectl apply -f samples/workflows/tool-steps-http.yaml (this file)
+#
+# Tool invocation requires both AgentRole RBAC for the Tool kind and the
+# per-tool grants in AgentPolicy.spec.toolGrants.
+#
+# Trigger:
+#   kubectl create -f - <<EOF
+#   apiVersion: kognition.dev/v1alpha1
+#   kind: WorkflowRun
+#   metadata: { generateName: tool-http-, namespace: default }
+#   spec:
+#     workflowRef: { name: wfdemo-tool-pipeline-http }
+#     input: "the weekly release"
+#   EOF
+---
+kind: Tool
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: sandbox-timestamp
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+spec:
+  className: sandbox-openapi
+  protocol: OpenAPI
+  description: Returns the current UTC timestamp as ISO-8601 and unix seconds.
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/timestamp
+  metadata:
+    allowPrivateNetwork: "true"
+  inputSchema:
+    type: object
+    properties:
+      timezone:
+        type: string
+        description: Timezone label to echo back (informational only).
+        default: UTC
+---
+kind: Tool
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: sandbox-greet
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+spec:
+  className: sandbox-mcp
+  protocol: MCP
+  description: MCP tools/call that returns a friendly greeting.
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/mcp
+  metadata:
+    allowPrivateNetwork: "true"
+  inputSchema:
+    type: object
+    properties:
+      who:
+        type: string
+        description: Who to greet.
+        default: world
+---
+# AgentPolicy authorizes wfdemo-llm to invoke both tools. The K8s store
+# adapter synthesizes v1alpha1.ToolGrant records from this policy for the
+# ToolGrantEngine.
+kind: AgentPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-tool-http-grants
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+spec:
+  scope: agent
+  enforce: true
+  targetAgents:
+    - wfdemo-llm
+  toolGrants:
+    - toolRef: sandbox-timestamp
+      allow: true
+    - toolRef: sandbox-greet
+      allow: true
+---
+kind: AgentRole
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-tool-http-invoker
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+rules:
+  - resources:
+      - Tool
+    verbs:
+      - get
+      - invoke
+---
+kind: AgentRoleBinding
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-tool-http-invoker
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+spec:
+  roleRef:
+    name: wfdemo-tool-http-invoker
+  subjects:
+    - kind: Agent
+      name: wfdemo-llm
+---
+kind: Workflow
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-tool-pipeline-http
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+    workflow.kognition.dev/feature: tool-steps-http
+spec:
+  steps:
+    - name: ts
+      type: tool
+      agentRef:
+        name: wfdemo-llm
+      toolRef:
+        name: sandbox-timestamp
+      input: '{"timezone": "UTC"}'
+    - name: hi
+      type: tool
+      agentRef:
+        name: wfdemo-llm
+      toolRef:
+        name: sandbox-greet
+      input: '{"who": "Kognition"}'
+    - name: compose
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        Compose a one-sentence status line for "{{.Input}}".
+        Weave in these two facts verbatim (do not edit them):
+          - timestamp tool said: {{.Steps.ts.Output}}
+          - greet tool said:     {{.Steps.hi.Output}}
+      timeout: 180s
+  edges:
+    - from: ts
+      to: compose
+    - from: hi
+      to: compose
+  budgets:
+    maxDuration: 3m
+    maxTokens: 4000

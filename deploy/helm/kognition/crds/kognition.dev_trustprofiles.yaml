@@ -1,0 +1,266 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: trustprofiles.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: TrustProfile
+    listKind: TrustProfileList
+    plural: trustprofiles
+    singular: trustprofile
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.agentRef.name
+      name: Agent
+      type: string
+    - jsonPath: .status.currentScore
+      name: Score
+      type: number
+    - jsonPath: .status.currentClass
+      name: Class
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        required: [spec]
+        x-kubernetes-validations:
+        - rule: "self.spec.agentRef == oldSelf.spec.agentRef"
+          message: "TrustProfile agentRef is immutable"
+        - rule: "self.spec.agentIncarnationUID == oldSelf.spec.agentIncarnationUID"
+          message: "TrustProfile agentIncarnationUID is immutable"
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              agentIncarnationUID:
+                minLength: 1
+                type: string
+              agentRef:
+                description: LocalObjectReference references a resource by name within
+                  the same namespace.
+                properties:
+                  name:
+                    description: Name is the name of the referenced resource.
+                    type: string
+                required:
+                - name
+                type: object
+              demotionPolicy:
+                properties:
+                  fallbackClass:
+                    type: string
+                  freezeDuration:
+                    type: string
+                  mode:
+                    enum: [immediate, probation]
+                    type: string
+                type: object
+              evaluationInterval:
+                type: string
+              initialClass:
+                type: string
+              initialScore:
+                minimum: 0
+                maximum: 100
+                type: number
+              maxClass:
+                type: string
+              promotionPolicy:
+                properties:
+                  minActions:
+                    format: int64
+                    type: integer
+                  minScoreDuration:
+                    type: string
+                  requireReview:
+                    type: boolean
+                  stabilizationWindowDays:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  thresholds:
+                    items:
+                      properties:
+                        minScore:
+                          minimum: 0
+                          maximum: 100
+                          type: number
+                        requireReview:
+                          type: boolean
+                        targetClass:
+                          minLength: 1
+                          type: string
+                      required:
+                      - minScore
+                      - targetClass
+                      type: object
+                    type: array
+                type: object
+              scoringWeights:
+                properties:
+                  approvalAlignmentRate:
+                    minimum: 0
+                    maximum: 1
+                    type: number
+                  costEfficiency:
+                    minimum: 0
+                    maximum: 1
+                    type: number
+                  failureWeight:
+                    minimum: -100
+                    maximum: 0
+                    type: number
+                  policyCompliance:
+                    minimum: 0
+                    maximum: 1
+                    type: number
+                  policyViolationWeight:
+                    minimum: -100
+                    maximum: 0
+                    type: number
+                  successWeight:
+                    minimum: 0
+                    maximum: 100
+                    type: number
+                  taskCompletionRate:
+                    minimum: 0
+                    maximum: 1
+                    type: number
+                  toolUsageAccuracy:
+                    minimum: 0
+                    maximum: 1
+                    type: number
+                type: object
+            required:
+            - agentIncarnationUID
+            - agentRef
+            - initialScore
+            type: object
+          status:
+            properties:
+              approvalStats:
+                properties:
+                  totalApproved:
+                    format: int64
+                    type: integer
+                  totalDenied:
+                    format: int64
+                    type: integer
+                  totalRequested:
+                    format: int64
+                    type: integer
+                type: object
+              auditedActions:
+                format: int64
+                type: integer
+              conditions:
+                items:
+                  properties:
+                    type: {type: string}
+                    status: {type: string}
+                    reason: {type: string}
+                    message: {type: string}
+                  required: [type, status]
+                  type: object
+                type: array
+              currentClass:
+                type: string
+              currentScore:
+                type: number
+              currentTier:
+                type: string
+              lastEvaluationTime:
+                type: string
+              pendingTrustChange:
+                properties:
+                  evidence:
+                    type: string
+                  fromClass:
+                    type: string
+                  kind:
+                    type: string
+                  timestamp:
+                    type: string
+                  toClass:
+                    type: string
+                required:
+                - evidence
+                - fromClass
+                - kind
+                - toClass
+                type: object
+              probationUntil:
+                type: string
+              processedEventIDs:
+                items:
+                  type: string
+                type: array
+              scoreHistory:
+                items:
+                  properties:
+                    class:
+                      type: string
+                    dimensions:
+                      properties:
+                        approvalAlignmentRate:
+                          type: number
+                        costEfficiency:
+                          type: number
+                        policyCompliance:
+                          type: number
+                        taskCompletionRate:
+                          type: number
+                        toolUsageAccuracy:
+                          type: number
+                      type: object
+                    reason:
+                      type: string
+                    score:
+                      type: number
+                    timestamp:
+                      type: string
+                  required:
+                  - score
+                  - timestamp
+                  type: object
+                type: array
+              thresholdClass:
+                type: string
+              thresholdMetSince:
+                type: string
+              totalEvaluations:
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

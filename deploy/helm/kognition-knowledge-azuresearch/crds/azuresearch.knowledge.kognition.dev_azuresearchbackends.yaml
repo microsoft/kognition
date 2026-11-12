@@ -1,0 +1,61 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: azuresearchbackends.azuresearch.knowledge.kognition.dev
+spec:
+  group: azuresearch.knowledge.kognition.dev
+  scope: Namespaced
+  names:
+    plural: azuresearchbackends
+    singular: azuresearchbackend
+    kind: AzureSearchBackend
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required: [serviceName, indexName, embeddingDimensions, authentication]
+              properties:
+                serviceName:
+                  type: string
+                  minLength: 2
+                  maxLength: 60
+                  pattern: '^[a-z0-9][a-z0-9]([a-z0-9-]{0,57}[a-z0-9])?$'
+                  x-kubernetes-validations:
+                    - rule: "!self.contains('--')"
+                      message: serviceName must not contain consecutive dashes
+                indexName:
+                  type: string
+                  minLength: 2
+                  maxLength: 128
+                  pattern: '^[a-z0-9][a-z0-9_-]{1,127}$'
+                  x-kubernetes-validations:
+                    - rule: "!self.contains('--') && !self.contains('__')"
+                      message: indexName must not contain consecutive dashes or underscores
+                embeddingDimensions:
+                  type: integer
+                  format: int32
+                  minimum: 1
+                  maximum: 4096
+                authentication:
+                  type: object
+                  required: [mode]
+                  properties:
+                    mode:
+                      type: string
+                      enum: [workload-identity]

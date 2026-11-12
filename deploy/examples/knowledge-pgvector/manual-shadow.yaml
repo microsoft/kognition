@@ -1,0 +1,215 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Administrator-reviewed opt-in migration, outside automatic sample lifecycle.
+# Prepare approved provider/database TLS, schema, credentials, Models and source
+# fixtures first. Creating these three shadow KBs starts their initial indexing.
+# Original classes, claims, KBs and persisted generations are not changed.
+apiVersion: pgvector.knowledge.kognition.dev/v1alpha1
+kind: PgvectorBackend
+metadata:
+  name: manual-pgvector-v2
+  namespace: default
+spec:
+  host: kognition-kb-pgvector.kognition-system.svc.cluster.local
+  port: 5432
+  database: kognition_kb
+  table: kognition_knowledge_chunks_v2
+  embeddingDimensions: 1536
+  credentialsSecretRef:
+    name: kognition-pgvector-v2-credentials
+    usernameKey: username
+    passwordKey: password
+  tls:
+    mode: verify-full
+    caSecretRef: {name: kognition-pgvector-v2-ca, key: ca.crt}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClass
+metadata:
+  name: governed-pgvector-v2
+spec:
+  provisioner: pgvector
+  indexMode: dense
+  reclaimPolicy: Delete
+  embeddingModelRef: {name: text-embedding-3-small}
+  backendRef:
+    apiGroup: pgvector.knowledge.kognition.dev
+    kind: PgvectorBackend
+    name: manual-pgvector-v2
+  chunkStrategy: {mode: recursive, size: 512, overlap: 64}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBase
+metadata:
+  name: azure-docs-kb-v2
+  namespace: default
+  annotations: {kognition.dev/ingest-allow-private-networks: "true"}
+spec:
+  knowledgeBaseClassName: governed-pgvector-v2
+  refreshPolicy: {mode: onDemand}
+  sources:
+    - type: blob
+      blob:
+        provider: azure
+        bucket: product-docs
+        prefix: mark7/
+        credentialSecretRef: {name: azurite-blob-creds}
+        include: ["**/*.md", "**/*.txt", "**/*.pdf"]
+        exclude: ["**/drafts/**"]
+---
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBase
+metadata:
+  name: kognition-docs-kb-v2
+  namespace: default
+  annotations: {kognition.dev/ingest-allow-private-networks: "true"}
+spec:
+  knowledgeBaseClassName: governed-pgvector-v2
+  refreshPolicy: {mode: onDemand}
+  sources:
+    - type: url
+      uri: http://kognition-docs.samples-kognition-docs-services.svc.cluster.local/README.md
+    - type: url
+      uri: http://kognition-docs.samples-kognition-docs-services.svc.cluster.local/PROJECT.md
+    - type: url
+      uri: http://kognition-docs.samples-kognition-docs-services.svc.cluster.local/BACKLOG.md
+    - type: url
+      uri: http://kognition-docs.samples-kognition-docs-services.svc.cluster.local/kognition-manifest.md
+---
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBase
+metadata:
+  name: s3-docs-kb-v2
+  namespace: default
+  annotations: {kognition.dev/ingest-allow-private-networks: "true"}
+spec:
+  knowledgeBaseClassName: governed-pgvector-v2
+  refreshPolicy: {mode: onDemand}
+  sources:
+    - type: blob
+      blob:
+        provider: s3
+        bucket: product-docs
+        endpoint: http://minio.samples-s3-blob-services.svc.cluster.local:9000
+        region: us-east-1
+        prefix: mark7/
+        credentialSecretRef: {name: s3-blob-creds}
+        include: ["**/*.md", "**/*.txt", "**/*.pdf"]
+        exclude: ["**/drafts/**"]
+---
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClaim
+metadata: {name: azure-docs-claim-v2, namespace: default}
+spec:
+  knowledgeBaseName: azure-docs-kb-v2
+  accessMode: ReadOnly
+  retrieval: {mode: dense, topK: 5}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClaim
+metadata: {name: kognition-docs-claim-v2, namespace: default}
+spec:
+  knowledgeBaseName: kognition-docs-kb-v2
+  accessMode: ReadOnly
+  retrieval: {mode: dense, topK: 5}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClaim
+metadata: {name: s3-docs-claim-v2, namespace: default}
+spec:
+  knowledgeBaseName: s3-docs-kb-v2
+  accessMode: ReadOnly
+  retrieval: {mode: dense, topK: 5}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata: {name: azure-docs-agent-v2, namespace: default}
+spec:
+  modelRef: {name: gpt-6-luna}
+  knowledgeBaseClaims: [{name: azure-docs-claim-v2, required: true}]
+  instructions:
+    inline: |
+      Answer Orbital Mark 7 product questions by calling knowledge_search first.
+      Quote the retrieved passage and cite its source. Report retrieval errors
+      or missing evidence explicitly instead of inventing product details.
+  runtime: {class: default, timeout: 180s, maxTokens: 1024}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata: {name: kognition-docs-agent-v2, namespace: default}
+spec:
+  modelRef: {name: gpt-6-luna}
+  knowledgeBaseClaims: [{name: kognition-docs-claim-v2, required: true}]
+  instructions:
+    inline: |
+      Answer Kognition questions by calling knowledge_search first. Quote the
+      retrieved passage and cite its source. Report retrieval errors or missing
+      evidence explicitly instead of inventing project behavior.
+  runtime: {class: default, timeout: 180s, maxTokens: 1024}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata: {name: s3-docs-agent-v2, namespace: default}
+spec:
+  modelRef: {name: gpt-6-luna}
+  knowledgeBaseClaims: [{name: s3-docs-claim-v2, required: true}]
+  instructions:
+    inline: |
+      Answer Orbital Mark 7 product questions by calling knowledge_search first.
+      Quote the retrieved passage and cite its source. Report retrieval errors
+      or missing evidence explicitly instead of inventing product details.
+  runtime: {class: default, timeout: 180s, maxTokens: 1024}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata: {name: kognition-docs-autogen-v2, namespace: default}
+spec:
+  modelRef: {name: gpt-6-luna}
+  knowledgeBaseClaims: [{name: kognition-docs-claim-v2, required: true}]
+  instructions:
+    inline: |
+      Answer Kognition questions by calling knowledge_search first. Quote the
+      retrieved passage and cite its source. Report retrieval errors or missing
+      evidence explicitly instead of inventing project behavior.
+  runtime: {class: autogen, timeout: 180s, maxTokens: 1024}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: azure-docs-v2-chat, namespace: default}
+spec: {agentRef: {name: azure-docs-agent-v2}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: azure-docs-v2-embedding, namespace: default}
+spec: {agentRef: {name: azure-docs-agent-v2}, modelRef: {name: text-embedding-3-small}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: kognition-docs-v2-chat, namespace: default}
+spec: {agentRef: {name: kognition-docs-agent-v2}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: kognition-docs-v2-embedding, namespace: default}
+spec: {agentRef: {name: kognition-docs-agent-v2}, modelRef: {name: text-embedding-3-small}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: s3-docs-v2-chat, namespace: default}
+spec: {agentRef: {name: s3-docs-agent-v2}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: s3-docs-v2-embedding, namespace: default}
+spec: {agentRef: {name: s3-docs-agent-v2}, modelRef: {name: text-embedding-3-small}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: kognition-docs-autogen-v2-chat, namespace: default}
+spec: {agentRef: {name: kognition-docs-autogen-v2}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: kognition-docs-autogen-v2-embedding, namespace: default}
+spec: {agentRef: {name: kognition-docs-autogen-v2}, modelRef: {name: text-embedding-3-small}}

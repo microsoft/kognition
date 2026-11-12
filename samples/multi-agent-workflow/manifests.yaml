@@ -1,0 +1,191 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Multi-Agent Workflow Sample
+# Exercises: ModelClass, SecretRef, Model, Agent (×3), Workflow with edges and approval gate
+#
+# Scenario: A content-creation pipeline with three collaborating agents:
+#   1. Researcher — gathers information on a topic
+#   2. Writer     — drafts an article from the research
+#   3. Reviewer   — reviews the draft and provides feedback
+#
+# Topology (edge-primary):
+#   researcher ──→ writer ──→ reviewer
+#                    ↑            │
+#                    └────────────┘  (conditional: revision needed)
+#
+# An approval gate sits between writer and reviewer so a human can
+# inspect the draft before the review step proceeds.
+#
+# Credentials: uses Azure AI Foundry via client-secret auth.
+# Fill tenantId, clientId, clientSecret from your .env file.
+---
+kind: ModelClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: foundry
+  namespace: default
+spec:
+  provisioner: foundry
+  latencyClass: low
+  costTier: standard
+  contextWindow: 128000
+  modalities:
+    - text
+
+# NOTE: This sample expects the following prerequisites in the `default`
+# namespace, applied separately by the cluster operator:
+#   - SecretRef `foundry-creds`  (Azure AD client-secret for Foundry)
+#   - Model     `gpt-6-luna`        (referenced by all agents below)
+# Apply your repo-root `foundry-creds.yaml` first. Do NOT redeclare those
+# resources here — applying placeholder values would clobber real credentials
+# and break the cluster.
+
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: researcher
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a research specialist. Given a topic, gather comprehensive
+      information including key facts, statistics, opposing viewpoints, and
+      notable sources. Structure your output as a research brief with:
+      - Executive Summary
+      - Key Findings (bullet points)
+      - Sources and References
+      - Open Questions
+
+      Be thorough but concise. Focus on accuracy and breadth of coverage.
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 8192
+
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: writer
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a professional technical writer. Given a research brief (or
+      reviewer feedback with a previous draft), produce a well-structured
+      article that is clear, engaging, and informative.
+
+      Article structure:
+      - Title
+      - Introduction (hook + thesis)
+      - Body sections with headers
+      - Conclusion
+      - References
+
+      If you receive revision feedback, incorporate it while preserving the
+      strengths noted by the reviewer.
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 8192
+
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: reviewer
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a senior editor and content reviewer. Evaluate the article
+      for clarity, accuracy, structure, and engagement.
+
+      Provide your review in this format:
+      - Overall Assessment: (approved | revision-needed)
+      - Strengths (bullet points)
+      - Issues (bullet points with severity: critical/minor)
+      - Specific Suggestions (inline corrections or rewrites)
+
+      Set your overall assessment to "approved" only if the article is
+      publication-ready. Otherwise use "revision-needed".
+  runtime:
+    class: default
+    timeout: 45s
+    maxTokens: 4096
+
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: content-pipeline-researcher-to-writer
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: researcher
+  allowTo:
+    - name: writer
+
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: content-pipeline-writer-to-reviewer
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: writer
+  allowTo:
+    - name: reviewer
+
+---
+kind: Workflow
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: content-pipeline
+  namespace: default
+spec:
+  entryPoint: researcher
+  steps:
+    - name: researcher
+      agentRef:
+        name: researcher
+      # {{.Input}} resolves to WorkflowRun.spec.input. Trigger this Workflow
+      # by creating a WorkflowRun pointing at content-pipeline with a topic
+      # in spec.input.
+      input: "Research the following topic thoroughly: {{.Input}}"
+      timeout: 90s
+    - name: writer
+      agentRef:
+        name: writer
+      input: "Write an article based on this research:\n{{.Steps.researcher.Output}}"
+      timeout: 90s
+    - name: reviewer
+      agentRef:
+        name: reviewer
+      input: "Review this article:\n{{.Steps.writer.Output}}"
+      timeout: 60s
+  edges:
+    - from: researcher
+      to: writer
+    - from: writer
+      to: reviewer
+  # NOTE: A conditional back-edge (reviewer -> writer for revisions) would
+  # introduce a cycle; the current DAG validator rejects cycles. Revision
+  # loops will be supported by a future iterative-workflow feature.
+  approvalGates:
+    - from: writer
+      to: reviewer
+  budgets:
+    maxDuration: 10m
+    maxTokens: 50000

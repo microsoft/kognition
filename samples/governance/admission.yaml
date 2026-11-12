@@ -1,0 +1,67 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# CognitiveAdmissionPolicy Sample
+#
+# OPA-based admission control — validates agents at creation/update time.
+---
+kind: CognitiveAdmissionPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: no-empty-instructions
+spec:
+  failurePolicy: Deny
+  matchKinds:
+    - Agent
+  matchOperations:
+    - CREATE
+    - UPDATE
+  rego: |
+    package kognition.admission
+
+    deny[msg] {
+      input.kind == "Agent"
+      not input.spec.instructions.inline
+      not input.spec.instructions.ref
+      msg := "Agent must define instructions (inline or ref)"
+    }
+---
+kind: CognitiveAdmissionPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: require-model-ref
+spec:
+  failurePolicy: Deny
+  matchKinds:
+    - Agent
+  matchOperations:
+    - CREATE
+    - UPDATE
+  rego: |
+    package kognition.admission
+
+    deny[msg] {
+      input.kind == "Agent"
+      not input.spec.modelRef.name
+      msg := "Agent must reference a model via modelRef"
+    }
+---
+kind: CognitiveAdmissionPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: max-token-limit
+spec:
+  failurePolicy: Deny
+  matchKinds:
+    - Agent
+  matchOperations:
+    - CREATE
+    - UPDATE
+  rego: |
+    package kognition.admission
+
+    deny[msg] {
+      input.kind == "Agent"
+      input.spec.runtime.maxTokens > 32768
+      msg := sprintf("maxTokens %d exceeds limit of 32768", [input.spec.runtime.maxTokens])
+    }

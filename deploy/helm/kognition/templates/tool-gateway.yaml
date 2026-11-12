@@ -1,0 +1,221 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- $toolGateway := default (dict) .Values.toolGateway }}
+{{- if and (eq .Values.mode "kubernetes") $toolGateway.enabled }}
+{{- $name := printf "%s-tool-gateway" (include "kognition.fullname" .) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tool-gateway
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-runtime-identity
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-runtime-identity
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-runtime-identity
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+rules:
+  - apiGroups: ["kognition.dev"]
+    resources: ["agents", "agentinstances", "agentidentities", "agentpolicies", "agentroles", "agentrolebindings", "tools", "toolgrants", "toolinvocationruns"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["cognitivequotas"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["cognitivequotas/status"]
+    verbs: ["get", "update", "patch"]
+  # ADR-0014 Gate 3: resolve autonomy policy (TrustProfile + AutonomyClass)
+  # and persist RuntimeApprovals in the invoking Agent's workspace.
+  - apiGroups: ["kognition.dev"]
+    resources: ["trustprofiles", "trustprofileindices", "autonomyclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["runtimeapprovals"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["runtimeapprovals/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["runtimeapprovaltombstones"]
+    verbs: ["get"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["runtimeapprovalquotatickets"]
+    verbs: ["get", "list", "create", "update"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["kognition-runtime-approval-records"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-ledger
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-ledger
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-ledger
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tool-gateway
+spec:
+  replicas: {{ $toolGateway.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: tool-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "kognition.labels" . | nindent 8 }}
+        app.kubernetes.io/component: tool-gateway
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ $name }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: tool-gateway
+          image: {{ include "kognition.image" (dict "global" .Values.global "image" $toolGateway.image "defaultTag" .Chart.AppVersion) }}
+          imagePullPolicy: {{ $toolGateway.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8092
+          env:
+            - name: LISTEN_ADDR
+              value: ":8092"
+            - name: KOGNITION_RUNTIME_APPROVAL_WORKLOAD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: KOGNITION_TOOL_GATEWAY_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: KOGNITION_COST_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_MAXIMUM_CLOCK_SKEW
+              value: {{ .Values.runtimeAuth.maximumClockSkew | quote }}
+            - name: KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (printf "%s-runtime-auth" (include "kognition.fullname" .)) .Values.runtimeAuth.existingSecret }}
+                  key: runtime-approval-binding-keys.json
+            - name: TOOL_CAPABILITY_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-tool-gateway
+                  key: capability-hmac-key
+            - name: TOOL_CAPABILITY_HMAC_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-tool-gateway
+                  key: capability-hmac-key-id
+            - name: TOOL_CAPABILITY_HMAC_PREVIOUS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-tool-gateway
+                  key: capability-hmac-previous-key
+                  optional: true
+            - name: TOOL_CAPABILITY_HMAC_PREVIOUS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-tool-gateway
+                  key: capability-hmac-previous-key-id
+                  optional: true
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources:
+            {{- toYaml $toolGateway.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tool-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: tool-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ $toolGateway.service.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

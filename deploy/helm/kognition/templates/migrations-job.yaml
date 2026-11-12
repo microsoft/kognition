@@ -1,0 +1,107 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- /*
+Idempotent schema migration Job. Kubernetes mode uses a content-addressed
+ordinary Job; standalone mode uses a post-install/post-upgrade Helm hook.
+Tracks applied migrations in a `schema_migrations` table so
+non-idempotent SQL is only attempted once per version.
+
+This is the sole migration path for both in-chart and external Postgres. The
+in-chart StatefulSet starts with an empty data dir and this Job creates the
+schema on first install (apiserver may briefly crash-loop until it completes).
+*/ -}}
+{{- if and .Values.migrations.retainCompletedJobs (ne .Values.mode "kubernetes") }}
+{{- fail "migrations.retainCompletedJobs requires Kubernetes mode" }}
+{{- end }}
+{{- if or (eq .Values.mode "standalone") (eq .Values.memoryService.backendType "pgvector") (and (eq .Values.mode "kubernetes") .Values.memoryService.enabled .Values.memoryPolicyGateway.enabled) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  {{- if eq .Values.mode "kubernetes" }}
+  name: {{ printf "%s-migrations-%s" (include "kognition.fullname" . | trunc 35 | trimSuffix "-") ((.Files.Glob "migrations/*").AsConfig | sha256sum | trunc 12) }}
+  {{- else }}
+  name: {{ include "kognition.fullname" . }}-migrations
+  {{- end }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+  {{- if ne .Values.mode "kubernetes" }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  {{- end }}
+spec:
+  backoffLimit: 3
+  {{- if not .Values.migrations.retainCompletedJobs }}
+  ttlSecondsAfterFinished: 600
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "kognition.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrations
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      securityContext:
+        {{- toYaml .Values.dbPodSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.postgres.enabled }}
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ include "kognition.thirdPartyImage" (dict "global" .Values.global "image" .Values.thirdPartyImages.busybox) }}
+          securityContext:
+            {{- toYaml .Values.dbContainerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.waitForPostgres.resources | nindent 12 }}
+          command: ['sh', '-c', 'until nc -z {{ include "kognition.fullname" . }}-postgres 5432; do echo waiting for postgres; sleep 2; done']
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "kognition.thirdPartyImage" (dict "global" .Values.global "image" .Values.postgres.image) }}
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.dbContainerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.databaseSecretName" . }}
+                  key: DATABASE_URL
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              echo "Ensuring schema_migrations tracking table..."
+              psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c \
+                "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());"
+              for f in $(ls /migrations/*.sql | sort); do
+                version="$(basename "$f" .sql)"
+                applied="$(psql "$DATABASE_URL" -At -c "SELECT 1 FROM schema_migrations WHERE version = '$version';")"
+                if [ "$applied" = "1" ]; then
+                  echo "skip  $version (already applied)"
+                  continue
+                fi
+                echo "apply $version"
+                psql "$DATABASE_URL" -v ON_ERROR_STOP=1 --single-transaction \
+                  -f "$f" \
+                  -c "INSERT INTO schema_migrations (version) VALUES ('$version');"
+              done
+              echo "Migrations complete."
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+      volumes:
+        - name: migrations
+          configMap:
+            name: {{ include "kognition.fullname" . }}-migrations
+{{- end }}

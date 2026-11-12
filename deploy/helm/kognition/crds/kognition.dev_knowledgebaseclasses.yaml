@@ -1,0 +1,190 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: knowledgebaseclasses.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: KnowledgeBaseClass
+    listKind: KnowledgeBaseClassList
+    plural: knowledgebaseclasses
+    singular: knowledgebaseclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.provisioner
+      name: Provisioner
+      type: string
+    - jsonPath: .spec.indexMode
+      name: IndexMode
+      type: string
+    - jsonPath: .spec.reclaimPolicy
+      name: Reclaim
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        required: [spec]
+        description: KnowledgeBaseClass defines a class of knowledge-base provisioner
+          (cluster-scoped).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              KnowledgeBaseClassSpec defines the provisioner and default configuration for
+              knowledge bases of this class.
+            properties:
+              backendRef:
+                properties:
+                  apiGroup:
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
+                  kind:
+                    pattern: ^[A-Z][A-Za-z0-9]{0,62}$
+                    type: string
+                  name:
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
+                required:
+                - apiGroup
+                - kind
+                - name
+                type: object
+              chunkStrategy:
+                description: ChunkStrategy defines default chunking behaviour for
+                  ingested documents.
+                properties:
+                  mode:
+                    description: Mode selects the splitting algorithm.
+                    enum:
+                    - fixed
+                    - sentence
+                    - recursive
+                    type: string
+                  overlap:
+                    description: Overlap is the number of tokens shared between adjacent
+                      chunks.
+                    format: int32
+                    type: integer
+                  size:
+                    description: Size is the target chunk size in tokens.
+                    format: int32
+                    type: integer
+                type: object
+              embeddingModelRef:
+                description: |-
+                  EmbeddingModelRef references the model used to produce embeddings.
+                  Ignored by the "inline" provisioner.
+                properties:
+                  name:
+                    description: Name is the name of the referenced resource.
+                    type: string
+                required:
+                - name
+                type: object
+              indexMode:
+                description: IndexMode selects the vector index strategy.
+                enum:
+                - dense
+                - sparse
+                - hybrid
+                - inline
+                type: string
+              parameters:
+                additionalProperties:
+                  type: string
+                description: Parameters are provisioner-specific key-value configuration
+                  pairs.
+                type: object
+              provisioner:
+                description: Provisioner is the driver identifier (e.g. "inline",
+                  "pgvector", "qdrant").
+                type: string
+              reclaimPolicy:
+                default: Retain
+                description: |-
+                  ReclaimPolicy controls what happens to the index storage when a
+                  KnowledgeBase is deleted.
+                enum:
+                - Delete
+                - Retain
+                - Archive
+                type: string
+              vectorStore:
+                description: VectorStore configures the legacy pgvector backend.
+                properties:
+                  pgvector:
+                    description: Pgvector is required when Type is "pgvector".
+                    properties:
+                      connectionSecretRef:
+                        description: ConnectionSecretRef references a Secret carrying
+                          the Postgres DSN.
+                        properties:
+                          name:
+                            description: Name is the name of the referenced resource.
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      dimension:
+                        description: |-
+                          Dimension is the embedding dimension used when provisioning the vector
+                          column. Defaults to 1536.
+                        format: int32
+                        type: integer
+                      table:
+                        description: |-
+                          Table is the Postgres table storing chunk rows. Defaults to
+                          "kognition_kb_chunks".
+                        type: string
+                    required:
+                    - connectionSecretRef
+                    type: object
+                  type:
+                    description: Type discriminates the provider.
+                    enum:
+                    - pgvector
+                    type: string
+                required:
+                - type
+                type: object
+            required:
+            - provisioner
+            type: object
+            x-kubernetes-validations:
+            - message: backendRef and vectorStore are mutually exclusive
+              rule: '!(has(self.backendRef) && has(self.vectorStore))'
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

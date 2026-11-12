@@ -1,0 +1,719 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Tool sandbox: an in-cluster HTTP server that speaks both OpenAPI-style REST
+# endpoints and an MCP JSON-RPC 2.0 endpoint. Backs the sandbox-* Tool CRs
+# that samples across the repo use for every LLM-invokable capability.
+#
+# Tools exposed:
+#   OpenAPI (POST + GET /schema):
+#     /timestamp         - sandbox-timestamp        ISO-8601 + unix time
+#     /calculator        - sandbox-calculator       safe arithmetic evaluator
+#     /datetime          - sandbox-datetime         current UTC datetime
+#     /wordcount         - sandbox-wordcount        word / char / line counter
+#     /memory-store      - sandbox-memory-store     in-process fact store
+#     /memory-recall     - sandbox-memory-recall    keyword recall over stored facts
+#     /knowledge-search  - sandbox-knowledge-search hardcoded KB corpus search
+#   MCP JSON-RPC:
+#     /mcp               - sandbox-greet            friendly greeting
+#
+# Memory is in-process only (a Python list). It resets on pod restart. This is
+# intentional for a demo — for durable memory, point a Tool CR at an
+# HTTP-fronted store of your own.
+#
+# The whole server is a single Python file mounted from a ConfigMap, so no
+# custom image is needed. python:3.12-alpine only needs the stdlib.
+#
+# Apply: kubectl apply -f samples/workflows/tool-sandbox.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+    name: samples-tool-sandbox
+    labels:
+        app.kubernetes.io/part-of: workflow-demos
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+    name: tool-sandbox-src
+    namespace: samples-tool-sandbox
+    labels:
+        app.kubernetes.io/part-of: workflow-demos
+data:
+  server.py: |
+    import ast, fractions, json, operator, re, time, datetime, sys
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    # ---- Input schemas (single source of truth for OpenAPI + MCP) ----------
+
+    TIMESTAMP_SCHEMA = {
+        'type': 'object',
+        'title': 'sandbox-timestamp',
+        'description': 'Returns the current UTC timestamp as ISO-8601 and unix seconds.',
+        'properties': {
+            'timezone': {
+                'type': 'string',
+                'title': 'Timezone label',
+                'description': 'Timezone label to echo back (informational only).',
+                'enum': ['UTC', 'PST', 'EST', 'CET', 'JST'],
+                'default': 'UTC',
+            },
+            'includeUnix': {
+                'type': 'boolean',
+                'title': 'Include unix seconds',
+                'description': 'When true, response includes the unix seconds field.',
+                'default': True,
+            },
+            'precision': {
+                'type': 'integer',
+                'title': 'Fractional-second precision',
+                'description': 'Number of fractional-second digits (0-6).',
+                'minimum': 0,
+                'maximum': 6,
+                'default': 0,
+            },
+        },
+    }
+
+    CALCULATOR_SCHEMA = {
+        'type': 'object',
+        'title': 'sandbox-calculator',
+        'description': 'Evaluate a pure arithmetic expression (+ - * / // % ** and parentheses).',
+        'properties': {
+            'expression': {
+                'type': 'string',
+                'title': 'Expression',
+                'description': "Arithmetic expression, e.g. '17 * (3 + 4)'.",
+            },
+        },
+        'required': ['expression'],
+    }
+
+    DATETIME_SCHEMA = {
+        'type': 'object',
+        'title': 'sandbox-datetime',
+        'description': 'Return the current date/time in ISO-8601 UTC.',
+        'properties': {
+            'timezone': {
+                'type': 'string',
+                'title': 'Timezone',
+                'description': 'Accepted for forward compatibility; always UTC today.',
+                'default': 'UTC',
+            },
+        },
+    }
+
+    WORDCOUNT_SCHEMA = {
+        'type': 'object',
+        'title': 'sandbox-wordcount',
+        'description': 'Count words, characters, and lines in a text string.',
+        'properties': {
+            'input': {
+                'type': 'string',
+                'title': 'Text',
+                'description': 'The text to count.',
+            },
+        },
+        'required': ['input'],
+    }
+
+    GREET_SCHEMA = {
+        'type': 'object',
+        'title': 'sandbox-greet',
+        'description': 'MCP tools/call that returns a friendly greeting.',
+        'properties': {
+            'who': {'type': 'string', 'title': 'Recipient', 'description': 'Who to greet.', 'default': 'world'},
+            'shout': {'type': 'boolean', 'title': 'Shout', 'description': 'Uppercase the greeting when true.', 'default': False},
+            'style': {'type': 'string', 'title': 'Greeting style', 'enum': ['casual', 'formal', 'pirate'], 'default': 'casual'},
+        },
+        'required': ['who'],
+    }
+
+    MEMORY_STORE_SCHEMA = {
+        'type': 'object',
+        'title': 'sandbox-memory-store',
+        'description': 'Persist a fact, preference, or note in the shared demo memory store.',
+        'properties': {
+            'content': {
+                'type': 'string',
+                'title': 'Content',
+                'description': 'The fact or note to remember. Free-form text.',
+            },
+            'tag': {
+                'type': 'string',
+                'title': 'Tag',
+                'description': 'Optional category label (e.g. "preference", "episodic", "shared").',
+                'default': '',
+            },
+        },
+        'required': ['content'],
+    }
+
+    MEMORY_RECALL_SCHEMA = {
+        'type': 'object',
+        'title': 'sandbox-memory-recall',
+        'description': 'Keyword-score search over previously stored memory records.',
+        'properties': {
+            'query': {
+                'type': 'string',
+                'title': 'Query',
+                'description': 'Free-text query to match against stored content.',
+            },
+            'top_k': {
+                'type': 'integer',
+                'title': 'Top K',
+                'description': 'Maximum number of memories to return.',
+                'default': 5,
+                'minimum': 1,
+                'maximum': 25,
+            },
+            'tag': {
+                'type': 'string',
+                'title': 'Filter by tag',
+                'description': 'Optional exact-match tag filter.',
+                'default': '',
+            },
+        },
+        'required': ['query'],
+    }
+
+    KB_SEARCH_SCHEMA = {
+        'type': 'object',
+        'title': 'sandbox-knowledge-search',
+        'description': 'Keyword-score search over the hardcoded demo knowledge base.',
+        'properties': {
+            'query': {
+                'type': 'string',
+                'title': 'Query',
+                'description': 'Free-text query to match against KB passages.',
+            },
+            'top_k': {
+                'type': 'integer',
+                'title': 'Top K',
+                'description': 'Maximum number of passages to return.',
+                'default': 3,
+                'minimum': 1,
+                'maximum': 10,
+            },
+        },
+        'required': ['query'],
+    }
+
+    # ---- OpenAPI doc factory -----------------------------------------------
+    # Every OpenAPI tool advertises a self-contained mini-spec so Studio's
+    # introspector can pull the request-body schema out of paths.<path>.post.
+
+    def _openapi(path, op_id, input_schema, response_schema):
+        return {
+            'openapi': '3.0.3',
+            'info': {
+                'title': input_schema.get('title', op_id),
+                'version': '1.0.0',
+                'description': input_schema.get('description', ''),
+            },
+            'paths': {
+                path: {
+                    'post': {
+                        'summary': input_schema.get('description', ''),
+                        'operationId': op_id,
+                        'requestBody': {
+                            'required': True,
+                            'content': {'application/json': {'schema': input_schema}},
+                        },
+                        'responses': {
+                            '200': {
+                                'description': 'Tool response.',
+                                'content': {'application/json': {'schema': response_schema}},
+                            },
+                        },
+                    },
+                },
+            },
+        }
+
+    TIMESTAMP_RESP = {
+        'type': 'object',
+        'properties': {
+            'iso': {'type': 'string', 'description': 'ISO-8601 timestamp with Z suffix.'},
+            'timezone': {'type': 'string', 'description': 'Echoed timezone label.'},
+            'unix': {'type': 'integer', 'description': 'Unix seconds (when includeUnix=true).'},
+        },
+        'required': ['iso', 'timezone'],
+    }
+    CALCULATOR_RESP = {
+        'type': 'object',
+        'properties': {
+            'expression': {'type': 'string'},
+            'result': {'oneOf': [{'type': 'number'}, {'type': 'string'}]},
+            'error': {'type': 'string'},
+        },
+    }
+    DATETIME_RESP = {
+        'type': 'object',
+        'properties': {
+            'iso': {'type': 'string'},
+            'timezone': {'type': 'string'},
+        },
+        'required': ['iso', 'timezone'],
+    }
+    WORDCOUNT_RESP = {
+        'type': 'object',
+        'properties': {
+            'input': {'type': 'string'},
+            'words': {'type': 'integer'},
+            'characters': {'type': 'integer'},
+            'lines': {'type': 'integer'},
+        },
+        'required': ['words', 'characters', 'lines'],
+    }
+    MEMORY_STORE_RESP = {
+        'type': 'object',
+        'properties': {
+            'id': {'type': 'integer'},
+            'content': {'type': 'string'},
+            'tag': {'type': 'string'},
+            'total': {'type': 'integer', 'description': 'Total records held after this store.'},
+        },
+        'required': ['id', 'content', 'total'],
+    }
+    MEMORY_RECALL_RESP = {
+        'type': 'object',
+        'properties': {
+            'matches': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'id': {'type': 'integer'},
+                        'content': {'type': 'string'},
+                        'tag': {'type': 'string'},
+                        'score': {'type': 'integer'},
+                    },
+                },
+            },
+            'total_scanned': {'type': 'integer'},
+        },
+        'required': ['matches'],
+    }
+    KB_SEARCH_RESP = {
+        'type': 'object',
+        'properties': {
+            'matches': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'source': {'type': 'string'},
+                        'chunk': {'type': 'string'},
+                        'score': {'type': 'integer'},
+                    },
+                },
+            },
+        },
+        'required': ['matches'],
+    }
+
+    OPENAPI_TOOLS = {
+        '/timestamp':        _openapi('/timestamp',        'invokeTimestamp',       TIMESTAMP_SCHEMA,     TIMESTAMP_RESP),
+        '/calculator':       _openapi('/calculator',       'invokeCalculator',      CALCULATOR_SCHEMA,    CALCULATOR_RESP),
+        '/datetime':         _openapi('/datetime',         'invokeDatetime',        DATETIME_SCHEMA,      DATETIME_RESP),
+        '/wordcount':        _openapi('/wordcount',        'invokeWordcount',       WORDCOUNT_SCHEMA,     WORDCOUNT_RESP),
+        '/memory-store':     _openapi('/memory-store',     'invokeMemoryStore',     MEMORY_STORE_SCHEMA,  MEMORY_STORE_RESP),
+        '/memory-recall':    _openapi('/memory-recall',    'invokeMemoryRecall',    MEMORY_RECALL_SCHEMA, MEMORY_RECALL_RESP),
+        '/knowledge-search': _openapi('/knowledge-search', 'invokeKnowledgeSearch', KB_SEARCH_SCHEMA,     KB_SEARCH_RESP),
+    }
+
+    # ---- In-process memory store & KB corpus -------------------------------
+    # MEMORY_STORE resets when the pod restarts. Good enough for a demo; if
+    # you need durability, front a real store with an HTTP Tool CR of your own.
+
+    MEMORY_STORE = []  # list of {id, content, tag}
+
+    KB_CORPUS = [
+        {
+            'source': 'orbital-mark7-release',
+            'chunk': (
+                'Orbital Mark 7 release schedule: General availability ships on '
+                '2026-09-15. The public preview opens four weeks earlier on '
+                '2026-08-18 with a hard cap of 500 tenants.'
+            ),
+        },
+        {
+            'source': 'orbital-mark7-pricing',
+            'chunk': (
+                'Pricing for Mark 7 stays at $0.0012 per 1,000 reasoning tokens for '
+                'the first 90 days after GA, then steps up to $0.0018. Enterprise '
+                'committed-use customers keep the launch price until 2027-01-01.'
+            ),
+        },
+        {
+            'source': 'orbital-mark7-regions',
+            'chunk': (
+                'Mark 7 supported regions at launch: westus3, eastus2, northeurope, '
+                'and australiaeast. The Brazil South region is targeted for the '
+                'Mark 7.1 dot-release in November 2026 and is not bookable yet.'
+            ),
+        },
+        {
+            'source': 'orbital-mark7-residency',
+            'chunk': (
+                'Data residency: customer prompts and completions stay in the '
+                'region the deployment was created in. Telemetry is replicated to '
+                'the paired region for disaster recovery only.'
+            ),
+        },
+        {
+            'source': 'orbital-mark7-limits',
+            'chunk': (
+                'Mark 7 known limitations on day one: no fine-tuning endpoint '
+                '(planned for Mark 7.2), no JSON-mode for streaming responses, and '
+                'a 32k-token context window. Function calling, vision, and the '
+                'embeddings endpoint are all supported.'
+            ),
+        },
+    ]
+
+    _TOKEN_RE = re.compile(r'[^a-z0-9]+')
+
+    def _tokenize(text):
+        return [t for t in _TOKEN_RE.split((text or '').lower()) if len(t) >= 3]
+
+    def _score(text, tokens):
+        lower = (text or '').lower()
+        return sum(1 for t in tokens if t in lower)
+
+    def _sort_by_score(records):
+        decorated = ((record['score'], -position, record) for position, record in enumerate(records))
+        return [record for _, _, record in sorted(decorated, reverse=True)]
+
+    # ---- Safe arithmetic evaluator (calculator) ---------------------------
+    def _divide(left, right):
+        return fractions.Fraction(str(left)) / fractions.Fraction(str(right))
+
+    _BINOPS = {
+        ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+        ast.Div: _divide, ast.FloorDiv: operator.floordiv,
+        ast.Mod: operator.mod, ast.Pow: operator.pow,
+    }
+    _UNARYOPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+
+    def _eval_arith(node):
+        if isinstance(node, ast.Expression):
+            return _eval_arith(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return node.value
+        if isinstance(node, ast.BinOp):
+            op = _BINOPS.get(type(node.op))
+            if op is None:
+                raise ValueError(f'operator not allowed: {type(node.op).__name__}')
+            return op(_eval_arith(node.left), _eval_arith(node.right))
+        if isinstance(node, ast.UnaryOp):
+            op = _UNARYOPS.get(type(node.op))
+            if op is None:
+                raise ValueError(f'unary op not allowed: {type(node.op).__name__}')
+            return op(_eval_arith(node.operand))
+        raise ValueError(f'expression element not allowed: {type(node).__name__}')
+
+    def _calculator(expression):
+        try:
+            tree = ast.parse(str(expression or ''), mode='eval')
+            result = _eval_arith(tree)
+            if isinstance(result, fractions.Fraction):
+                result = result.numerator if result.denominator == 1 else str(result)
+            return {'expression': expression, 'result': result}
+        except Exception as exc:
+            return {'expression': expression, 'error': f'{type(exc).__name__}: {exc}'}
+
+    # ---- Handler -----------------------------------------------------------
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
+
+        def _read(self):
+            n = int(self.headers.get('Content-Length', '0') or '0')
+            if n == 0:
+                return {}
+            return json.loads(self.rfile.read(n))
+
+        def _write(self, body, status=200):
+            data = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            if self.path == '/health':
+                return self._write({'ok': True})
+            # Studio introspects by GETting the tool's endpoint URL; we
+            # respond with a per-tool OpenAPI doc. `<path>/schema` is
+            # accepted as an alias for readability.
+            path = self.path
+            if path.endswith('/schema'):
+                path = path[:-len('/schema')]
+            if path in OPENAPI_TOOLS:
+                return self._write(OPENAPI_TOOLS[path])
+            if self.path == '/openapi.json':
+                # Merged doc listing every OpenAPI tool.
+                merged_paths = {}
+                for doc in OPENAPI_TOOLS.values():
+                    merged_paths.update(doc.get('paths', {}))
+                return self._write({
+                    'openapi': '3.0.3',
+                    'info': {'title': 'tool-sandbox', 'version': '1.0.0'},
+                    'paths': merged_paths,
+                })
+            return self._write({'error': 'not found'}, 404)
+
+        def do_POST(self):
+            try:
+                req = self._read()
+            except Exception as e:
+                return self._write({'error': 'bad json', 'detail': str(e)}, 400)
+
+            if self.path == '/timestamp':
+                now = datetime.datetime.utcnow()
+                tz = (req.get('timezone') or 'UTC').upper()
+                precision = int(req.get('precision') or 0)
+                if precision < 0: precision = 0
+                if precision > 6: precision = 6
+                iso = now.isoformat(timespec='microseconds') if precision else now.replace(microsecond=0).isoformat()
+                if precision and precision < 6:
+                    head, dot, frac = iso.partition('.')
+                    if dot:
+                        iso = head + '.' + frac[:precision]
+                out = {'iso': iso + 'Z', 'timezone': tz}
+                if bool(req.get('includeUnix', True)):
+                    out['unix'] = int(time.time())
+                return self._write(out)
+
+            if self.path == '/calculator':
+                return self._write(_calculator(req.get('expression', '')))
+
+            if self.path == '/datetime':
+                tz = (req.get('timezone') or 'UTC').upper()
+                iso = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+                return self._write({'iso': iso, 'timezone': tz})
+
+            if self.path == '/wordcount':
+                text = str(req.get('input', ''))
+                words = len([w for w in re.split(r'\s+', text.strip()) if w])
+                return self._write({
+                    'input': text,
+                    'words': words,
+                    'characters': len(text),
+                    'lines': text.count('\n') + (1 if text and not text.endswith('\n') else 0),
+                })
+
+            if self.path == '/memory-store':
+                content = str(req.get('content') or '').strip()
+                if not content:
+                    return self._write({'error': "'content' is required"}, 400)
+                tag = str(req.get('tag') or '')
+                record = {'id': len(MEMORY_STORE), 'content': content, 'tag': tag}
+                MEMORY_STORE.append(record)
+                return self._write({
+                    'id': record['id'],
+                    'content': record['content'],
+                    'tag': record['tag'],
+                    'total': len(MEMORY_STORE),
+                })
+
+            if self.path == '/memory-recall':
+                query = str(req.get('query') or '')
+                top_k = int(req.get('top_k') or 5)
+                if top_k < 1: top_k = 1
+                if top_k > 25: top_k = 25
+                tag_filter = str(req.get('tag') or '')
+                candidates = MEMORY_STORE
+                if tag_filter:
+                    candidates = [r for r in candidates if r['tag'] == tag_filter]
+                tokens = _tokenize(query)
+                scored = []
+                if tokens:
+                    for r in candidates:
+                        s = _score(r['content'], tokens)
+                        if s > 0:
+                            scored.append({'id': r['id'], 'content': r['content'], 'tag': r['tag'], 'score': s})
+                    scored = _sort_by_score(scored)
+                if not scored:
+                    # Fall through to the most recent records so the LLM still
+                    # sees context even when nothing matched.
+                    scored = [
+                        {'id': r['id'], 'content': r['content'], 'tag': r['tag'], 'score': 0}
+                        for r in candidates[-top_k:]
+                    ]
+                return self._write({
+                    'matches': scored[:top_k],
+                    'total_scanned': len(candidates),
+                })
+
+            if self.path == '/knowledge-search':
+                query = str(req.get('query') or '')
+                top_k = int(req.get('top_k') or 3)
+                if top_k < 1: top_k = 1
+                if top_k > 10: top_k = 10
+                tokens = _tokenize(query)
+                scored = []
+                if tokens:
+                    for c in KB_CORPUS:
+                        s = _score(c['chunk'], tokens)
+                        if s > 0:
+                            scored.append({'source': c['source'], 'chunk': c['chunk'], 'score': s})
+                    scored = _sort_by_score(scored)
+                if not scored:
+                    scored = [
+                        {'source': c['source'], 'chunk': c['chunk'], 'score': 0}
+                        for c in KB_CORPUS[:top_k]
+                    ]
+                return self._write({'matches': scored[:top_k]})
+
+            if self.path == '/mcp':
+                rid = req.get('id', 0)
+                method = req.get('method', '')
+                if method == 'initialize':
+                    return self._write({'jsonrpc': '2.0', 'id': rid,
+                                        'result': {
+                                            'protocolVersion': '2025-03-26',
+                                            'capabilities': {'tools': {}},
+                                            'serverInfo': {'name': 'tool-sandbox', 'version': '1.0'},
+                                        }})
+                if method == 'notifications/initialized':
+                    return self._write({}, 202)
+                if method == 'tools/list':
+                    return self._write({'jsonrpc': '2.0', 'id': rid,
+                                        'result': {'tools': [{
+                                            'name': 'sandbox-greet',
+                                            'description': GREET_SCHEMA['description'],
+                                            'inputSchema': GREET_SCHEMA,
+                                        }]}})
+                if method != 'tools/call':
+                    return self._write({'jsonrpc': '2.0', 'id': rid,
+                                        'error': {'code': -32601, 'message': f'method {method} not supported'}})
+                params = req.get('params', {}) or {}
+                name = params.get('name', '')
+                args = params.get('arguments', {}) or {}
+                if name == 'sandbox-greet':
+                    who = args.get('who', 'world')
+                    style = args.get('style', 'casual')
+                    if style == 'formal':
+                        text = f'Good day, {who}.'
+                    elif style == 'pirate':
+                        text = f'Ahoy, {who}! Yarr!'
+                    else:
+                        text = f'Hello, {who}!'
+                    if bool(args.get('shout')):
+                        text = text.upper()
+                    text = f'{text} (unix={int(time.time())})'
+                    return self._write({'jsonrpc': '2.0', 'id': rid,
+                                        'result': {'content': [{'type': 'text', 'text': text}],
+                                                   'greeting': text}})
+                return self._write({'jsonrpc': '2.0', 'id': rid,
+                                    'result': {'content': [{'type': 'text',
+                                                            'text': f'unknown tool {name}'}],
+                                               'isError': True}})
+
+            return self._write({'error': 'not found'}, 404)
+
+    print('tool-sandbox listening on :8080', flush=True)
+    HTTPServer(('', 8080), H).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: tool-sandbox
+    namespace: samples-tool-sandbox
+    labels:
+        app.kubernetes.io/part-of: workflow-demos
+        app: tool-sandbox
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tool-sandbox
+  template:
+    metadata:
+      labels:
+        app: tool-sandbox
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: server
+          image: python:3.12-alpine
+          command: ["python", "/app/server.py"]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: ["ALL"]}}
+          volumeMounts:
+            - name: src
+              mountPath: /app
+              readOnly: true
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: src
+          configMap:
+            name: tool-sandbox-src
+---
+apiVersion: v1
+kind: Service
+metadata:
+    name: tool-sandbox
+    namespace: samples-tool-sandbox
+    labels:
+        app.kubernetes.io/part-of: workflow-demos
+spec:
+  selector:
+    app: tool-sandbox
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+# Shared ToolClasses for every sandbox-* Tool CR in the repo. Cluster-scoped,
+# so any sample can reference them without redeclaring. Samples that use the
+# sandbox depend on this file being applied first.
+apiVersion: kognition.dev/v1alpha1
+kind: ToolClass
+metadata:
+  name: sandbox-openapi
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+spec:
+  provisioner: openapi
+  executionTier: sidecar
+  transport: http
+  resourceLimits:
+    maxCpuMilli: 500
+    maxMemoryMB: 128
+    maxTimeout: 30s
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ToolClass
+metadata:
+  name: sandbox-mcp
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+spec:
+  provisioner: mcp
+  executionTier: sidecar
+  transport: http
+  resourceLimits:
+    maxCpuMilli: 500
+    maxMemoryMB: 128
+    maxTimeout: 30s

@@ -1,0 +1,73 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: agentroles.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: AgentRole
+    listKind: AgentRoleList
+    plural: agentroles
+    singular: agentrole
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: AgentRole defines a set of permissions for agents.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          rules:
+            description: Rules defines the permissions in this role.
+            items:
+              description: PolicyRule defines a set of permitted actions.
+              properties:
+                resources:
+                  description: Resources lists the resource kinds this rule applies
+                    to.
+                  items:
+                    type: string
+                  type: array
+                verbs:
+                  description: Verbs lists the permitted actions (get, list, create,
+                    update, delete).
+                  items:
+                    type: string
+                  type: array
+              required:
+              - resources
+              - verbs
+              type: object
+            type: array
+        required:
+        - rules
+        type: object
+    served: true
+    storage: true
+    subresources: {}

@@ -1,0 +1,272 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# All five memory types declared as MemoryClaims off the cluster-wide
+# `default` MemoryClass (created by the Helm chart, backed by the in-cluster
+# kognition-memory-service in-memory backend). Each claim is admitted, bound
+# to its own MemoryVolume, and observable via:
+#
+#   kubectl get memoryclaims
+#   kubectl get memoryvolumes
+#
+# The agent's LLM reads/writes memory through Tool CRs that POST to the
+# in-cluster tool-sandbox (see samples/workflows/tool-sandbox.yaml). Each
+# tool call tags the record so the conceptual type is preserved and can be
+# filtered on recall with the optional `tag` parameter.
+
+apiVersion: kognition.dev/v1alpha1
+kind: MemoryClaim
+metadata:
+  name: explorer-episodic
+  namespace: default
+spec:
+  memoryClassName: default
+  type: episodic
+  capacity: 16Mi
+  accessModes:
+    - ReadWrite
+---
+apiVersion: kognition.dev/v1alpha1
+kind: MemoryClaim
+metadata:
+  name: explorer-semantic
+  namespace: default
+spec:
+  memoryClassName: default
+  type: semantic
+  capacity: 16Mi
+  accessModes:
+    - ReadWrite
+---
+apiVersion: kognition.dev/v1alpha1
+kind: MemoryClaim
+metadata:
+  name: explorer-working
+  namespace: default
+spec:
+  memoryClassName: default
+  type: working
+  capacity: 8Mi
+  accessModes:
+    - ReadWrite
+---
+apiVersion: kognition.dev/v1alpha1
+kind: MemoryClaim
+metadata:
+  name: explorer-procedural
+  namespace: default
+spec:
+  memoryClassName: default
+  type: procedural
+  capacity: 16Mi
+  accessModes:
+    - ReadWrite
+---
+# `shared` is declared on a separate claim so two agents can both reference
+# it. The K8s control plane admits, binds, and tracks the claim per type;
+# LLM-visible read/write still flows through the sandbox tool endpoints
+# below.
+apiVersion: kognition.dev/v1alpha1
+kind: MemoryClaim
+metadata:
+  name: explorer-shared
+  namespace: default
+spec:
+  memoryClassName: default
+  type: shared
+  capacity: 16Mi
+  accessModes:
+    - ReadWrite
+---
+# Shared Tool CRs used by both agents. They POST to tool-sandbox in the
+# `default` namespace, so a single backing memory list is visible across
+# both — this is what makes the "shared" tag meaningful in the demo.
+# Prereq: kubectl apply -f samples/workflows/tool-sandbox.yaml
+apiVersion: kognition.dev/v1alpha1
+kind: Tool
+metadata:
+  name: sandbox-memory-store
+  namespace: default
+spec:
+  className: sandbox-openapi
+  protocol: OpenAPI
+  description: Persist a fact in the shared demo memory store.
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/memory-store
+  metadata:
+    allowPrivateNetwork: "true"
+  inputSchema:
+    type: object
+    properties:
+      content:
+        type: string
+        description: The fact to remember.
+      tag:
+        type: string
+        description: One of "working", "episodic", "semantic", "procedural", "shared".
+    required: [content]
+---
+apiVersion: kognition.dev/v1alpha1
+kind: Tool
+metadata:
+  name: sandbox-memory-recall
+  namespace: default
+spec:
+  className: sandbox-openapi
+  protocol: OpenAPI
+  description: Keyword search over previously stored memory records, optionally filtered by tag.
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/memory-recall
+  metadata:
+    allowPrivateNetwork: "true"
+  inputSchema:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Free-text query.
+      top_k:
+        type: integer
+        description: Maximum number of memories to return.
+        default: 5
+      tag:
+        type: string
+        description: Optional exact-match tag filter.
+    required: [query]
+---
+# Primary agent — references every memory type. Instructions explicitly
+# drive the LLM to tag each store call so the conceptual type is preserved
+# in record metadata and recoverable via the recall tool's `tag` filter.
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: memory-explorer
+  namespace: default
+  labels:
+    kognition.dev/sample-tool-demo: "true"
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a memory-explorer agent. You have two tools:
+
+        - sandbox_memory_store(content, tag): persist a fact. ALWAYS pass
+          `tag` set to exactly one of: "working", "episodic", "semantic",
+          "procedural", "shared". Choose the tag that matches the kind of
+          memory:
+            * working    — short-lived scratch for the current task (e.g.
+                           "currently computing X", "intermediate sum = 42").
+            * episodic   — a timestamped event the user just shared (e.g.
+                           "On 2024-03-12 the user reported issue #871").
+            * semantic   — a durable fact about the world or user (e.g.
+                           "The user's dog is named Pepper").
+            * procedural — a how-to / recipe / repeatable procedure (e.g.
+                           "To deploy: run `make build` then `kubectl apply`").
+            * shared     — information meant to be visible to other agents
+                           (e.g. team-wide policies, hand-off notes).
+        - sandbox_memory_recall(query, top_k, tag): search previously stored
+          facts. Always call this BEFORE answering anything that depends on
+          prior turns. Pass `tag` when you want to constrain results to one
+          memory type.
+
+      Rules:
+        - Pick exactly ONE tag per store call. Never omit `tag`.
+        - When the user asks you to remember something, infer the correct tag
+          from the content type, not from the words they used.
+        - When recalling, quote the stored content verbatim.
+        - If recall returns nothing relevant, say so honestly — do not guess.
+
+      Keep responses brief.
+  memory:
+    claims:
+      - name: explorer-episodic
+      - name: explorer-semantic
+      - name: explorer-working
+      - name: explorer-procedural
+      - name: explorer-shared
+  tools:
+    - ref:
+        name: sandbox-memory-store
+    - ref:
+        name: sandbox-memory-recall
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 1024
+---
+# Second agent referencing the same `shared` claim. Because both agents call
+# the same sandbox endpoint, memories tagged "shared" are literally visible
+# to both, and recall with tag="shared" makes the multi-agent hand-off
+# concrete.
+apiVersion: kognition.dev/v1alpha1
+kind: Agent
+metadata:
+  name: memory-explorer-peer
+  namespace: default
+  labels:
+    kognition.dev/sample-tool-demo: "true"
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are the peer of memory-explorer. You only use `shared` memory.
+      When asked to record team-wide notes, call
+      sandbox_memory_store(content, tag="shared"). When asked what the team
+      knows, call sandbox_memory_recall(query, tag="shared"). Be concise.
+      Do not guess if recall is empty.
+  memory:
+    claims:
+      - name: explorer-shared
+  tools:
+    - ref:
+        name: sandbox-memory-store
+    - ref:
+        name: sandbox-memory-recall
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 512
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: memory-explorer-tool-grants
+  namespace: default
+spec:
+  scope: agent
+  enforce: true
+  targetAgents:
+    - memory-explorer
+    - memory-explorer-peer
+  toolGrants:
+    - toolRef: sandbox-memory-store
+      allow: true
+    - toolRef: sandbox-memory-recall
+      allow: true
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentRole
+metadata:
+  name: memory-explorer-tool-invoker
+  namespace: default
+rules:
+  - resources:
+      - Tool
+    verbs:
+      - get
+      - invoke
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentRoleBinding
+metadata:
+  name: memory-explorer-tool-invoker
+  namespace: default
+spec:
+  roleRef:
+    name: memory-explorer-tool-invoker
+  subjects:
+    - kind: Agent
+      name: memory-explorer
+    - kind: Agent
+      name: memory-explorer-peer

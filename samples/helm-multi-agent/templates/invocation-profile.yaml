@@ -1,0 +1,12 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if .Values.invocationProfile.create }}
+apiVersion: kognition.dev/v1alpha1
+kind: ModelInvocationProfile
+metadata:
+  name: {{ required "invocationProfile.name is required" .Values.invocationProfile.name | quote }}
+  namespace: {{ .Values.namespace }}
+spec:
+  {{- toYaml .Values.invocationProfile.spec | nindent 2 }}
+{{- end }}

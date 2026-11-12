@@ -1,0 +1,281 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: evaluations.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: Evaluation
+    listKind: EvaluationList
+    plural: evaluations
+    singular: evaluation
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.targetRef.name
+      name: Target
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.lastRunRef.name
+      name: LastRun
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Evaluation declares a repeatable evaluation pipeline for an Agent, Solution,
+          or other executable Kognition target.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              EvaluationSpec defines the target, dataset, graders, thresholds, and schedule
+              for a repeatable evaluation.
+            properties:
+              datasetRef:
+                description: EvaluationDatasetRef references evaluation input data.
+                properties:
+                  name:
+                    type: string
+                  namespace:
+                    type: string
+                  version:
+                    type: string
+                required:
+                - name
+                type: object
+              graders:
+                items:
+                  description: EvaluationGrader defines one grader used to score an
+                    Evaluation.
+                  properties:
+                    name:
+                      type: string
+                    parameters:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    type:
+                      type: string
+                  required:
+                  - name
+                  - type
+                  type: object
+                type: array
+              metricThresholds:
+                items:
+                  description: EvaluationMetricThreshold declares pass/fail bounds
+                    for one metric.
+                  properties:
+                    max:
+                      type: number
+                    metric:
+                      type: string
+                    min:
+                      type: number
+                    required:
+                      type: boolean
+                  required:
+                  - metric
+                  type: object
+                type: array
+              schedule:
+                description: EvaluationSchedule configures periodic evaluation execution.
+                properties:
+                  concurrencyPolicy:
+                    description: EvaluationConcurrencyPolicy controls overlapping
+                      scheduled evaluation runs.
+                    enum:
+                    - Allow
+                    - Forbid
+                    - Replace
+                    type: string
+                  cron:
+                    type: string
+                  failedRunHistoryLimit:
+                    format: int32
+                    type: integer
+                  successfulRunHistoryLimit:
+                    format: int32
+                    type: integer
+                  suspend:
+                    type: boolean
+                  timezone:
+                    type: string
+                type: object
+              targetRef:
+                description: EvaluationTargetRef references the executable resource
+                  under evaluation.
+                properties:
+                  kind:
+                    type: string
+                  name:
+                    type: string
+                  namespace:
+                    type: string
+                  revision:
+                    format: int64
+                    type: integer
+                required:
+                - kind
+                - name
+                type: object
+            required:
+            - datasetRef
+            - targetRef
+            type: object
+          status:
+            description: EvaluationStatus describes observed evaluation state and
+              recent run history.
+            properties:
+              conditions:
+                items:
+                  properties:
+                    lastTransitionTime:
+                      format: date-time
+                      type: string
+                    message:
+                      type: string
+                    observedGeneration:
+                      format: int64
+                      type: integer
+                    reason:
+                      type: string
+                    status:
+                      type: string
+                    type:
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastRunRef:
+                description: LocalObjectReference references a resource by name within
+                  the same namespace.
+                properties:
+                  name:
+                    description: Name is the name of the referenced resource.
+                    type: string
+                required:
+                - name
+                type: object
+              lastRunTime:
+                format: date-time
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                type: string
+              runHistory:
+                items:
+                  description: EvaluationRunSummary records the result of one observed
+                    evaluation run.
+                  properties:
+                    completedAt:
+                      format: date-time
+                      type: string
+                    datasetRef:
+                      description: EvaluationDatasetRef references evaluation input
+                        data.
+                      properties:
+                        name:
+                          type: string
+                        namespace:
+                          type: string
+                        version:
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    message:
+                      type: string
+                    metrics:
+                      items:
+                        description: EvaluationMetricResult records one metric emitted
+                          by a grader.
+                        properties:
+                          message:
+                            type: string
+                          metric:
+                            type: string
+                          passed:
+                            type: boolean
+                          value:
+                            type: number
+                        required:
+                        - metric
+                        - value
+                        type: object
+                      type: array
+                    name:
+                      type: string
+                    passed:
+                      type: boolean
+                    phase:
+                      type: string
+                    score:
+                      type: number
+                    startedAt:
+                      format: date-time
+                      type: string
+                    targetRef:
+                      description: EvaluationTargetRef references the executable resource
+                        under evaluation.
+                      properties:
+                        kind:
+                          type: string
+                        name:
+                          type: string
+                        namespace:
+                          type: string
+                        revision:
+                          format: int64
+                          type: integer
+                      required:
+                      - kind
+                      - name
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

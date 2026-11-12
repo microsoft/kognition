@@ -1,0 +1,31 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+syntax = "proto3";
+
+package kognition.v1alpha1;
+
+option go_package = "github.com/kognition-ai/kognition/proto/gen/kognition/v1alpha1";
+
+// IntentGateway accepts external natural-language goals and routes them to
+// existing Agent or Workflow targets through a declarative IntentGateway.
+service IntentGateway {
+  // SubmitGoal validates, authorizes, and routes one goal submission.
+  rpc SubmitGoal(SubmitGoalRequest) returns (SubmitGoalResponse);
+}
+
+message SubmitGoalRequest {
+  string namespace = 1;
+  string gateway_name = 2;
+  string goal = 3;
+  repeated string constraints = 4;
+  // api_key is the API key from the gateway's configured HTTP-equivalent
+  // credential header. gRPC transport security must be provided separately.
+  string api_key = 5;
+  string api_key_header = 6;
+}
+
+message SubmitGoalResponse {
+  string solution_name = 1;
+  string solution_namespace = 2;
+}

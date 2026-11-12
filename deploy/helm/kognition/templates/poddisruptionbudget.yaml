@@ -1,0 +1,115 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- /*
+PodDisruptionBudgets for control-plane workloads.
+
+Opt-in via podDisruptionBudget.enabled. A PDB is only rendered for a workload
+whose replicaCount > 1, because a PDB with minAvailable: 1 on a single-replica
+workload would block all voluntary evictions (node drains/upgrades). HA (multi
+-replica) is a deliberate choice, so PDBs follow it.
+*/ -}}
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- if and (eq .Values.mode "standalone") (gt (int .Values.apiserver.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kognition.fullname" . }}-apiserver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: apiserver
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: apiserver
+      app.kubernetes.io/instance: {{ .Release.Name }}
+---
+{{- end }}
+{{- if and (eq .Values.mode "standalone") (gt (int .Values.controllerManager.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kognition.fullname" . }}-controller-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller-manager
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: controller-manager
+      app.kubernetes.io/instance: {{ .Release.Name }}
+---
+{{- end }}
+{{- if and (eq .Values.mode "kubernetes") (gt (int .Values.k8sController.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kognition.fullname" . }}-k8s-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-controller
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: k8s-controller
+      app.kubernetes.io/instance: {{ .Release.Name }}
+---
+{{- end }}
+{{- if and (eq .Values.mode "kubernetes") .Values.intentGateway.enabled (gt (int .Values.intentGateway.replicaCount) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kognition.fullname" . }}-intent-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: intent-gateway
+spec:
+  minAvailable: {{ min (int .Values.podDisruptionBudget.minAvailable) (sub (int .Values.intentGateway.replicaCount) 1) }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: intent-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+{{- $toolGateway := default (dict) .Values.toolGateway }}
+{{- if and (eq .Values.mode "kubernetes") $toolGateway.enabled (gt (int $toolGateway.replicaCount) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kognition.fullname" . }}-tool-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tool-gateway
+spec:
+  minAvailable: {{ min (int .Values.podDisruptionBudget.minAvailable) (sub (int $toolGateway.replicaCount) 1) }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: tool-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+{{- if and .Values.memoryService.enabled (gt (int .Values.memoryService.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kognition.fullname" . }}-memory-service
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-service
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: memory-service
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+{{- end }}

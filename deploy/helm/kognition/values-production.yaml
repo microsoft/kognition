@@ -1,0 +1,67 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Production-oriented Kubernetes mode overrides. Supply managed PostgreSQL,
+# durable memory, image registry, and provider identity values before use.
+# Install with: helm upgrade --install kognition ./deploy/helm/kognition \
+#   --namespace kognition-system --create-namespace \
+#   -f ./deploy/helm/kognition/values-production.yaml
+
+mode: kubernetes
+
+global:
+  imagePullSecrets: []
+
+networkPolicy:
+  enabled: true
+  # Set this to the private CIDRs used by kubelet probe traffic in the target
+  # cluster. Rendering fails while this list is empty rather than deploying
+  # policies that make HTTP-probed workloads crash-loop on enforcing CNIs.
+  kubeletProbeIngressCIDRs: []
+  # Set true instead of supplying CIDRs when the target cluster uses Cilium.
+  ciliumHostProbeIngress: false
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+k8sController:
+  replicaCount: 3
+  image:
+    pullPolicy: IfNotPresent
+  leaderElection:
+    enabled: true
+
+intentGateway:
+  replicaCount: 3
+  image:
+    pullPolicy: IfNotPresent
+
+toolGateway:
+  replicaCount: 3
+  image:
+    pullPolicy: IfNotPresent
+  # Production deployments must explicitly enumerate every approved private
+  # Tool target by namespace labels, Pod labels, and TCP ports.
+  privateEgress: []
+
+webhook:
+  enabled: true
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  timeoutSeconds: 5
+  certManager:
+    enabled: true
+    issuerKind: Issuer
+    duration: 2160h
+    renewBefore: 360h
+
+# The built-in service uses process-local memory and is not appropriate for HA.
+# Deploy a durable memory backend and its external policy gateway separately.
+memoryService:
+  enabled: false
+
+kbIngester:
+  enabled: true
+  image:
+    pullPolicy: IfNotPresent

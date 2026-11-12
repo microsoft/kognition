@@ -1,0 +1,93 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Demo: Conditional Branching
+#
+# Exercises:
+#   - CEL edge conditions (`steps.<name>.output.contains(...)`)
+#   - Mutually-exclusive branches based on prior step output
+#   - Multiple terminal steps (one per branch)
+#
+# Topology:
+#                  ┌── (output contains "tech")    ──→ tech-handler
+#   classifier ────┼── (output contains "billing") ──→ billing-handler
+#                  └── (output contains "general") ──→ general-handler
+#
+# Only the branch whose CEL condition evaluates true will dispatch;
+# the other two are gated out and remain Pending → Skipped.
+#
+# Trigger:
+#   apiVersion: kognition.dev/v1alpha1
+#   kind: WorkflowRun
+#   metadata: { name: wfdemo-cond-tech, namespace: default }
+#   spec:
+#     workflowRef: { name: wfdemo-conditional }
+#     input: "My laptop won't connect to wifi"
+#
+# Try inputs hitting each branch:
+#   tech:    "My laptop won't connect to wifi"
+#   billing: "I was double-charged on my last invoice"
+#   general: "What are your business hours?"
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-classifier-to-llm
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: wfdemo-classifier
+  allowTo:
+    - name: wfdemo-llm
+---
+kind: Workflow
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-conditional
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+    workflow.kognition.dev/feature: conditional-branching
+spec:
+  steps:
+    - name: classifier
+      agentRef:
+        name: wfdemo-classifier
+      input: 'Classify this user request: "{{.Input}}"'
+      timeout: 120s
+    - name: tech-handler
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        You are a tech support specialist. Help with this request:
+        "{{.Input}}"
+        Provide concrete troubleshooting steps.
+      timeout: 180s
+    - name: billing-handler
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        You are a billing specialist. Acknowledge and outline next steps for:
+        "{{.Input}}"
+      timeout: 180s
+    - name: general-handler
+      agentRef:
+        name: wfdemo-llm
+      input: |
+        You are a general-purpose assistant. Politely answer:
+        "{{.Input}}"
+      timeout: 180s
+  edges:
+    - from: classifier
+      to: tech-handler
+      condition: 'steps.classifier.output.contains("tech")'
+    - from: classifier
+      to: billing-handler
+      condition: 'steps.classifier.output.contains("billing")'
+    - from: classifier
+      to: general-handler
+      condition: 'steps.classifier.output.contains("general")'
+  budgets:
+    maxDuration: 5m
+    maxTokens: 10000

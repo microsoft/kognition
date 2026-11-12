@@ -1,0 +1,39 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+# pgvector-backed KnowledgeBaseClass wired to the built-in kb-pgvector
+# StatefulSet + Secret (`kognition-kb-pgvector`). Dimension is 1536 to
+# match `text-embedding-3-small`; the ingester's schema helper creates
+# the target table with a `vector(1536)` column on first run.
+#
+# Prereqs (one-time, chart install/upgrade):
+#   helm upgrade kognition ./deploy/helm/kognition -n kognition-system \
+#     --set kbPgvector.enabled=true \
+#     --set kbIngester.enabled=true \
+#     --set kbIngester.image.repository=<img> --set kbIngester.image.tag=<tag>
+#
+# The pgvector Secret lives in `kognition-system`; copy it to the
+# consuming namespace (or set connectionSecretRef.namespace where the
+# API supports it). `apply.ps1` handles the copy.
+apiVersion: kognition.dev/v1alpha1
+kind: KnowledgeBaseClass
+metadata:
+  name: kognition-docs-kb-class
+spec:
+  provisioner: pgvector
+  indexMode: dense
+  reclaimPolicy: Delete
+  embeddingModelRef:
+    name: text-embedding-3-small
+  chunkStrategy:
+    size: 512
+    overlap: 64
+    mode: recursive
+  vectorStore:
+    type: pgvector
+    pgvector:
+      connectionSecretRef:
+        name: kognition-kb-pgvector
+      table: kognition_docs_chunks
+      dimension: 1536

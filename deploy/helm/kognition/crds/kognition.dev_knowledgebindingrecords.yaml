@@ -1,0 +1,192 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: knowledgebindingrecords.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: KnowledgeBindingRecord
+    listKind: KnowledgeBindingRecordList
+    plural: knowledgebindingrecords
+    singular: knowledgebindingrecord
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.knowledgeBaseNamespace
+      name: Workspace
+      type: string
+    - jsonPath: .spec.knowledgeBaseName
+      name: KnowledgeBase
+      type: string
+    - jsonPath: .spec.binding.providerName
+      name: Provider
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          KnowledgeBindingRecord permanently preserves the ownership locator for a
+          provider backend retained after its KnowledgeBase is deleted.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              binding:
+                properties:
+                  backendOperationID:
+                    maxLength: 1024
+                    minLength: 1
+                    type: string
+                  classGeneration:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  classUID:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  configurationAPIGroup:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  configurationDigest:
+                    pattern: ^[a-f0-9]{64}$
+                    type: string
+                  configurationKind:
+                    maxLength: 63
+                    minLength: 1
+                    type: string
+                  configurationName:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  configurationUID:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  embeddingModelBinding:
+                    type: object
+                    properties:
+                      namespace:
+                        type: string
+                        minLength: 1
+                      modelName:
+                        type: string
+                        minLength: 1
+                      modelUID:
+                        type: string
+                        minLength: 1
+                      modelResourceVersion:
+                        type: integer
+                        format: int64
+                        minimum: 1
+                      specDigest:
+                        type: string
+                        pattern: ^sha256:[a-f0-9]{64}$
+                      invocationProfileUID:
+                        type: string
+                      invocationProfileDigest:
+                        type: string
+                    required:
+                    - namespace
+                    - modelName
+                    - modelUID
+                    - modelResourceVersion
+                    - specDigest
+                  generation:
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  operationID:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  providerName:
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  reclaimPolicy:
+                    description: ReclaimPolicy defines what happens to memory data
+                      when the claim is deleted.
+                    enum:
+                    - Delete
+                    - Retain
+                    - Archive
+                    type: string
+                required:
+                - backendOperationID
+                - classGeneration
+                - classUID
+                - configurationAPIGroup
+                - configurationDigest
+                - configurationKind
+                - configurationName
+                - configurationUID
+                - generation
+                - operationID
+                - providerName
+                type: object
+              knowledgeBaseName:
+                maxLength: 253
+                minLength: 1
+                type: string
+              knowledgeBaseNamespace:
+                maxLength: 63
+                minLength: 1
+                type: string
+              knowledgeBaseUID:
+                maxLength: 128
+                minLength: 1
+                type: string
+              reclaimPolicy:
+                description: ReclaimPolicy defines what happens to memory data when
+                  the claim is deleted.
+                enum:
+                - Delete
+                - Retain
+                - Archive
+                type: string
+            required:
+            - binding
+            - knowledgeBaseName
+            - knowledgeBaseNamespace
+            - knowledgeBaseUID
+            - reclaimPolicy
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: KnowledgeBindingRecord spec is immutable
+          rule: self.spec == oldSelf.spec
+        - message: KnowledgeBindingRecord reclaim policies must be Retain
+          rule: self.spec.reclaimPolicy == 'Retain' && has(self.spec.binding.reclaimPolicy)
+            && self.spec.binding.reclaimPolicy == 'Retain'
+    served: true
+    storage: true
+    subresources: {}

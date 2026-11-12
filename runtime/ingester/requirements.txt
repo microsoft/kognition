@@ -1,0 +1,23 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Core
+pip>=26.2.0
+psycopg[binary]>=3.2.0
+pgvector>=0.3.6
+
+# Text splitting (used by "recursive" chunk mode)
+langchain-text-splitters>=0.3.0
+
+# Embeddings — OpenAI-compatible client covers OpenAI, Azure OpenAI,
+# and any provider that speaks the OpenAI Chat/Embeddings HTTP shape.
+openai>=1.50.0
+
+# Source fetchers
+httpx>=0.28.0
+azure-identity>=1.17.0
+azure-storage-blob>=12.20.0
+boto3>=1.35.0
+
+# Parsers
+pypdf>=6.21.2

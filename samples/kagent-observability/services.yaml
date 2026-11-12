@@ -1,0 +1,100 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: porting-prometheus, namespace: recovery-runtime}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s
+    scrape_configs:
+      - job_name: porting-prometheus
+        static_configs:
+          - targets: ["127.0.0.1:443"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: porting-prometheus
+  namespace: recovery-runtime
+  labels: {app: porting-prometheus, kognition-fixture: porting-20261008}
+spec:
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile: {type: RuntimeDefault}
+    sysctls: [{name: net.ipv4.ip_unprivileged_port_start, value: "0"}]
+  containers:
+    - name: prometheus
+      image: docker.io/prom/prometheus@sha256:29c1e0b48ad816750245dea3d65ac3ce57dda30547e67b1e9a5176e2953cc4dc
+      imagePullPolicy: Never
+      args: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus", "--web.listen-address=:443"]
+      resources:
+        requests: {cpu: 50m, memory: 128Mi}
+        limits: {cpu: 500m, memory: 512Mi}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}
+      volumeMounts:
+        - {name: config, mountPath: /etc/prometheus, readOnly: true}
+        - {name: data, mountPath: /prometheus}
+      readinessProbe: {httpGet: {path: /-/ready, port: 443}, periodSeconds: 2}
+  volumes:
+    - {name: config, configMap: {name: porting-prometheus}}
+    - {name: data, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: porting-prometheus, namespace: recovery-runtime}
+spec: {selector: {app: porting-prometheus}, ports: [{port: 443, targetPort: 443}]}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: porting-grafana
+  namespace: recovery-runtime
+  labels: {app: porting-grafana, kognition-fixture: porting-20261008}
+spec:
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 472
+    runAsGroup: 472
+    fsGroup: 472
+    seccompProfile: {type: RuntimeDefault}
+    sysctls: [{name: net.ipv4.ip_unprivileged_port_start, value: "0"}]
+  containers:
+    - name: grafana
+      image: docker.io/grafana/grafana@sha256:74144189b38447facf737dfd0f3906e42e0776212bf575dc3334c3609183adf7
+      imagePullPolicy: Never
+      env:
+        - {name: GF_SERVER_HTTP_PORT, value: "443"}
+        - {name: GF_SECURITY_ADMIN_USER, value: fixture-admin}
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          valueFrom: {secretKeyRef: {name: porting-grafana-auth, key: password}}
+        - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "false"}
+        - {name: GF_USERS_ALLOW_SIGN_UP, value: "false"}
+      resources:
+        requests: {cpu: 100m, memory: 128Mi}
+        limits: {cpu: "1", memory: 768Mi}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}
+      volumeMounts:
+        - {name: data, mountPath: /var/lib/grafana}
+        - {name: tmp, mountPath: /tmp}
+      readinessProbe: {httpGet: {path: /api/health, port: 443}, periodSeconds: 2}
+  volumes:
+    - {name: data, emptyDir: {}}
+    - {name: tmp, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: porting-grafana, namespace: recovery-runtime}
+spec: {selector: {app: porting-grafana}, ports: [{port: 443, targetPort: 443}]}

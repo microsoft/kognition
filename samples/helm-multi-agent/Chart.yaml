@@ -1,0 +1,19 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: v2
+name: kognition-multi-agent
+description: >-
+  A Helm chart deploying a multi-agent content-creation pipeline on Kognition.
+  Includes Model, Agents (researcher, writer, reviewer), and a Workflow with
+  edges, conditional loops, and an approval gate.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - kognition
+  - multi-agent
+  - workflow
+  - ai
+  - orchestration
+home: https://github.com/microsoft/kognition

@@ -1,0 +1,26 @@
+{
+    "gopls": {
+        "buildFlags": ["-tags=integration"]
+    },
+    "go.testTimeout": "3m",
+    "go.testFlags": ["-count=1", "-v"],
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+    "files.watcherExclude": {
+        "**/.git/**": true,
+        "**/.venv/**": true,
+        "**/bin/**": true,
+        "**/coverage/**": true,
+        "**/node_modules/**": true,
+        "**/playwright-report/**": true,
+        "**/test-results/**": true
+    },
+    "search.exclude": {
+        "**/.venv/**": true,
+        "**/bin/**": true,
+        "**/coverage/**": true,
+        "**/node_modules/**": true,
+        "**/playwright-report/**": true,
+        "**/test-results/**": true
+    },
+    "postman.settings.dotenv-detection-notification-visibility": false
+}

@@ -1,0 +1,140 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Multi-Agent Workflow Helm Values
+# Customize these to match your AI provider and preferences.
+
+# -- Target namespace for all deployed resources.
+namespace: default
+
+# Label applied by the unified compatible sample bundle for scoped validation.
+sampleBundleLabel: ""
+
+# -- Model configuration
+model:
+  # Name of the Model resource
+  name: gpt-6-luna
+  # The model class to reference (must already exist in the cluster, or enable modelClass.create)
+  className: foundry
+  # Model identifier at the provider
+  modelID: gpt-6-luna
+  # Provider type
+  provider: foundry
+  # Provider endpoint URL
+  endpoint: "https://ai-foundry-do-titi.cognitiveservices.azure.com"
+  # API version (Azure-specific)
+  apiVersion: "2024-12-01-preview"
+  # Explicit CPI adapter contract when using a generic invocation profile.
+  invocationContract: ""
+  # Capabilities supported by this model
+  capabilities:
+    - chat
+    - tool-calling
+
+invocationProfile:
+  create: false
+  name: ""
+  specDigest: ""
+  spec: {}
+
+# -- ModelClass (optional — create one if not already in the cluster)
+modelClass:
+  create: true
+  name: foundry
+  provisioner: foundry
+  latencyClass: low
+  costTier: standard
+  contextWindow: 128000
+  modalities:
+    - text
+
+# -- Credentials
+credentials:
+  # Reuse an existing SecretRef when generated credentials are applied by the
+  # full sample bundle. This avoids replacing real credentials with examples.
+  create: true
+  # Name of the SecretRef resource
+  name: foundry-creds
+  # Backend type: "internal" (Kognition-managed), "env", "kubernetes"
+  backendType: internal
+  backendRef: secret/foundry-creds
+  key: token
+  # For backendType "internal" — fill these values or use --set at install time
+  azure:
+    tenantId: "<YOUR_AZURE_TENANT_ID>"
+    clientId: "<YOUR_APP_CLIENT_ID>"
+    clientSecret: "<YOUR_APP_CLIENT_SECRET>"
+
+# -- Agents
+agents:
+  researcher:
+    enabled: true
+    instructions: |
+      You are a research specialist. Given a topic, gather comprehensive
+      information including key facts, statistics, opposing viewpoints, and
+      notable sources. Structure your output as a research brief with:
+      - Executive Summary
+      - Key Findings (bullet points)
+      - Sources and References
+      - Open Questions
+
+      Be thorough but concise. Focus on accuracy and breadth of coverage.
+    runtime:
+      class: default
+      timeout: 60s
+      maxTokens: 8192
+
+  writer:
+    enabled: true
+    instructions: |
+      You are a professional technical writer. Given a research brief (or
+      reviewer feedback with a previous draft), produce a well-structured
+      article that is clear, engaging, and informative.
+
+      Article structure:
+      - Title
+      - Introduction (hook + thesis)
+      - Body sections with headers
+      - Conclusion
+      - References
+
+      If you receive revision feedback, incorporate it while preserving the
+      strengths noted by the reviewer.
+    runtime:
+      class: default
+      timeout: 60s
+      maxTokens: 8192
+
+  reviewer:
+    enabled: true
+    instructions: |
+      You are a senior editor and content reviewer. Evaluate the article
+      for clarity, accuracy, structure, and engagement.
+
+      Provide your review in this format:
+      - Overall Assessment: (approved | revision-needed)
+      - Strengths (bullet points)
+      - Issues (bullet points with severity: critical/minor)
+      - Specific Suggestions (inline corrections or rewrites)
+
+      Set your overall assessment to "approved" only if the article is
+      publication-ready. Otherwise use "revision-needed".
+    runtime:
+      class: default
+      timeout: 45s
+      maxTokens: 4096
+
+# -- Workflow
+workflow:
+  name: content-pipeline
+  entryPoint: researcher
+  budgets:
+    maxDuration: 10m
+    maxTokens: 50000
+  # Approval gate between writer and reviewer
+  approvalGates:
+    enabled: true
+  # Revision loop: reviewer can send back to writer
+  revisionLoop:
+    enabled: true
+    condition: "output contains 'revision-needed'"

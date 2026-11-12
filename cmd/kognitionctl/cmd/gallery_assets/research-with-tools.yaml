@@ -1,0 +1,139 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Research Agent with Tools — agent + web-search + calculator + episodic memory.
+# Requires OPENAI_API_KEY env var on the controller.
+---
+kind: ModelClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: openai
+spec:
+  provisioner: openai
+  latencyClass: low
+  costTier: standard
+  contextWindow: 128000
+  modalities:
+    - text
+---
+kind: SecretRef
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: openai-api-key
+spec:
+  backendType: env
+  backendRef: OPENAI_API_KEY
+  key: OPENAI_API_KEY
+---
+kind: Model
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: gpt-4o
+spec:
+  className: openai
+  modelID: gpt-4o
+  provider: openai-compatible
+  endpoint: https://api.openai.com/v1
+  capabilities:
+    - chat
+    - tool-calling
+  credentialRef:
+    name: openai-api-key
+---
+kind: ToolClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: mcp-tools
+spec:
+  provisioner: mcp
+  executionTier: process
+  transport: stdio
+  resourceLimits:
+    maxCpuMilli: 500
+    maxMemoryMB: 256
+    maxTimeout: 30s
+---
+kind: Tool
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: web-search
+spec:
+  className: mcp-tools
+  protocol: MCP
+  description: Search the web for current information
+  endpoint: npx -y @anthropic/mcp-web-search
+---
+kind: Tool
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: calculator
+spec:
+  # Delegates to the tool-sandbox service.
+  # Apply samples/workflows/tool-sandbox.yaml before this gallery item.
+  className: sandbox-openapi
+  protocol: OpenAPI
+  description: Perform mathematical calculations
+  endpoint: http://tool-sandbox.samples-tool-sandbox.svc.cluster.local:8080/calculator
+  metadata:
+    allowPrivateNetwork: "true"
+  inputSchema:
+    type: object
+    properties:
+      expression:
+        type: string
+        description: Mathematical expression to evaluate
+    required:
+      - expression
+---
+kind: MemoryClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: in-memory
+spec:
+  backendType: in-memory
+  reclaimPolicy: Delete
+---
+kind: MemoryClaim
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: research-episodic
+spec:
+  memoryClassName: in-memory
+  type: episodic
+  capacity: 256Mi
+  accessModes:
+    - ReadWrite
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: research-assistant
+spec:
+  modelRef:
+    name: gpt-4o
+  instructions:
+    inline: |
+      You are a research assistant with access to web search and a calculator.
+
+      Guidelines:
+      - Use web-search whenever the user's question depends on current or
+        external information; cite the sources you used.
+      - Use the calculator for any non-trivial arithmetic; show the
+        expression you evaluated.
+      - Use episodic memory to recall the user's previous research topics
+        and avoid repeating context they already gave you.
+      - Be concise. Prefer short paragraphs and bulleted lists.
+  tools:
+    - ref:
+        name: web-search
+      required: true
+    - ref:
+        name: calculator
+      required: false
+  memory:
+    claims:
+      - name: research-episodic
+  runtime:
+    class: default
+    timeout: 60s
+    maxTokens: 8192

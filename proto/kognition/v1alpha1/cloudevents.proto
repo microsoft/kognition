@@ -1,0 +1,116 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+syntax = "proto3";
+
+package kognition.v1alpha1;
+
+option go_package = "github.com/kognition-ai/kognition/proto/gen/kognition/v1alpha1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/any.proto";
+
+// CloudEvent is the Protobuf representation of a CNCF CloudEvents v1.0 envelope.
+// All internal kognition events are wrapped in this format for transport.
+message CloudEvent {
+  // Required: CloudEvents specification version (always "1.0").
+  string spec_version = 1;
+
+  // Required: Unique event identifier.
+  string id = 2;
+
+  // Required: Event type URI (e.g. "kognition.tool.call", "kognition.reasoning.step").
+  string type = 3;
+
+  // Required: Context in which the event happened (e.g. workspace/agent URI).
+  string source = 4;
+
+  // Optional: Content type of the data field.
+  string data_content_type = 5;
+
+  // Optional: Schema URI for the data payload.
+  string data_schema = 6;
+
+  // Optional: Routing subject (e.g. agent instance name).
+  string subject = 7;
+
+  // Required: Timestamp of when the event occurred.
+  google.protobuf.Timestamp time = 8;
+
+  // Protobuf-encoded payload.
+  google.protobuf.Any data = 9;
+
+  // Extension attributes (kognition-specific metadata).
+  map<string, string> extensions = 10;
+}
+
+// --- Kognition CloudEvent data payloads ---
+
+// ReasoningStepData is the CloudEvents payload for reasoning step events.
+message ReasoningStepData {
+  string session_id = 1;
+  int32 step_index = 2;
+  string role = 3;
+  string content = 4;  // may be redacted
+  string model_name = 5;
+  uint32 prompt_tokens = 6;
+  uint32 completion_tokens = 7;
+  double cost_units = 8;
+}
+
+// ToolCallData is the CloudEvents payload for tool invocation events.
+message ToolCallData {
+  string session_id = 1;
+  string tool_name = 2;
+  string tool_digest = 3;
+  string grant_ref = 4;
+  string sandbox_tier = 5;
+  string arguments = 6;   // may be redacted
+  string result = 7;      // may be redacted
+  string status = 8;      // "ok" or "error"
+  double latency_ms = 9;
+  double cost_units = 10;
+}
+
+// MemoryOpData is the CloudEvents payload for memory operation events.
+message MemoryOpData {
+  string session_id = 1;
+  string operation = 2;  // read, write, summarize, forget
+  string key = 3;
+  string value = 4;      // may be redacted
+}
+
+// CostRecord is the CloudEvents payload for cost attribution events.
+message CostRecord {
+  string agent_name = 1;
+  string agent_namespace = 2;
+  string workspace = 3;
+  string solution = 4;
+  int64 solution_revision = 5;
+  string session_id = 6;
+  string invocation_id = 7;
+  string operation_type = 8;    // "model_inference", "tool_call"
+  string operation_name = 9;    // model name or tool name
+  uint32 prompt_tokens = 10;
+  uint32 completion_tokens = 11;
+  double cost_units = 12;
+  google.protobuf.Timestamp timestamp = 13;
+}
+
+// AuditLogEntry is the CloudEvents payload for CognitiveAuditLog entries.
+message AuditLogEntry {
+  string entry_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string agent_identity = 3;
+  string workspace = 4;
+  string solution = 5;
+  int64 solution_revision = 6;
+  string session_id = 7;
+  string event_type = 8;    // "spec_change", "reasoning_step", "tool_call", "memory_op", "grant_change"
+  string subject_kind = 9;
+  string subject_ref = 10;
+  string verb = 11;
+  string details = 12;       // JSON-encoded, may be redacted
+  string trace_id = 13;
+  string span_id = 14;
+}

@@ -1,0 +1,17 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# CognitiveLimitRange Sample
+#
+# Namespace-level defaults for agent sessions.
+---
+kind: CognitiveLimitRange
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: default-limits
+spec:
+  limits:
+    - type: Agent
+      tokensPerSession: 16384
+      timeoutSeconds: 120
+      maxConcurrentSessions: 5

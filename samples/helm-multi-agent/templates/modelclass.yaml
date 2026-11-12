@@ -1,0 +1,21 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if .Values.modelClass.create }}
+apiVersion: kognition.dev/v1alpha1
+kind: ModelClass
+metadata:
+  name: {{ .Values.modelClass.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "kognition-multi-agent.labels" . | nindent 4 }}
+spec:
+  provisioner: {{ .Values.modelClass.provisioner }}
+  latencyClass: {{ .Values.modelClass.latencyClass }}
+  costTier: {{ .Values.modelClass.costTier }}
+  contextWindow: {{ .Values.modelClass.contextWindow }}
+  modalities:
+    {{- range .Values.modelClass.modalities }}
+    - {{ . }}
+    {{- end }}
+{{- end }}

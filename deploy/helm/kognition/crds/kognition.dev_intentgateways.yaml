@@ -1,0 +1,104 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: intentgateways.kognition.dev
+spec:
+  group: kognition.dev
+  names:
+    kind: IntentGateway
+    listKind: IntentGatewayList
+    plural: intentgateways
+    singular: intentgateway
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        required: [spec]
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              authConfig:
+                properties:
+                  apiKeySecretRef:
+                    description: LocalObjectReference references a resource by name
+                      within the same namespace.
+                    properties:
+                      name:
+                        description: Name is the name of the referenced resource.
+                        type: string
+                    type: object
+                  header:
+                    type: string
+                  mode:
+                    enum: ["", none, apiKey]
+                    type: string
+                type: object
+              protocol:
+                enum: ["", http]
+                type: string
+              routes:
+                items:
+                  properties:
+                    pattern:
+                      minLength: 1
+                      type: string
+                    targetKind:
+                      type: string
+                    targetRef:
+                      description: LocalObjectReference references a resource by name
+                        within the same namespace.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced resource.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                  required:
+                  - pattern
+                  - targetKind
+                  - targetRef
+                  type: object
+                type: array
+            required:
+            - routes
+            type: object
+          status:
+            x-kubernetes-preserve-unknown-fields: true
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,49 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Foundry Agent Sample
+# Azure AI Foundry deployment: ModelClass + SecretRef + Model + Agent
+#
+# Authentication options:
+#   1. Managed Identity (recommended): set clientId in the secret annotation.
+#      The controller acquires tokens automatically via azidentity SDK.
+#   2. API Key: set apiKey in the secret annotation.
+---
+kind: ModelClass
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: foundry
+  namespace: default
+spec:
+  provisioner: foundry
+  latencyClass: low
+  costTier: standard
+  contextWindow: 128000
+  modalities:
+    - text
+
+# NOTE: This sample expects the following prerequisites in the `default`
+# namespace, applied separately by the cluster operator:
+#   - SecretRef `foundry-creds`  (Azure AD client-secret for Foundry)
+#   - Model     `gpt-6-luna`        (referenced by the Agent below)
+# Apply your repo-root `foundry-creds.yaml` first. Do NOT redeclare those
+# resources here — applying placeholder values would clobber real credentials
+# and break the cluster.
+
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: foundry-hello
+  namespace: default
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are a helpful assistant powered by Azure AI Foundry.
+      Answer questions concisely and accurately.
+  runtime:
+    class: default
+    timeout: 30s
+    maxTokens: 4096

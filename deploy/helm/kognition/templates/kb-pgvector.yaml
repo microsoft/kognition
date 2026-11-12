@@ -1,0 +1,216 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+{{- if .Values.kbPgvector.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "kognition.fullname" . }}-kb-pgvector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kb-pgvector
+spec:
+  serviceName: {{ include "kognition.fullname" . }}-kb-pgvector
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: kb-pgvector
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: kb-pgvector
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.dbPodSecurityContext | nindent 8 }}
+      containers:
+        - name: postgres
+          image: {{ include "kognition.thirdPartyImage" (dict "global" .Values.global "image" .Values.kbPgvector.image) }}
+          imagePullPolicy: {{ .Values.kbPgvector.image.pullPolicy }}
+          {{- if .Values.kbPgvector.tls.enabled }}
+          args:
+            - postgres
+            - -c
+            - ssl=on
+            - -c
+            - ssl_cert_file=/var/run/postgres-tls/tls.crt
+            - -c
+            - ssl_key_file=/var/run/postgres-tls/tls.key
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.dbContainerSecurityContext | nindent 12 }}
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.kbPgvector.auth.username | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-kb-pgvector
+                  key: password
+            - name: POSTGRES_DB
+              value: {{ .Values.kbPgvector.auth.database | quote }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: postgres-run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.kbPgvector.tls.enabled }}
+            - name: postgres-tls
+              mountPath: /var/run/postgres-tls
+              readOnly: true
+            {{- end }}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.kbPgvector.auth.username | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.kbPgvector.auth.username | quote }}]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.kbPgvector.resources | nindent 12 }}
+      volumes:
+        - name: postgres-run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.kbPgvector.tls.enabled }}
+        - name: postgres-tls
+          secret:
+            secretName: {{ required "kbPgvector.tls.secretName is required when TLS is enabled" .Values.kbPgvector.tls.secretName }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.kbPgvector.tls.certificateKey }}
+                path: tls.crt
+              - key: {{ .Values.kbPgvector.tls.privateKeyKey }}
+                path: tls.key
+        {{- end }}
+      {{- with .Values.kbPgvector.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.kbPgvector.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.kbPgvector.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.kbPgvector.storage.storageClass }}
+        storageClassName: {{ .Values.kbPgvector.storage.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.kbPgvector.storage.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kognition.fullname" . }}-kb-pgvector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kb-pgvector
+spec:
+  clusterIP: None
+  ports:
+    - port: 5432
+      targetPort: postgres
+      name: postgres
+  selector:
+    app.kubernetes.io/component: kb-pgvector
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+# Secret consumed by the ingester and by KnowledgeBaseClass.spec.vectorStore.
+# `connectionString` is the canonical key; `password` is exposed only so the
+# StatefulSet can mount it via secretKeyRef above.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kognition.fullname" . }}-kb-pgvector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kb-pgvector
+type: Opaque
+stringData:
+  password: {{ .Values.kbPgvector.auth.password | quote }}
+  connectionString: {{ printf "postgres://%s:%s@%s-kb-pgvector:5432/%s?sslmode=disable" .Values.kbPgvector.auth.username .Values.kbPgvector.auth.password (include "kognition.fullname" .) .Values.kbPgvector.auth.database | quote }}
+---
+# Post-install/upgrade hook: ensure the `vector` extension exists.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kognition.fullname" . }}-kb-pgvector-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kb-pgvector
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 20
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: kb-pgvector-init
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.dbPodSecurityContext | nindent 8 }}
+      containers:
+        - name: init
+          image: {{ include "kognition.thirdPartyImage" (dict "global" .Values.global "image" .Values.kbPgvector.image) }}
+          securityContext:
+            {{- toYaml .Values.dbContainerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.kbPgvector.init.resources | nindent 12 }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              until pg_isready -h "$PGHOST" -U "$PGUSER"; do
+                echo "waiting for pgvector..."
+                sleep 2
+              done
+              psql "$CONN" -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          env:
+            - name: PGHOST
+              value: {{ include "kognition.fullname" . }}-kb-pgvector
+            - name: PGUSER
+              value: {{ .Values.kbPgvector.auth.username | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-kb-pgvector
+                  key: password
+            - name: CONN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kognition.fullname" . }}-kb-pgvector
+                  key: connectionString
+{{- end }}

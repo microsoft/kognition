@@ -1,0 +1,261 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: Release
+
+# Publishes container images and Helm charts on tag push (v*.*.*).
+# Manual dispatch is also supported for ad-hoc builds.
+#
+# T-0186: control-plane images (apiserver, controller-manager, k8s-controller, memory-service, ctl)
+# T-0187: runtime adapter image (runtime-agent, Python)
+# T-0188: Helm chart packaged + pushed to GHCR as OCI artifact
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image/chart tag (without leading v)"
+        required: true
+        default: "0.1.0"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository_owner }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  resolve-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.t.outputs.tag }}
+    steps:
+      - id: t
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+  images:
+    needs: resolve-tag
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: migrate
+            repository: kognition-migrate
+            target: migrate
+          - name: apiserver
+            repository: kognition-apiserver
+            target: apiserver
+          - name: controller-manager
+            repository: kognition-controller-manager
+            target: controller
+          - name: k8s-controller
+            repository: kognition-k8s-controller
+            target: k8s-controller
+          - name: memory-service
+            repository: kognition-memory-service
+            target: memory-service
+          - name: memory-policy-gateway
+            repository: kognition-memory-policy-gateway
+            target: memory-policy-gateway
+          - name: tool-gateway
+            repository: kognition-tool-gateway
+            target: tool-gateway
+          - name: model-gateway
+            repository: kognition-model-gateway
+            target: model-gateway
+          - name: agent-communication-gateway
+            repository: kognition-agent-communication-gateway
+            target: agent-communication-gateway
+          - name: intent-gateway
+            repository: kognition-intent-gateway
+            target: intent-gateway
+          - name: knowledge-gateway
+            repository: kognition-knowledge-gateway
+            target: knowledge-gateway
+          - name: knowledge-azuresearch
+            repository: kognition-knowledge-azuresearch
+            target: knowledge-azuresearch
+          - name: knowledge-pgvector
+            repository: kognition-knowledge-pgvector
+            target: knowledge-pgvector
+          - name: workload-identity-proxy
+            repository: kognition-workload-identity-proxy
+            target: workload-identity-proxy
+          - name: ctl
+            repository: kognition-ctl
+            target: ctl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: true
+          sbom: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.repository }}:${{ needs.resolve-tag.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.repository }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.name }}:${{ needs.resolve-tag.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.name }}:latest
+
+  runtime-agent-image:
+    needs: resolve-tag
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: runtime-agent
+            repository: kognition-agent-runtime
+            profile: native
+          - name: runtime-autogen
+            repository: kognition-agent-runtime-autogen
+            profile: autogen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          file: runtime/agent/Dockerfile
+          build-args: |
+            KOGNITION_RUNTIME_PROFILE=${{ matrix.profile }}
+            KOGNITION_NOTICE_STRICT=true
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: true
+          sbom: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.repository }}:${{ needs.resolve-tag.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.repository }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.name }}:${{ needs.resolve-tag.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.name }}:latest
+      - name: Verify exact runtime image platforms
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.repository }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for architecture in amd64 arm64; do
+            docker run --rm --pull always --platform "linux/$architecture" \
+              --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+              --mount "type=bind,src=$PWD/.github/scripts/check-runtime-image.py,dst=/tmp/check-runtime-image.py,readonly" \
+              --entrypoint python "$IMAGE" /tmp/check-runtime-image.py \
+              --profile "${{ matrix.profile }}" --architecture "$architecture"
+          done
+
+  runtime-ingester-image:
+    needs: resolve-tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          file: runtime/ingester/Dockerfile
+          build-args: KOGNITION_NOTICE_STRICT=true
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: true
+          sbom: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kognition-kb-ingester:${{ needs.resolve-tag.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kognition-kb-ingester:latest
+      - name: Verify exact ingester image platforms
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/kognition-kb-ingester@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for architecture in amd64 arm64; do
+            docker run --rm --pull always --platform "linux/$architecture" \
+              --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+              --mount "type=bind,src=$PWD/.github/scripts/check-runtime-image.py,dst=/tmp/check-runtime-image.py,readonly" \
+              --entrypoint python "$IMAGE" /tmp/check-runtime-image.py \
+              --profile ingester --architecture "$architecture"
+          done
+
+  helm-chart:
+    needs: [resolve-tag, images, runtime-agent-image, runtime-ingester-image]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.0
+      - name: Lint charts
+        run: |
+          helm lint deploy/helm/kognition
+          helm lint deploy/helm/kognition-knowledge-azuresearch
+          helm lint deploy/helm/kognition-knowledge-pgvector
+      - name: Render charts (smoke)
+        run: |
+          helm template kognition deploy/helm/kognition > /dev/null
+          helm template azuresearch deploy/helm/kognition-knowledge-azuresearch > /dev/null
+          helm template pgvector deploy/helm/kognition-knowledge-pgvector > /dev/null
+      - name: Run chart regression suites
+        shell: pwsh
+        run: |
+          ./deploy/helm/kognition/tests/helm-regression-tests.ps1
+          ./deploy/helm/kognition-knowledge-azuresearch/tests/helm-regression-tests.ps1
+      - name: Package charts
+        run: |
+          python3 tools/distribution_notices.py charts
+          python3 tools/distribution_notices.py charts --check
+          helm package deploy/helm/kognition \
+            --version ${{ needs.resolve-tag.outputs.tag }} \
+            --app-version ${{ needs.resolve-tag.outputs.tag }} \
+            --destination .out
+          helm package deploy/helm/kognition-knowledge-azuresearch \
+            --version ${{ needs.resolve-tag.outputs.tag }} \
+            --app-version ${{ needs.resolve-tag.outputs.tag }} \
+            --destination .out
+          helm package deploy/helm/kognition-knowledge-pgvector \
+            --version ${{ needs.resolve-tag.outputs.tag }} \
+            --app-version ${{ needs.resolve-tag.outputs.tag }} \
+            --destination .out
+          python3 tools/distribution_notices.py archives .out/*.tgz
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+      - name: Push charts as OCI artifacts
+        run: |
+          helm push .out/kognition-${{ needs.resolve-tag.outputs.tag }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/charts
+          helm push .out/kognition-knowledge-azuresearch-${{ needs.resolve-tag.outputs.tag }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/charts
+          helm push .out/kognition-knowledge-pgvector-${{ needs.resolve-tag.outputs.tag }}.tgz \
+            oci://${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/charts

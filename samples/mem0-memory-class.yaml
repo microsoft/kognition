@@ -1,0 +1,33 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Mem0 Memory Backend
+#
+# This MemoryClass configures the memory service to use Mem0 as the backend.
+# Mem0 provides managed memory with built-in summarization, deduplication,
+# and semantic search — ideal for production agent deployments.
+#
+# Prerequisites:
+#   1. A Mem0 account (https://app.mem0.ai) or self-hosted instance
+#   2. An API key with write access
+#   3. Set the following env vars on the memory-service Deployment:
+#      - MEMORY_BACKEND_TYPE=mem0
+#      - MEM0_API_URL=https://api.mem0.ai  (or your self-hosted URL)
+#      - MEM0_API_KEY=<your-api-key>
+#      - MEM0_ORG_ID=<your-org-id>          (optional)
+#      - MEM0_PROJECT_ID=<your-project-id>  (optional)
+#
+apiVersion: kognition.dev/v1alpha1
+kind: MemoryClass
+metadata:
+  name: mem0
+spec:
+  backendType: mem0
+  parameters:
+    baseURL: "https://api.mem0.ai"
+    # apiKey, orgId, projectId are injected via env vars on the memory service
+    # for security — never put secrets directly in MemoryClass parameters.
+  reclaimPolicy: Retain
+  summarizationConfig:
+    # Mem0 handles summarization internally — disable controller-side.
+    enabled: false
