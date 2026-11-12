@@ -17,7 +17,8 @@ fail() {
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-if ! (cd "${ROOT_DIR}" && bash "${COMMIT_VALIDATOR}" "${IMPORT_SHA}^!" >/dev/null); then
+IMPORT_OUTPUT="$(cd "${ROOT_DIR}" && bash "${COMMIT_VALIDATOR}" "${IMPORT_SHA}^!")"
+if [[ "${IMPORT_OUTPUT}" != "Commit message validation passed." ]]; then
   fail "expected the historical repository import to pass"
 fi
 
