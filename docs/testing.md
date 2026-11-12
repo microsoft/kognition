@@ -62,6 +62,18 @@ reuse the failed report as acceptance evidence.
 
 ## Local Commands
 
+Run plugin socket lifecycle regressions on Linux using the Go version declared
+in `go.mod`:
+
+```bash
+go test -race -count=100 -timeout=5m ./internal/plugin
+```
+
+Socket replacement checks cover both file identity and modification time because
+Linux filesystems can reuse an inode when a plugin recreates its socket at the
+same path. Keep the preserved-identity regression deterministic rather than
+relying on a filesystem to reproduce inode reuse.
+
 ```powershell
 # Fast Go unit suite
 .\make.ps1 test

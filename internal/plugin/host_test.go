@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -592,6 +593,7 @@ func TestHost_ReconnectsWhenSocketIsReplacedAtSamePath(t *testing.T) {
 			Capabilities: []pluginsdk.Capability{pluginsdk.CapabilityRuntime},
 		})
 		go func() { _ = server.GRPCServer().Serve(listener) }()
+		t.Cleanup(server.Stop)
 		return server
 	}
 
@@ -611,9 +613,45 @@ func TestHost_ReconnectsWhenSocketIsReplacedAtSamePath(t *testing.T) {
 	t.Cleanup(h.Stop)
 	waitForPluginState(t, h, socketPath, StateReady, "original-runtime")
 
+	t.Run("preserved file identity", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows cannot change Unix socket timestamps")
+		}
+		original, ok := h.ConnectionForSocket(socketPath)
+		if !ok {
+			t.Fatal("original plugin connection missing")
+		}
+		originalSocket, err := os.Stat(socketPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Exercise a new file version without relying on filesystem inode reuse.
+		modified := originalSocket.ModTime().Add(time.Second)
+		if err := os.Chtimes(socketPath, modified, modified); err != nil {
+			t.Fatal(err)
+		}
+		updatedSocket, err := os.Stat(socketPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !os.SameFile(originalSocket, updatedSocket) || originalSocket.ModTime().Equal(updatedSocket.ModTime()) {
+			t.Fatal("socket fixture must preserve file identity while changing its modification time")
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			current, ok := h.ConnectionForSocket(socketPath)
+			if ok && current.State == StateReady && current.Info.Name == "original-runtime" && current.Conn != original.Conn {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("plugin did not reconnect after socket file version changed: %+v", current)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+
 	server.Stop()
 	server = startServer("restarted-runtime")
-	t.Cleanup(server.Stop)
 	waitForPluginState(t, h, socketPath, StateReady, "restarted-runtime")
 }
 
