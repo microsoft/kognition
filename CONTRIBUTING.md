@@ -55,6 +55,40 @@ public contributions. This document does not attest that it is already enabled.
 - Provide a non-empty PR description covering the changes and validation.
   Story IDs such as `US-0001` are optional.
 
+### Documentation
+
+Use the [documentation map](docs/content-map.md) to distinguish reader guides,
+operational contracts and historical development records. The website requires
+Node.js 24 and npm. From the repository root, validate documentation changes with:
+
+```powershell
+npm --prefix website ci
+npm --prefix website test
+npm --prefix website run check
+npm --prefix website run build
+npm --prefix website run check-links
+```
+
+Keep the README focused on entry paths. Preserve existing source links and
+installation/activation safeguards. Documentation validation must not provision
+cloud resources, activate a cluster or invoke a paid provider.
+
+#### Publishing the documentation website
+
+The [documentation workflow](.github/workflows/pages.yml) validates pull requests
+without deployment permissions. Deployment requires a trusted `main` run and the
+repository variable `DOCS_PAGES_ENABLED` set to exactly `true`.
+
+Before enabling publication, an administrator must review the selected pages,
+configure GitHub Pages to use GitHub Actions, and protect the `github-pages`
+environment. Confirm that organization policy permits the site's visibility:
+a private repository does not automatically produce a private Pages site.
+
+The default site is `https://microsoft.github.io/kognition/`. Set `DOCS_SITE_URL`
+to an HTTPS origin and `DOCS_BASE_PATH` to an absolute path for another approved
+target. The workflow retains dependency legal texts with `npm run notices`
+before uploading a deployment artifact. Missing attribution blocks publication.
+
 ## Code of Conduct
 
 This project has adopted the [Microsoft Open Source Code of

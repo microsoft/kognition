@@ -290,11 +290,11 @@ def test_privacy_notice_and_documented_tracing_opt_out_are_shipped() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "https://opensource.microsoft.com/codeofconduct/" in readme
     assert "[PRIVACY](PRIVACY)" in readme
-    collection_notice = next(
-        paragraph for paragraph in notice.split("\n\n")
-        if paragraph.startswith("Data Collection.")
-    )
-    assert " ".join(collection_notice.split()) in " ".join(readme.split())
+    assert "KOGNITION_OTEL_TRACES_ENABLED=false" in readme
+    assert "observability.openTelemetry.enabled=false" in readme
+    assert "trace export is disabled by default" in readme
+    assert "### Data Collection Notice" not in readme
+    assert "Data Collection. The software may collect" not in readme
 
 
 @pytest.mark.parametrize("archive", ["kognition-0.1.0.tgz", "kognition-governance-0.1.0.tgz"])

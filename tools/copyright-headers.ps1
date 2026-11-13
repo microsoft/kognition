@@ -24,7 +24,7 @@ function Add-SourceCopyrightHeader {
 
     $newline = if ($Content.Contains("`r`n")) { "`r`n" } else { "`n" }
     $prefix = switch ($Extension) {
-        { $_ -in @('.go', '.js', '.ts', '.proto', '.bicep') } { '//'; break }
+        { $_ -in @('.go', '.js', '.mjs', '.ts', '.proto', '.bicep') } { '//'; break }
         { $_ -in @('.py', '.ps1', '.sh', '.yaml', '.yml', '.dockerfile', '.makefile', '.requirements', '.ini', '.env', '.gitignore', '.gitattributes', '.dockerignore') } { '#'; break }
         '.cmd' { '@REM'; break }
         '.sql' { '--'; break }
@@ -72,7 +72,7 @@ Push-Location $root
 try {
     $tracked = @(git -c core.quotepath=false ls-files --cached --others --exclude-standard | Sort-Object -Unique)
     if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate source files' }
-    $supported = @('.go', '.py', '.js', '.ts', '.ps1', '.sh', '.sql', '.proto', '.css', '.yaml', '.yml', '.cmd', '.html', '.svg', '.tpl', '.bicep', '.ini', '.gitignore', '.gitattributes', '.dockerignore')
+    $supported = @('.go', '.py', '.js', '.mjs', '.ts', '.ps1', '.sh', '.sql', '.proto', '.css', '.yaml', '.yml', '.cmd', '.html', '.svg', '.tpl', '.bicep', '.ini', '.gitignore', '.gitattributes', '.dockerignore')
     $sources = @($tracked | Where-Object {
         ([IO.Path]::GetExtension($_) -in $supported -or
             [IO.Path]::GetFileName($_) -match '^(Dockerfile($|\.)|.*\.Dockerfile$|Makefile$|services$|requirements[^/]*\.txt$)' -or
