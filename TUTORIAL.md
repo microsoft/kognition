@@ -1,8 +1,13 @@
 # Kognition Tutorial
 
-A comprehensive, in-depth guide to every Kognition resource type and feature. Each section includes a working sample that you can apply directly to your cluster.
+A resource-oriented walkthrough with sample configurations. Start with the
+[Quickstart](QUICKSTART.md) and [first-agent walkthrough](docs/getting-started/first-agent.md):
+you need a running installation, a configured provider and the applicable grants.
+Adapt sample namespaces, model names and endpoints to that installation.
 
-> **Prerequisites:** Complete the [Quickstart](QUICKSTART.md) first — you need a running Kognition cluster with at least one provider configured.
+Use the [reference index](docs/reference/README.md) for the API definitions shipped
+with your revision. The installation and operations guides take precedence over
+older sample configuration.
 
 ---
 
@@ -1435,13 +1440,17 @@ page limit returns an error and must be narrowed with filters or a time range.
 
 ## AgentIdentity
 
-**AgentIdentity** assigns a deterministic SPIFFE URI for an agent. The URI is
-attribution metadata only: cryptographic SVID issuance, rotation, and SPIFFE
-mTLS verification are not implemented yet.
+**AgentIdentity** records a deterministic SPIFFE URI for an agent. A URI alone is
+attribution metadata, not cryptographic authentication. The selected issuer and
+SVID-backed transport requirements are described in
+[ADR-0018](docs/adr/0018-workload-identity-issuer.md); use the documented runtime
+profile and acceptance scope when enabling that integration.
 
 ### Sample
 
-📁 [`samples/governance/identity.yaml`](samples/governance/identity.yaml)
+The [Helm governance identity template](samples/helm-governance/templates/identities.yaml)
+shows how the governance chart declares identities. The example below illustrates
+the resource shape.
 
 ```yaml
 ---
@@ -1895,9 +1904,11 @@ dependencies:
 
 This is a packaging illustration, not a supported Kubernetes installation path.
 The [umbrella sample](samples/helm-umbrella/README.md) combines platform and producer
-resources and cannot bypass the bootstrap writer freeze. Install the core platform
-through the [guarded installer](docs/features/knowledge-provider-execution/installation-recovery-contract.md);
-review governance and pipeline installation separately after approved activation.
+resources and cannot bypass the bootstrap writer freeze. Prepare the core platform through
+[Kubernetes setup](docs/getting-started/kubernetes.md) or
+[AKS setup](docs/getting-started/aks.md), then configure governance and pipeline
+workloads only after separately approved activation. Existing releases use the
+[upgrade/recovery workflow](docs/features/knowledge-provider-execution/installation-recovery-contract.md).
 Do not refresh bundled archives during recovery. Missing security gates block
 activation even for local examples.
 
@@ -1905,11 +1916,11 @@ activation even for local examples.
 
 ## Securing the Platform
 
-Kognition's security controls are **opt-in** and default to off so local and
-demo flows stay zero-config. Turn them on for production. The full reference —
-including NetworkPolicies, pod hardening, and a production checklist — is in
-[docs/security.md](docs/security.md); the design rationale is in the
-[ADRs](docs/adr/). This section covers the essentials.
+Standalone API authentication and TLS are configurable. Baseline pod/container
+hardening is enabled by default. Kubernetes installation ends at verified inactive
+admission; separately approved activation requires its acceptance evidence. Review
+the [security guide](docs/security.md) for production configuration and the
+[ADRs](docs/adr/) for design rationale.
 
 > **Deployment modes.** In **kubernetes mode** the resource API is the
 > Kubernetes API server, so its authentication, RBAC, TLS, and audit apply. The

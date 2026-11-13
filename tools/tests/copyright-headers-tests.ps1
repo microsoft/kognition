@@ -18,6 +18,7 @@ $cases = @(
     @{extension='.ps1';content="param()`r`nWrite-Output 'example'`r`n"},
     @{extension='.sh';content="#!/bin/sh`necho example`n"},
     @{extension='.js';content="#!/usr/bin/env node`nconsole.log('example');`n"},
+    @{extension='.mjs';content="export const name = 'example';`n"},
     @{extension='.sql';content="SELECT 1;`n"},
     @{extension='.css';content="body { color: black; }`n"},
     @{extension='.yaml';content="apiVersion: v1`nkind: ConfigMap`n"},

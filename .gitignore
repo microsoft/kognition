@@ -9,6 +9,8 @@ $*
 
 # Node Modules
 node_modules/
+/website/.astro/
+/website/dist/
 
 # Binaries
 bin/
@@ -31,6 +33,7 @@ vendor/
 /.local/
 /mentoring/
 /docs/release-preparation/
+/docs/maintaining-docs.md
 /.vscode/PROJECT_BOOTSTRAP.md
 /.github/instructions/postman-*.instructions.md
 *.swp

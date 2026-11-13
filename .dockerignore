@@ -21,6 +21,7 @@ foundry-creds.yaml
 body.json
 trigger-agent.yaml
 node_modules/
+website/
 docs/
 e2e/
 samples/

@@ -1,0 +1,34 @@
+{
+  "name": "kognition-docs",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "cross-env ASTRO_TELEMETRY_DISABLED=1 astro dev",
+    "build": "cross-env ASTRO_TELEMETRY_DISABLED=1 astro build",
+    "notices": "python ../tools/distribution_notices.py npm --root . --output dist/third-party --strict",
+    "preview": "cross-env ASTRO_TELEMETRY_DISABLED=1 astro preview",
+    "check": "cross-env ASTRO_TELEMETRY_DISABLED=1 astro check",
+    "check-links": "node scripts/check-links.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@astrojs/markdown-remark": "7.3.6",
+    "@astrojs/starlight": "0.42.9",
+    "astro": "7.4.7",
+    "unified": "11.0.5",
+    "unist-util-visit": "5.1.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.12",
+    "@types/mdast": "4.0.4",
+    "@types/node": "24.19.2",
+    "cheerio": "1.2.0",
+    "cross-env": "10.1.0",
+    "typescript": "5.9.3",
+    "yaml": "2.9.1"
+  }
+}
