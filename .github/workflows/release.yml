@@ -25,11 +25,11 @@ env:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   resolve-tag:
     runs-on: ubuntu-latest
+    permissions: {}
     outputs:
       tag: ${{ steps.t.outputs.tag }}
     steps:
@@ -44,6 +44,9 @@ jobs:
   images:
     needs: resolve-tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -120,6 +123,9 @@ jobs:
   runtime-agent-image:
     needs: resolve-tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -172,6 +178,9 @@ jobs:
   runtime-ingester-image:
     needs: resolve-tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -210,6 +219,9 @@ jobs:
   helm-chart:
     needs: [resolve-tag, images, runtime-agent-image, runtime-ingester-image]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
