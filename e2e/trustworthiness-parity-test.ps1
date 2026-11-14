@@ -56,7 +56,7 @@ $requiredTests = @{
 }
 $repoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $ReportPath) {
-    $ReportPath = Join-Path $repoRoot "test-results/hackathon-trustworthiness-parity.json"
+    $ReportPath = Join-Path $repoRoot "test-results/trustworthiness-parity.json"
 }
 $ReportPath = [IO.Path]::GetFullPath($ReportPath)
 $testPattern = "^(" + (($requiredTests.Values | ForEach-Object { $_ } | ForEach-Object { [regex]::Escape($_) }) -join "|") + ")$"

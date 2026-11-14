@@ -180,6 +180,6 @@ PostgreSQL uses port 5432 by default; override it with
 - Local tests cover controller-issued capability delivery and PostgreSQL Memory
   mutation replay. Deployed controller-to-runtime-to-gateway execution and
   four-plane parity evidence remain outstanding.
-- Run `./e2e/hackathon-trustworthiness-parity-test.ps1` for contract conformance.
+- Run `./e2e/trustworthiness-parity-test.ps1` for contract conformance.
   Its report deliberately leaves `deployedDemoParityVerified` and
   `recordingReady` false until their separate acceptance gates are completed.

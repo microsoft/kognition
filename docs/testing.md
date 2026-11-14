@@ -245,13 +245,13 @@ image/manifest hashes, failed attempts and cleanup results. Verify every require
 case ran; package PASS, skipped opt-in tests or healthy Deployments alone are not
 activation approval. Follow the [activation contract](features/knowledge-provider-execution/activation-transaction-contract.md).
 
-The [Trustworthiness runbook](../samples/hackathon-trustworthiness/runbook.md)
+The [Trustworthiness runbook](../samples/trustworthiness/runbook.md)
 describes the separate post-activation workload and UI checks. Its PowerShell
 publication/session regressions can run without changing the cluster:
 
 ```powershell
-.\e2e\hackathon-trustworthiness-publication-test.ps1
-.\e2e\hackathon-trustworthiness-session-test.ps1
+.\e2e\trustworthiness-publication-test.ps1
+.\e2e\trustworthiness-session-test.ps1
 ```
 
 ## Test Deadlines

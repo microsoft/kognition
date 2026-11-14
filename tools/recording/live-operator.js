@@ -592,7 +592,7 @@ async function preflight(options, report, persist) {
 }
 
 async function verifyMedia(input, output, report, persist) {
-  const base = path.resolve(".hackaton2026\\video-production\\node_modules");
+  const base = path.resolve(".demo-preparation\\video-production\\node_modules");
   const ffmpeg = path.join(base, "ffmpeg-static", "ffmpeg.exe");
   const ffprobe = path.join(base, "ffprobe-static", "bin", "win32", "x64", "ffprobe.exe");
   const converted = path.join(output, report.failure ? "operator.failed.25fps.mp4" : "operator.recording.25fps.mp4");

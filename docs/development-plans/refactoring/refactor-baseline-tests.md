@@ -31,7 +31,7 @@ Ownership is assigned by path only, using the layout decided in the [refactor pl
 | integrations/aws | 1 | 11 | path |
 | integrations/anthropic | 1 | 11 | path |
 | integrations/mem0 | 1 | 8 | path |
-| samples | 29 | 161 | path (`samples/`, `tools/recording/`, `e2e/hackathon*`) |
+| samples | 29 | 161 | path (`samples/`, `tools/recording/`, `e2e/trustworthiness*`) |
 
 The 62 flagged core files are the migration risk. Most only use a provider name as fixture data, but some assert provider behavior that would have to move with it. The largest are `internal/apiserver/handler_test.go` (108 tests, mentions Foundry), `internal/k8s/dispatcher/dispatcher_test.go` (88), `runtime/ingester/test_ingest.py` (57, Azure Blob and S3 fetchers), `runtime/agent/test_tools.py` (43) and `internal/controller/knowledge_base_reconciler_test.go` (41). RP04 must triage each flagged file; none can be moved or dropped by path alone.
 

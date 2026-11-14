@@ -20,9 +20,10 @@ if ($DemoRunId -notmatch '^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$') {
 }
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$workspace = "kognition-hack-$DemoRunId"
+. (Join-Path $PSScriptRoot "capability-mint.ps1")
+$workspace = "kognition-demo-$DemoRunId"
 if (-not $ReportPath) {
-    $ReportPath = Join-Path $repoRoot "test-results/hackathon-trustworthiness-$DemoRunId.json"
+    $ReportPath = Join-Path $repoRoot "test-results/trustworthiness-$DemoRunId.json"
 }
 $reportDirectory = Split-Path $ReportPath -Parent
 if ($reportDirectory) {
@@ -156,7 +157,7 @@ function Get-FixtureCounter {
 }
 
 function Invoke-StandaloneFallback {
-    $tempDirectory = Join-Path $repoRoot ".tmp/hackathon-trustworthiness-$DemoRunId"
+    $tempDirectory = Join-Path $repoRoot ".tmp/trustworthiness-$DemoRunId"
     if (Test-Path $tempDirectory) {
         throw "Fallback scope already exists: $tempDirectory"
     }
@@ -178,12 +179,12 @@ function Invoke-StandaloneFallback {
         if ($LASTEXITCODE -ne 0) { throw "building kognitionctl failed" }
 
         $fixtureArguments = @("--listen", "127.0.0.1:$FixturePort", "--workspace", $workspace, "--run-id", $DemoRunId)
-        $script:fixtureProcess = Start-Process -FilePath $fixtureBinary -ArgumentList $fixtureArguments -RedirectStandardOutput $fixtureLog -RedirectStandardError $fixtureErrorLog -PassThru
+        $script:fixtureProcess = Start-Process -FilePath $fixtureBinary -ArgumentList @($fixtureArguments | ForEach-Object { ConvertTo-NativeProcessArgument $_ }) -RedirectStandardOutput $fixtureLog -RedirectStandardError $fixtureErrorLog -PassThru
         $fixtureURL = Wait-ForListeningURL -Process $script:fixtureProcess -OutputLog $fixtureLog -ErrorLog $fixtureErrorLog
         Wait-ForHttp -Uri "$fixtureURL/healthz" | Out-Null
 
         $dashboardArguments = @("--mode", "standalone", "--server", $fixtureURL, "--namespace", $workspace, "dashboard", "--bind", "127.0.0.1", "--port", "$DashboardPort", "--run-proof", $ReportPath)
-        $script:dashboardProcess = Start-Process -FilePath $ctlBinary -ArgumentList $dashboardArguments -RedirectStandardOutput $dashboardLog -RedirectStandardError $dashboardErrorLog -PassThru
+        $script:dashboardProcess = Start-Process -FilePath $ctlBinary -ArgumentList @($dashboardArguments | ForEach-Object { ConvertTo-NativeProcessArgument $_ }) -RedirectStandardOutput $dashboardLog -RedirectStandardError $dashboardErrorLog -PassThru
         $dashboardURL = Wait-ForListeningURL -Process $script:dashboardProcess -OutputLog $dashboardLog -ErrorLog $dashboardErrorLog
         Wait-ForHttp -Uri "$dashboardURL/api/meta" | Out-Null
 
@@ -299,7 +300,7 @@ else {
 }
 
 if ($preflight.available) {
-    & (Join-Path $PSScriptRoot "hackathon-trustworthiness-e2e.ps1") -DemoRunId $DemoRunId -KubernetesContext $PreflightContext -ControllerNamespace $ControllerNamespace -ReleaseName $ReleaseName -ReportPath $ReportPath
+    & (Join-Path $PSScriptRoot "trustworthiness-e2e.ps1") -DemoRunId $DemoRunId -KubernetesContext $PreflightContext -ControllerNamespace $ControllerNamespace -ReleaseName $ReleaseName -ReportPath $ReportPath
     exit $LASTEXITCODE
 }
 

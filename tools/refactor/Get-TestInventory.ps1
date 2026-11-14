@@ -29,7 +29,7 @@ try {
         switch -Regex ($path) {
             '^samples/' { return 'samples', 'path' }
             '^tools/recording/' { return 'samples', 'path' }
-            '^e2e/hackathon' { return 'samples', 'path' }
+            '^e2e/(trustworthiness|trust-profile)' { return 'samples', 'path' }
             'azuresearch|azure-|/azure|foundry|^deploy/aks/|^infra/' { return 'integrations/azure', 'path' }
             'bedrock|(^|[/_-])s3([/_.-]|$)|(^|[/_-])aws' { return 'integrations/aws', 'path' }
             'anthropic' { return 'integrations/anthropic', 'path' }

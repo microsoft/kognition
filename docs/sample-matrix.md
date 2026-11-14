@@ -45,7 +45,7 @@ were installed. Three original failed index runs were retained and three named
 replacement runs succeeded: docs 4 documents/1,307 chunks, S3 6/23, Azurite 6/23.
 This is recovered readiness, not an assertion that `samples-full-install` exited
 successfully or that every workflow was executed. Counts precede the separate
-Hackathon rehearsal.
+Demo rehearsal.
 
 On 2026-10-24, a dedicated kind installation completed guarded activation after
 fresh required deployed acceptance and exact-target owner approval. Nine platform
@@ -353,6 +353,6 @@ python -B -m unittest discover -s samples\knowledge-base-blob-s3 -p test_upload_
 - Select the repository Python environment explicitly for Azurite uploads. The
   helper can report `SKIP` with exit zero when the SDK is absent. Confirm actual
   uploaded documents; the current sample blob stores are ephemeral.
-- The [Hackathon four-plane workload](../samples/hackathon-trustworthiness/runbook.md)
+- The [Demo four-plane workload](../samples/trustworthiness/runbook.md)
   is a separate runner in a reviewed, enrolled scope; applying the compatible
   bundle does not execute its scenario.

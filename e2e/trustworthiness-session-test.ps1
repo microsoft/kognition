@@ -76,7 +76,7 @@ foreach ($case in @(
 }
 Write-Host "Tool retries preserve exact invocation and active session; unrelated failures remain terminal."
 
-$phaseAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot "hackathon-trust-profile-phases.ps1"), [ref]$tokens, [ref]$parseErrors)
+$phaseAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot "trust-profile-phases.ps1"), [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 $phaseCommands = @($phaseAst.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] }, $true))
 $running = $phaseCommands | Where-Object { $_.Extent.Text -match 'Wait-ForJsonPath\s+-Resource\s+"agentinstance/\$sourceInstance".*-Expected\s+"Running"' } | Select-Object -First 1
