@@ -34,11 +34,30 @@ kubectl -n default wait --for=jsonpath='{.status.phase}'=Ready agent/orbital-doc
   --mode kubernetes
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+kubectl apply -f samples/knowledge-base/manifests.yaml
+kubectl -n default wait '--for=jsonpath={.status.phase}=Ready' knowledgebase/orbital-notes-kb --timeout=120s
+kubectl -n default wait '--for=jsonpath={.status.phase}=Bound' knowledgebaseclaim/orbital-notes-claim --timeout=60s
+kubectl -n default wait '--for=jsonpath={.status.phase}=Ready' agent/orbital-docs-agent --timeout=120s
+./bin/kognitionctl chat orbital-docs-agent \
+  "When does Orbital Mark 7 ship, and which regions support it at launch?" \
+  --mode kubernetes
+```
+
 The Agent runtime logs the generated tool call:
 
 ```powershell
 kubectl -n default logs deployment/agent-orbital-docs-agent --tail=80 |
   Select-String "knowledge_search"
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+kubectl -n default logs deployment/agent-orbital-docs-agent --tail=80 |
+  grep -F 'knowledge_search'
 ```
 
 Inline retrieval splits each source on blank lines and applies a lightweight
@@ -53,7 +72,9 @@ schedule still exercises admission and controller behavior, but an IndexRun
 completes without launching a batch Job because the documents already live in
 the KnowledgeBase spec.
 
-```powershell
+The optional run/schedule commands work in Bash and PowerShell:
+
+```sh
 kubectl apply -f samples/knowledge-base/indexrun.yaml
 kubectl -n default get kbrun -w
 

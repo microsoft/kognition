@@ -39,12 +39,24 @@ explicitly. The sample is not AWS S3 production conformance.
 ## Apply
 
 ```powershell
-docker build -f .\samples\knowledge-base-blob-s3\Dockerfile `
-  -t kognition-manual/s3-fixture:reviewed .\samples\knowledge-base-blob-s3
-$image = docker image inspect kognition-manual/s3-fixture:reviewed `
-  --format '{{index .RepoDigests 0}}'
+$image = '<approved-registry>/s3-fixture@sha256:<reviewed-manifest-digest>'
 .\samples\knowledge-base-blob-s3\apply.ps1 -Kubeconfig $env:KUBECONFIG -FixtureImage $image
 ```
+
+**Bash (Linux/macOS), with PowerShell 7 installed:**
+
+```bash
+source .venv/bin/activate
+python -c "import boto3"
+image='<approved-registry>/s3-fixture@sha256:<reviewed-manifest-digest>'
+pwsh -NoProfile -File ./samples/knowledge-base-blob-s3/apply.ps1 \
+  -Kubeconfig "$KUBECONFIG" -FixtureImage "$image"
+```
+
+Build the [fixture Dockerfile](Dockerfile) and publish it separately before
+selecting the immutable reference. A local `docker build` tag alone has no
+registry manifest digest in `RepoDigests`. Both environments require
+`powershell-yaml`; see [command shells](../../docs/README.md#command-shells).
 
 Pass `-FixtureImage $image` when a rebuilt image has a different reviewed digest.
 The installer loads that exact reference only into the kind cluster selected by
@@ -55,7 +67,9 @@ The command requires an existing explicit target file; it never picks the first
 kind cluster. It waits for the fixture before uploading. Failed or skipped upload
 inputs cannot produce successful installation.
 
-```powershell
+Run the watch command in Bash or PowerShell:
+
+```sh
 kubectl -n default get knowledgebase s3-docs-kb -o wide -w
 ```
 

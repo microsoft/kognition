@@ -23,17 +23,31 @@ ingester has something real to fetch, chunk, embed, and store in pgvector.
 
 ```powershell
 # Create the container (one-time) then upload every doc under mark7/
-az storage container create --account-name kognition --name product-docs --auth-mode login
+az storage container create --account-name '<storage-account>' --name product-docs --auth-mode login
 az storage blob upload-batch `
-  --account-name kognition --auth-mode login `
+  --account-name '<storage-account>' --auth-mode login `
   --destination product-docs --destination-path mark7 `
   --source samples/docs --pattern "*.md"
 ```
 
-### Upload to S3
+**Bash (Linux/macOS):**
 
 ```bash
-aws s3 cp samples/docs/ s3://<your-bucket>/mark7/ --recursive --exclude "*" --include "*.md"
+az storage container create --account-name '<storage-account>' --name product-docs --auth-mode login
+az storage blob upload-batch \
+  --account-name '<storage-account>' --auth-mode login \
+  --destination product-docs --destination-path mark7 \
+  --source samples/docs --pattern "*.md"
+```
+
+Replace the account name with the approved Storage account in either example.
+
+### Upload to S3
+
+This command works in Bash and PowerShell:
+
+```sh
+aws s3 cp samples/docs/ 's3://<your-bucket>/mark7/' --recursive --exclude "*" --include "*.md"
 ```
 
 ## Files

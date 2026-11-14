@@ -51,6 +51,18 @@ $env:VIRTUAL_ENV = (Resolve-Path ./.venv).Path
 .\make.ps1 samples-install SAMPLE=knowledge-base-blob-azure
 ```
 
+**Bash (Linux/macOS), with PowerShell 7 and `powershell-yaml` installed:**
+
+```bash
+source .venv/bin/activate
+python -c "import azure.storage.blob"
+pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=knowledge-base-blob-azure
+```
+
+Create the environment with `python3 -m venv .venv` if needed and install the
+upload SDK there. See [command shells](../../docs/README.md#command-shells)
+for the shared PowerShell module prerequisite.
+
 Use the reviewed `KUBECONFIG`. For a nondefault platform, also set
 `KOGNITION_PLATFORM_NAMESPACE` and `KOGNITION_PLATFORM_RELEASE` and pass matching
 `NAMESPACE`/`RELEASE` arguments to Make.
@@ -63,7 +75,9 @@ data in `emptyDir`, so a replacement Pod may require re-upload. After fixing a
 missing container or database extension, preserve failed index runs and create a
 new named `KnowledgeBaseIndexRun`. Watch ingestion:
 
-```powershell
+The watch command is the same in Bash and PowerShell:
+
+```sh
 kubectl -n default get knowledgebase azure-docs-kb -o wide -w
 ```
 

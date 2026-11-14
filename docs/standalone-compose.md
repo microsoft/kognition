@@ -6,8 +6,10 @@ feature parity or recording readiness.
 
 ## Credentials
 
-Use PowerShell 7 in the repository root. For a new deployment, generate separate
-credentials without printing them:
+Run from the repository root. For a new deployment, choose one shell to generate
+separate credentials without printing them.
+
+**PowerShell 7 (Windows):**
 
 ```powershell
 $credentialNames = @(
@@ -37,6 +39,30 @@ $bindingKey = @{
 $env:KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON =
     ConvertTo-Json -InputObject @($bindingKey) -Compress
 ```
+
+**Bash (Linux/macOS), with Python 3 available:**
+
+```bash
+for credential_name in \
+    KOGNITION_BOOTSTRAP_TOKEN \
+    KOGNITION_AGENT_SERVICE_TOKEN \
+    KOGNITION_RUNTIME_AUTH_TOKEN \
+    MEMORY_SERVICE_INTERNAL_TOKEN \
+    MEMORY_CAPABILITY_HMAC_KEY \
+    TOOL_CAPABILITY_HMAC_KEY \
+    MODEL_CAPABILITY_HMAC_KEY \
+    AGENT_DELEGATION_CAPABILITY_HMAC_KEY
+do
+    credential_value="$(python3 -c 'import base64,secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())')" || exit 1
+    export "$credential_name=$credential_value"
+done
+unset credential_name credential_value
+KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON="$(python3 -c 'import base64,json,secrets; print(json.dumps([{"version":1,"epoch":1,"algorithm":"HMAC-SHA-256","domain":"kognition.dev/runtime-approval/action/v1","status":"Active","material":base64.b64encode(secrets.token_bytes(32)).decode()}],separators=(",",":")))')" || exit 1
+export KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON
+```
+
+Do not enable shell tracing (`set -x` or PowerShell debug tracing) while handling
+these values.
 
 Keep these values in an access-controlled secret store and reload the same values
 for subsequent starts. Do not rerun generation against an existing deployment:
@@ -68,7 +94,9 @@ the schema to prove those migrations ran. Never guess a baseline or select the
 latest filename merely to bypass the check. Once the ledger exists, unset the
 baseline; subsequent starts validate the ledger normally.
 
-```powershell
+The startup commands are the same in Bash and PowerShell:
+
+```sh
 docker compose config --quiet
 docker compose up -d --build --wait --wait-timeout 180
 docker compose ps -a
@@ -104,6 +132,15 @@ Do not put capability signing keys or provider credentials in the runtime file.
 $env:KOGNITION_HTTP_RUNTIME_ENV_FILE = 'C:/private/external-agent.env'
 $env:KOGNITION_RUNTIME_ENDPOINTS =
     '{"default/external-agent":"http://agent-runtime:8080/invoke"}'
+docker compose -f docker-compose.yml -f docker-compose.http-runtime.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.http-runtime.yml up -d --build --wait --wait-timeout 180
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+export KOGNITION_HTTP_RUNTIME_ENV_FILE="$HOME/private/external-agent.env"
+export KOGNITION_RUNTIME_ENDPOINTS='{"default/external-agent":"http://agent-runtime:8080/invoke"}'
 docker compose -f docker-compose.yml -f docker-compose.http-runtime.yml config --quiet
 docker compose -f docker-compose.yml -f docker-compose.http-runtime.yml up -d --build --wait --wait-timeout 180
 ```

@@ -37,6 +37,22 @@ published and made accessible to AKS:
     -Exclusive
 ```
 
+**Bash (Linux/macOS), with PowerShell 7 installed:**
+
+```bash
+pwsh -NoProfile -File ./deploy/aks/Install-RuntimeBase.ps1 \
+    -Kubeconfig ./.local/aks.kubeconfig \
+    -Context kognition-aks \
+    -ChartPackage ./.local/charts/kognition-0.1.0.tgz \
+    -Namespace kognition-system \
+    -WorkloadNamespace team-a \
+    -ImageRegistry '<registry>.azurecr.io' \
+    -ImageTag '<release-image-tag>' \
+    -ControllerImageDigest 'sha256:<controller-image-digest>' \
+    -StateDirectory ./.local/aks-kognition-install \
+    -Exclusive
+```
+
 The helper delegates to [the shared fresh installer](../../bootstrap.ps1).
 That installer refuses existing releases, verifies admission and migrations, then
 grants controller permissions and verifies its startup. It captures generated

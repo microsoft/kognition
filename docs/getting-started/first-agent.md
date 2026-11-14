@@ -71,6 +71,12 @@ $target = @(
 )
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+target=(--mode standalone --server http://127.0.0.1:8080 --namespace team-a)
+```
+
 For Kubernetes, use the reviewed kubeconfig and its approved context:
 
 ```powershell
@@ -82,6 +88,13 @@ $target = @(
 )
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+export KUBECONFIG="$PWD/reviewed/cluster.kubeconfig"
+target=(--mode kubernetes --kube-context reviewed-context --namespace team-a)
+```
+
 Replace `reviewed-context` with the context in that kubeconfig. Select only the
 appropriate block; avoid automatic backend detection in repeatable operations.
 
@@ -91,6 +104,14 @@ appropriate block; avoid automatic backend detection in repeatable operations.
 .\bin\kognitionctl.exe @target apply -f .\first-agent.yaml
 .\bin\kognitionctl.exe @target get agent hello-agent -o yaml
 .\bin\kognitionctl.exe @target events agent hello-agent
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+./bin/kognitionctl "${target[@]}" apply -f ./first-agent.yaml
+./bin/kognitionctl "${target[@]}" get agent hello-agent -o yaml
+./bin/kognitionctl "${target[@]}" events agent hello-agent
 ```
 
 The namespace in the manifest must match the intended target. Successful `apply`
@@ -105,6 +126,12 @@ After the operator confirms the provider binding and applicable policies:
 .\bin\kognitionctl.exe @target chat hello-agent "Reply with a short greeting."
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+./bin/kognitionctl "${target[@]}" chat hello-agent "Reply with a short greeting."
+```
+
 The command should return an agent response or an explicit failure.
 Do not assert an exact model-generated sentence: model output can vary.
 In Kubernetes mode, chat creates and waits for a controller-owned AgentInstance.
@@ -112,6 +139,12 @@ Inspect that execution separately:
 
 ```powershell
 .\bin\kognitionctl.exe @target get agentinstances
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+./bin/kognitionctl "${target[@]}" get agentinstances
 ```
 
 In standalone mode, the synchronous chat path returns the response and session

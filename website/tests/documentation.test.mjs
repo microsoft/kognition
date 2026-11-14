@@ -2,7 +2,8 @@
 // Licensed under the MIT License.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -11,6 +12,72 @@ import { unified } from 'unified';
 import repositoryLinks from '../src/repository-links.ts';
 import { checkSite } from '../scripts/check-links.mjs';
 import { docsDirectory, getSiteConfig, pagePath, pages, repositoryRoot } from '../site.mjs';
+
+function currentGuides(directory = repositoryRoot) {
+  const excluded = new Set([
+    'docs/adr', 'docs/development-plans', 'docs/release-preparation',
+    'docs/maintaining-docs.md',
+  ]);
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const absolute = path.join(directory, entry.name);
+    const relative = path.relative(repositoryRoot, absolute).split(path.sep).join('/');
+    if (excluded.has(relative)) return [];
+    if (entry.isDirectory()) {
+      if (directory === repositoryRoot && !['docs', 'deploy', 'samples', 'tests', 'infra'].includes(entry.name)) return [];
+      return currentGuides(absolute);
+    }
+    if (!entry.isFile() || !entry.name.endsWith('.md')) return [];
+    if (relative.startsWith('samples/docs/') && entry.name !== 'README.md') return [];
+    return [{ relative, source: readFileSync(absolute, 'utf8').replace(/\r\n/g, '\n') }];
+  });
+}
+
+function commandBlocks(source) {
+  return [...source.matchAll(/^([ \t]*)```(bash|sh|powershell|pwsh|ps1)[^\n]*\n([\s\S]*?)^\1```[ \t]*$/gm)]
+    .map((match) => ({
+      language: match[2],
+      code: match[3].split('\n').map((line) => line.startsWith(match[1]) ? line.slice(match[1].length) : line).join('\n'),
+      line: source.slice(0, match.index).split('\n').length,
+    }));
+}
+
+test('current guides pair shell-specific instructions and keep shared commands portable', () => {
+  const guides = currentGuides();
+  assert.ok(guides.length > 40, 'The review must include repository guides, not only website pages');
+  for (const { relative, source } of guides) {
+    const blocks = commandBlocks(source);
+    for (const [index, block] of blocks.entries()) {
+      if (['powershell', 'pwsh', 'ps1'].includes(block.language)) {
+        assert.ok([blocks[index - 1], blocks[index + 1]].some((neighbor) =>
+          neighbor && ['bash', 'sh'].includes(neighbor.language)),
+        `${relative}:${block.line} needs an adjacent Bash alternative or shared command`);
+      } else {
+        assert.doesNotMatch(block.code, /\$env:|\.\x5c|[A-Za-z]:\x5c|\.exe\b|`\s*\n/,
+          `${relative}:${block.line} contains Windows-only syntax in a Bash/shared example`);
+        if (block.language === 'sh') {
+          assert.doesNotMatch(block.code, /\\\n|<<|^\s*(?:export|source)\s|\$\(/m,
+            `${relative}:${block.line} uses Bash-only syntax in a shared-shell example`);
+        }
+      }
+    }
+  }
+});
+
+test('Bash examples parse without executing deployment or provider operations', (t) => {
+  const blocks = currentGuides().flatMap(({ relative, source }) =>
+    commandBlocks(source).filter(({ language }) => ['bash', 'sh'].includes(language))
+      .map((block) => ({ ...block, relative })));
+  const input = blocks.map(({ relative, line, code }) =>
+    `{\n# ${relative}:${line}\n:\n${code}\n}\n`).join('\n');
+  const result = spawnSync('bash', ['-n'], { input, encoding: 'utf8', timeout: 30_000 });
+  if (result.error?.code === 'ENOENT' && process.platform === 'win32') {
+    t.skip('Install Bash (Git Bash or WSL) to validate Bash syntax locally; required on Linux CI');
+    return;
+  }
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(blocks.length > 100);
+});
 
 test('public and private Pages configurations produce correct route bases', () => {
   assert.equal(pagePath('index', getSiteConfig({})), '/kognition/');
@@ -55,7 +122,14 @@ test('installation entry points stay generic and preserve the selected AKS targe
   const aks = readFileSync(path.join(docsDirectory, 'getting-started', 'aks.md'), 'utf8');
   assert.equal((aks.match(/^\$Kubeconfig\s*=/gm) ?? []).length, 1);
   assert.equal((aks.match(/^\$Context\s*=/gm) ?? []).length, 1);
+  assert.equal((aks.match(/^Kubeconfig=/gm) ?? []).length, 1);
+  assert.equal((aks.match(/^Context=/gm) ?? []).length, 1);
   assert.match(aks, /helm show crds \$Chart \| kubectl --kubeconfig \$Kubeconfig --context \$Context apply -f -/);
+  assert.ok(aks.includes('helm show crds "$Chart" | kubectl --kubeconfig "$Kubeconfig" --context "$Context" apply -f -'));
+  const bashInstallation = commandBlocks(aks).find(({ language, code }) =>
+    language === 'bash' && code.includes('Install-RuntimeBase.ps1'));
+  assert.ok(bashInstallation);
+  assert.ok(bashInstallation.code.includes('-Kubeconfig "$Kubeconfig" -Context "$Context" -ChartPackage "$Chart"'));
   const bootstrap = readFileSync(path.join(docsDirectory, 'bootstrapping.md'), 'utf8');
   assert.match(bootstrap, /^### Configure an Azure tenant$/m);
   const verification = readFileSync(path.join(docsDirectory, 'features', 'knowledge-provider-execution', 'bootstrap-verification-contract.md'), 'utf8');

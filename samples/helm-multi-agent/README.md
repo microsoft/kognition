@@ -40,6 +40,21 @@ helm install my-pipeline samples/helm-multi-agent \
   --set model.endpoint=https://your-endpoint.openai.azure.com
 ```
 
+**PowerShell (Windows):**
+
+```powershell
+helm install my-pipeline samples/helm-multi-agent `
+  --set credentials.azure.tenantId=YOUR_TENANT_ID `
+  --set credentials.azure.clientId=YOUR_CLIENT_ID `
+  --set credentials.azure.clientSecret=YOUR_CLIENT_SECRET `
+  --set model.endpoint=https://your-endpoint.openai.azure.com
+```
+
+These are placeholder credential fields. For actual secrets, use an
+access-controlled values file or existing SecretRef rather than shell history
+or process arguments. Add the approved `--kubeconfig`, `--namespace` and
+`--set namespace=...` settings to the command in either shell.
+
 ### Using OpenAI directly
 
 Create a `values-openai.yaml` override:
@@ -76,7 +91,9 @@ credentials:
 
 Then install:
 
-```bash
+This command works in Bash and PowerShell:
+
+```sh
 helm install my-pipeline samples/helm-multi-agent -f values-openai.yaml
 ```
 
@@ -84,33 +101,61 @@ helm install my-pipeline samples/helm-multi-agent -f values-openai.yaml
 
 ```bash
 helm install my-pipeline samples/helm-multi-agent \
-  --set namespace=my-agents \
-  ...
+  --kubeconfig ./reviewed/target.kubeconfig --namespace my-agents \
+  --set namespace=my-agents -f ./reviewed/sample-values.yaml
+```
+
+**PowerShell (Windows):**
+
+```powershell
+helm install my-pipeline samples/helm-multi-agent `
+  --kubeconfig ./reviewed/target.kubeconfig --namespace my-agents `
+  --set namespace=my-agents -f ./reviewed/sample-values.yaml
 ```
 
 ## Triggering the Workflow
 
-After install, create an `AgentInstance` to kick off the pipeline:
+After install, create a `WorkflowRun` in the same workload namespace. This can
+invoke the configured provider and incur charges.
 
 ```bash
-kubectl apply -f - <<EOF
+kubectl --kubeconfig ./reviewed/target.kubeconfig -n my-agents apply -f - <<'EOF'
 apiVersion: kognition.dev/v1alpha1
-kind: AgentInstance
+kind: WorkflowRun
 metadata:
   name: content-run-1
+  namespace: my-agents
 spec:
-  agentRef:
-    name: researcher
   workflowRef:
     name: content-pipeline
-  goal: "Explain the benefits of Kubernetes-native AI orchestration"
+  input: "Explain the benefits of Kubernetes-native AI orchestration"
 EOF
 ```
 
+**PowerShell (Windows):**
+
+```powershell
+@'
+apiVersion: kognition.dev/v1alpha1
+kind: WorkflowRun
+metadata:
+  name: content-run-1
+  namespace: my-agents
+spec:
+  workflowRef:
+    name: content-pipeline
+  input: "Explain the benefits of Kubernetes-native AI orchestration"
+'@ | kubectl --kubeconfig ./reviewed/target.kubeconfig -n my-agents apply -f -
+```
+
+Use the Workflow name configured in your values and an unused run name.
+
 Monitor progress:
 
-```bash
-kubectl get agentinstances -w
+The watch command works in either shell:
+
+```sh
+kubectl --kubeconfig ./reviewed/target.kubeconfig -n my-agents get workflowruns -w
 ```
 
 ## Configuration
@@ -134,8 +179,10 @@ All values are documented in [values.yaml](./values.yaml). Key overrides:
 
 ## Uninstall
 
-```bash
-helm uninstall my-pipeline
+Run in either shell after settling running work and reviewing data retention:
+
+```sh
+helm uninstall my-pipeline --kubeconfig ./reviewed/target.kubeconfig --namespace my-agents
 ```
 
 This removes all Kognition resources created by the chart (agents, workflow, model, etc.).

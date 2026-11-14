@@ -27,7 +27,9 @@ Select the most recent reviewed baseline for the intended assurance scope. CI us
 the event's base commit for change detection; that commit is not automatically a
 certified baseline. Local planning can use an older recorded acceptance commit.
 
-```powershell
+The planner commands work in Bash and PowerShell:
+
+```sh
 go run ./tools/securitygate plan --base 261c5038f1c578bdc493b5bd4cb5fb7160fc0b88 --head HEAD
 go run ./tools/securitygate plan --base 261c5038f1c578bdc493b5bd4cb5fb7160fc0b88 --head HEAD --format markdown
 

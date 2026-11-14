@@ -84,10 +84,14 @@ Shared resource concepts do not establish complete parity between deployment mod
 Use the Go version declared in [go.mod](go.mod). Building the CLI does not start
 the platform or invoke a provider:
 
+**PowerShell (Windows):**
+
 ```powershell
 go build -o .\bin\kognitionctl.exe .\cmd\kognitionctl
 .\bin\kognitionctl.exe --help
 ```
+
+**Bash (Linux/macOS):**
 
 ```bash
 go build -o ./bin/kognitionctl ./cmd/kognitionctl
@@ -95,7 +99,8 @@ go build -o ./bin/kognitionctl ./cmd/kognitionctl
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the CLA, build/test workflow and commit
-policy, and [testing](docs/testing.md) for required validation.
+policy, [command shells](docs/README.md#command-shells) for shared helper
+prerequisites, and [testing](docs/testing.md) for required validation.
 
 The official repository is [microsoft/kognition](https://github.com/microsoft/kognition).
 Use [SUPPORT.md](SUPPORT.md) for support boundaries and [SECURITY.md](SECURITY.md)
