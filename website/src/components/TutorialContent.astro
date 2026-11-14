@@ -1,0 +1,14 @@
+---
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+import Default from '@astrojs/starlight/components/MarkdownContent.astro';
+import TutorialPlayer from './TutorialPlayer.astro';
+
+const isTutorial = Astro.locals.starlightRoute.entry.id === 'guides/video-tutorial';
+---
+
+<Default>
+  {isTutorial && <TutorialPlayer />}
+  <slot />
+</Default>

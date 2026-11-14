@@ -22,6 +22,7 @@ recorded scope; they do not establish production readiness.
 | Prepare a Kubernetes installation | [Kubernetes setup](getting-started/kubernetes.md) | Understand inactive bootstrap and separately approved activation. |
 | Prepare an Azure Kubernetes Service installation | [AKS setup](getting-started/aks.md) | Review AKS prerequisites and the installer's authentication constraints. |
 | Run an agent on a prepared installation | [First agent](getting-started/first-agent.md) | Declare an Agent and grant, invoke it and inspect the result. |
+| Watch a Studio walkthrough | [Video tutorial](guides/video-tutorial.md) | Build and govern a support assistant, with captions, chapters and a transcript. |
 | Build an integration | [Guides and samples](guides/README.md) | Find the maintained guide and sample for a specific capability. |
 | Operate or troubleshoot a deployment | [Operations](operations/README.md) | Find security, recovery, observability and diagnostic guidance. |
 | Contribute | [Contributing](../CONTRIBUTING.md) | Build, test and submit a scoped change. |

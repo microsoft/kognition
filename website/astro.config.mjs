@@ -22,6 +22,7 @@ export default defineConfig({
         dark: '../docs/assets/kognition-logo-dark.svg',
       },
       social: [{ icon: 'github', label: 'GitHub', href: repositoryURL }],
+      components: { MarkdownContent: './src/components/TutorialContent.astro' },
       sidebar: [
         { label: 'Documentation home', slug: 'index' },
         { label: 'Overview', slug: 'overview' },
@@ -36,7 +37,13 @@ export default defineConfig({
           ],
         },
         { label: 'Concepts', items: [{ slug: 'concepts/resource-model' }] },
-        { label: 'Guides and samples', slug: 'guides' },
+        {
+          label: 'Guides',
+          items: [
+            { label: 'Guides and samples', slug: 'guides' },
+            { label: 'Video tutorial', slug: 'guides/video-tutorial' },
+          ],
+        },
         { label: 'Operations', slug: 'operations' },
         { label: 'Reference', items: [{ slug: 'reference' }, { slug: 'reference/cli' }] },
         {

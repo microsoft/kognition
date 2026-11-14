@@ -9,10 +9,11 @@
   "scripts": {
     "dev": "cross-env ASTRO_TELEMETRY_DISABLED=1 astro dev",
     "build": "cross-env ASTRO_TELEMETRY_DISABLED=1 astro build",
-    "notices": "python ../tools/distribution_notices.py npm --root . --output dist/third-party --strict",
+    "notices": "python ../tools/distribution_notices.py npm --root . --output dist/third-party --strict --supplemental-notices notices/manifest.json",
     "preview": "cross-env ASTRO_TELEMETRY_DISABLED=1 astro preview",
     "check": "cross-env ASTRO_TELEMETRY_DISABLED=1 astro check",
     "check-links": "node scripts/check-links.mjs",
+    "tutorial:fetch": "node scripts/fetch-tutorial.mjs",
     "test": "node --test"
   },
   "dependencies": {

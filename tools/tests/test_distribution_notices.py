@@ -103,6 +103,83 @@ def test_absent_optional_package_is_explicit_not_a_claim_of_legal_clearance(tmp_
     assert inventory["completeDistributionClearance"] is False
     assert "Not installed" in inventory["components"][1]["status"]
 
+def supplemental_fixture(root: Path) -> Path:
+    directory = root / "notices"
+    licenses = directory / "licenses"
+    licenses.mkdir(parents=True)
+    content = b"Original upstream fixture legal text\n"
+    (licenses / "example.txt").write_bytes(content)
+    manifest = directory / "manifest.json"
+    manifest.write_text(json.dumps({
+        "schemaVersion": 1,
+        "components": [{
+            "name": "example", "version": "1.0.0", "license": "MIT",
+            "file": "licenses/example.txt", "sha256": hashlib.sha256(content).hexdigest(),
+            "source": "https://raw.githubusercontent.com/example/project/" + "a" * 40 + "/LICENSE",
+        }],
+    }), encoding="utf-8")
+    return manifest
+
+
+def test_npm_retains_checksum_pinned_supplemental_text_and_provenance(tmp_path: Path) -> None:
+    npm_fixture(tmp_path, legal=False)
+    manifest = supplemental_fixture(tmp_path)
+    output = tmp_path / "output"
+    result = invoke("npm", "--root", str(tmp_path), "--output", str(output),
+                    "--supplemental-notices", str(manifest), "--strict")
+    assert result.returncode == 0, result.stderr
+    inventory = json.loads((output / "inventory.json").read_text(encoding="utf-8"))
+    assert inventory["unresolved"] == 0
+    assert inventory["completeDistributionClearance"] is False
+    record = inventory["components"][0]["texts"][0]
+    entry = json.loads(manifest.read_text(encoding="utf-8"))["components"][0]
+    assert record["source"] == entry["source"]
+    assert record["sha256"] == entry["sha256"]
+    assert inventory["sourceManifests"]["manifest.json"] == hashlib.sha256(manifest.read_bytes()).hexdigest()
+    assert b"Original upstream fixture legal text" in (output / "NOTICE").read_bytes()
+    assert invoke("npm", "--root", str(tmp_path), "--output", str(output), "--strict").returncode != 0
+
+
+@pytest.mark.parametrize("failure", [
+    "checksum", "version", "license", "traversal", "missing", "moving-source", "duplicate",
+])
+def test_npm_supplements_do_not_relax_exact_component_or_source_checks(tmp_path: Path, failure: str) -> None:
+    npm_fixture(tmp_path, legal=False)
+    manifest = supplemental_fixture(tmp_path)
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    entry = data["components"][0]
+    if failure == "checksum":
+        entry["sha256"] = "0" * 64
+    elif failure == "version":
+        entry["version"] = "2.0.0"
+    elif failure == "license":
+        entry["license"] = "ISC"
+    elif failure == "traversal":
+        entry["file"] = "../../LICENSE"
+    elif failure == "missing":
+        (manifest.parent / entry["file"]).unlink()
+    elif failure == "moving-source":
+        entry["source"] = "https://raw.githubusercontent.com/example/project/main/LICENSE"
+    elif failure == "duplicate":
+        data["components"].append(dict(entry))
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    result = invoke("npm", "--root", str(tmp_path), "--output", str(tmp_path / "output"),
+                    "--supplemental-notices", str(manifest), "--strict")
+    assert result.returncode != 0
+    assert result.stderr
+
+
+def test_npm_supplements_never_replace_packaged_original_legal_texts(tmp_path: Path) -> None:
+    npm_fixture(tmp_path)
+    manifest = supplemental_fixture(tmp_path)
+    output = tmp_path / "output"
+    result = invoke("npm", "--root", str(tmp_path), "--output", str(output),
+                    "--supplemental-notices", str(manifest), "--strict")
+    assert result.returncode == 0, result.stderr
+    notice = (output / "NOTICE").read_bytes()
+    assert b"Fixture legal text" in notice
+    assert b"Original upstream fixture legal text" not in notice
+
 
 def test_python_uses_recorded_legal_files_and_reports_missing_texts(tmp_path: Path) -> None:
     site = tmp_path / "site"

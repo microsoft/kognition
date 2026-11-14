@@ -11,6 +11,7 @@ their links open the canonical source rather than a second maintained copy.
 
 | Task | Guide | Sample or reference |
 | --- | --- | --- |
+| Watch an end-to-end Studio example | [Build, govern and verify an assistant](video-tutorial.md) | Captioned video, chapters, transcript and related written guides. |
 | Build and inspect resources visually | [Kognition Studio](../studio.md) | [CLI reference](../reference/cli.md). |
 | Add model invocation behavior | [Model invocation profiles](../model-invocation-profiles.md) | [Foundry Agent sample](../../samples/foundry-agent/manifests.yaml). |
 | Choose a runtime binding | [Runtime binding profiles](../runtime-binding-profiles.md) | [Standalone runtime limits](../standalone-compose.md#opt-in-http-runtime). |

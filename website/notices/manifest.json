@@ -1,0 +1,621 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    {
+      "name": "@astrojs/compiler-binding-android-arm64",
+      "version": "0.5.2",
+      "license": "MIT",
+      "file": "licenses/astro-compiler-0.5.2-MIT.txt",
+      "sha256": "ee92354a87bc4a402e022fa15e10a6c713136aba84c46095dccc2b8091132806",
+      "source": "https://raw.githubusercontent.com/withastro/compiler-rs/342e26603bf6416545a85b506b434d25226e1435/LICENSE"
+    },
+    {
+      "name": "@astrojs/compiler-binding-darwin-arm64",
+      "version": "0.5.2",
+      "license": "MIT",
+      "file": "licenses/astro-compiler-0.5.2-MIT.txt",
+      "sha256": "ee92354a87bc4a402e022fa15e10a6c713136aba84c46095dccc2b8091132806",
+      "source": "https://raw.githubusercontent.com/withastro/compiler-rs/342e26603bf6416545a85b506b434d25226e1435/LICENSE"
+    },
+    {
+      "name": "@astrojs/compiler-binding-darwin-x64",
+      "version": "0.5.2",
+      "license": "MIT",
+      "file": "licenses/astro-compiler-0.5.2-MIT.txt",
+      "sha256": "ee92354a87bc4a402e022fa15e10a6c713136aba84c46095dccc2b8091132806",
+      "source": "https://raw.githubusercontent.com/withastro/compiler-rs/342e26603bf6416545a85b506b434d25226e1435/LICENSE"
+    },
+    {
+      "name": "@astrojs/compiler-binding-linux-arm64-gnu",
+      "version": "0.5.2",
+      "license": "MIT",
+      "file": "licenses/astro-compiler-0.5.2-MIT.txt",
+      "sha256": "ee92354a87bc4a402e022fa15e10a6c713136aba84c46095dccc2b8091132806",
+      "source": "https://raw.githubusercontent.com/withastro/compiler-rs/342e26603bf6416545a85b506b434d25226e1435/LICENSE"
+    },
+    {
+      "name": "@astrojs/compiler-binding-linux-arm64-musl",
+      "version": "0.5.2",
+      "license": "MIT",
+      "file": "licenses/astro-compiler-0.5.2-MIT.txt",
+      "sha256": "ee92354a87bc4a402e022fa15e10a6c713136aba84c46095dccc2b8091132806",
+      "source": "https://raw.githubusercontent.com/withastro/compiler-rs/342e26603bf6416545a85b506b434d25226e1435/LICENSE"
+    },
+    {
+      "name": "@astrojs/compiler-binding-linux-x64-gnu",
+      "version": "0.5.2",
+      "license": "MIT",
+      "file": "licenses/astro-compiler-0.5.2-MIT.txt",
+      "sha256": "ee92354a87bc4a402e022fa15e10a6c713136aba84c46095dccc2b8091132806",
+      "source": "https://raw.githubusercontent.com/withastro/compiler-rs/342e26603bf6416545a85b506b434d25226e1435/LICENSE"
+    },
+    {
+      "name": "@astrojs/compiler-binding-linux-x64-musl",
+      "version": "0.5.2",
+      "license": "MIT",
+      "file": "licenses/astro-compiler-0.5.2-MIT.txt",
+      "sha256": "ee92354a87bc4a402e022fa15e10a6c713136aba84c46095dccc2b8091132806",
+      "source": "https://raw.githubusercontent.com/withastro/compiler-rs/342e26603bf6416545a85b506b434d25226e1435/LICENSE"
+    },
+    {
+      "name": "@astrojs/compiler-binding-wasm32-wasi",
+      "version": "0.5.2",
+      "license": "MIT",
+      "file": "licenses/astro-compiler-0.5.2-MIT.txt",
+      "sha256": "ee92354a87bc4a402e022fa15e10a6c713136aba84c46095dccc2b8091132806",
+      "source": "https://raw.githubusercontent.com/withastro/compiler-rs/342e26603bf6416545a85b506b434d25226e1435/LICENSE"
+    },
+    {
+      "name": "@astrojs/compiler-binding-win32-arm64-msvc",
+      "version": "0.5.2",
+      "license": "MIT",
+      "file": "licenses/astro-compiler-0.5.2-MIT.txt",
+      "sha256": "ee92354a87bc4a402e022fa15e10a6c713136aba84c46095dccc2b8091132806",
+      "source": "https://raw.githubusercontent.com/withastro/compiler-rs/342e26603bf6416545a85b506b434d25226e1435/LICENSE"
+    },
+    {
+      "name": "@astrojs/compiler-binding-win32-x64-msvc",
+      "version": "0.5.2",
+      "license": "MIT",
+      "file": "licenses/astro-compiler-0.5.2-MIT.txt",
+      "sha256": "ee92354a87bc4a402e022fa15e10a6c713136aba84c46095dccc2b8091132806",
+      "source": "https://raw.githubusercontent.com/withastro/compiler-rs/342e26603bf6416545a85b506b434d25226e1435/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-darwin-arm64",
+      "version": "0.10.5",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/b3d38e1e341c809b20b76a655e9b1601d11bd1f0/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-darwin-x64",
+      "version": "0.10.5",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/b3d38e1e341c809b20b76a655e9b1601d11bd1f0/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-linux-arm64-gnu",
+      "version": "0.10.5",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/b3d38e1e341c809b20b76a655e9b1601d11bd1f0/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-linux-arm64-musl",
+      "version": "0.10.5",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/b3d38e1e341c809b20b76a655e9b1601d11bd1f0/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-linux-x64-gnu",
+      "version": "0.10.5",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/b3d38e1e341c809b20b76a655e9b1601d11bd1f0/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-linux-x64-musl",
+      "version": "0.10.5",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/b3d38e1e341c809b20b76a655e9b1601d11bd1f0/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-wasm32-wasi",
+      "version": "0.10.5",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/b3d38e1e341c809b20b76a655e9b1601d11bd1f0/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-win32-arm64-msvc",
+      "version": "0.10.5",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/b3d38e1e341c809b20b76a655e9b1601d11bd1f0/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-win32-x64-msvc",
+      "version": "0.10.5",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/b3d38e1e341c809b20b76a655e9b1601d11bd1f0/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-android-arm64",
+      "version": "0.11.6",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/4e1b31c4eb2f9a950a861e18900aec99bcc4d1b2/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-darwin-arm64",
+      "version": "0.11.6",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/4e1b31c4eb2f9a950a861e18900aec99bcc4d1b2/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-darwin-x64",
+      "version": "0.11.6",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/4e1b31c4eb2f9a950a861e18900aec99bcc4d1b2/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-freebsd-x64",
+      "version": "0.11.6",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/4e1b31c4eb2f9a950a861e18900aec99bcc4d1b2/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-linux-arm64-gnu",
+      "version": "0.11.6",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/4e1b31c4eb2f9a950a861e18900aec99bcc4d1b2/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-linux-arm64-musl",
+      "version": "0.11.6",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/4e1b31c4eb2f9a950a861e18900aec99bcc4d1b2/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-linux-x64-gnu",
+      "version": "0.11.6",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/4e1b31c4eb2f9a950a861e18900aec99bcc4d1b2/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-linux-x64-musl",
+      "version": "0.11.6",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/4e1b31c4eb2f9a950a861e18900aec99bcc4d1b2/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-wasm32-wasi",
+      "version": "0.11.6",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/4e1b31c4eb2f9a950a861e18900aec99bcc4d1b2/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-win32-arm64-msvc",
+      "version": "0.11.6",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/4e1b31c4eb2f9a950a861e18900aec99bcc4d1b2/LICENSE"
+    },
+    {
+      "name": "@bruits/satteri-win32-x64-msvc",
+      "version": "0.11.6",
+      "license": "MIT",
+      "file": "licenses/satteri-MIT.txt",
+      "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1",
+      "source": "https://raw.githubusercontent.com/bruits/satteri/4e1b31c4eb2f9a950a861e18900aec99bcc4d1b2/LICENSE"
+    },
+    {
+      "name": "@napi-rs/wasm-runtime",
+      "version": "1.2.4",
+      "license": "MIT",
+      "file": "licenses/napi-rs-wasm-runtime-MIT.txt",
+      "sha256": "3f1ce66533302df3a32edbfdfc0b78f0dd34659e4c1f5817162e5ea3c2297215",
+      "source": "https://raw.githubusercontent.com/napi-rs/napi-rs/7e3f293e2d6a3032eabfe51ff38bcaa82d342a2f/LICENSE"
+    },
+    {
+      "name": "@napi-rs/wasm-runtime",
+      "version": "1.2.6",
+      "license": "MIT",
+      "file": "licenses/napi-rs-wasm-runtime-MIT.txt",
+      "sha256": "3f1ce66533302df3a32edbfdfc0b78f0dd34659e4c1f5817162e5ea3c2297215",
+      "source": "https://raw.githubusercontent.com/napi-rs/napi-rs/4fff029f67693d08be0ff16818eb9ead2637a99e/LICENSE"
+    },
+    {
+      "name": "@napi-rs/wasm-runtime",
+      "version": "1.2.7",
+      "license": "MIT",
+      "file": "licenses/napi-rs-wasm-runtime-MIT.txt",
+      "sha256": "3f1ce66533302df3a32edbfdfc0b78f0dd34659e4c1f5817162e5ea3c2297215",
+      "source": "https://raw.githubusercontent.com/napi-rs/napi-rs/a9362f80ff9bc65f011e7a487c27ab5a104ea194/LICENSE"
+    },
+    {
+      "name": "@pagefind/darwin-arm64",
+      "version": "1.6.0",
+      "license": "MIT",
+      "file": "licenses/pagefind-1.6.0-MIT.txt",
+      "sha256": "4736929bfded122bd969f0621a0d917484b126d981270d68a63ed42cb55503d5",
+      "source": "https://raw.githubusercontent.com/Pagefind/pagefind/860a4ea87e7a52379520f9eaefd0f8a6b23eb462/LICENSE"
+    },
+    {
+      "name": "@pagefind/darwin-x64",
+      "version": "1.6.0",
+      "license": "MIT",
+      "file": "licenses/pagefind-1.6.0-MIT.txt",
+      "sha256": "4736929bfded122bd969f0621a0d917484b126d981270d68a63ed42cb55503d5",
+      "source": "https://raw.githubusercontent.com/Pagefind/pagefind/860a4ea87e7a52379520f9eaefd0f8a6b23eb462/LICENSE"
+    },
+    {
+      "name": "@pagefind/default-ui",
+      "version": "1.6.0",
+      "license": "MIT",
+      "file": "licenses/pagefind-1.6.0-MIT.txt",
+      "sha256": "4736929bfded122bd969f0621a0d917484b126d981270d68a63ed42cb55503d5",
+      "source": "https://raw.githubusercontent.com/Pagefind/pagefind/860a4ea87e7a52379520f9eaefd0f8a6b23eb462/LICENSE"
+    },
+    {
+      "name": "@pagefind/freebsd-x64",
+      "version": "1.6.0",
+      "license": "MIT",
+      "file": "licenses/pagefind-1.6.0-MIT.txt",
+      "sha256": "4736929bfded122bd969f0621a0d917484b126d981270d68a63ed42cb55503d5",
+      "source": "https://raw.githubusercontent.com/Pagefind/pagefind/860a4ea87e7a52379520f9eaefd0f8a6b23eb462/LICENSE"
+    },
+    {
+      "name": "@pagefind/linux-arm64",
+      "version": "1.6.0",
+      "license": "MIT",
+      "file": "licenses/pagefind-1.6.0-MIT.txt",
+      "sha256": "4736929bfded122bd969f0621a0d917484b126d981270d68a63ed42cb55503d5",
+      "source": "https://raw.githubusercontent.com/Pagefind/pagefind/860a4ea87e7a52379520f9eaefd0f8a6b23eb462/LICENSE"
+    },
+    {
+      "name": "@pagefind/linux-x64",
+      "version": "1.6.0",
+      "license": "MIT",
+      "file": "licenses/pagefind-1.6.0-MIT.txt",
+      "sha256": "4736929bfded122bd969f0621a0d917484b126d981270d68a63ed42cb55503d5",
+      "source": "https://raw.githubusercontent.com/Pagefind/pagefind/860a4ea87e7a52379520f9eaefd0f8a6b23eb462/LICENSE"
+    },
+    {
+      "name": "@pagefind/windows-arm64",
+      "version": "1.6.0",
+      "license": "MIT",
+      "file": "licenses/pagefind-1.6.0-MIT.txt",
+      "sha256": "4736929bfded122bd969f0621a0d917484b126d981270d68a63ed42cb55503d5",
+      "source": "https://raw.githubusercontent.com/Pagefind/pagefind/860a4ea87e7a52379520f9eaefd0f8a6b23eb462/LICENSE"
+    },
+    {
+      "name": "@pagefind/windows-x64",
+      "version": "1.6.0",
+      "license": "MIT",
+      "file": "licenses/pagefind-1.6.0-MIT.txt",
+      "sha256": "4736929bfded122bd969f0621a0d917484b126d981270d68a63ed42cb55503d5",
+      "source": "https://raw.githubusercontent.com/Pagefind/pagefind/860a4ea87e7a52379520f9eaefd0f8a6b23eb462/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-android-arm-eabi",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-android-arm64",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-darwin-arm64",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-darwin-x64",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-freebsd-x64",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-arm-gnueabihf",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-arm64-gnu",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-arm64-musl",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-ppc64-gnu",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-s390x-gnu",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-x64-gnu",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-x64-musl",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-openharmony-arm64",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-win32-arm64-msvc",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-win32-x64-msvc",
+      "version": "1.2.16",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/de6facf2228279718e042b801dd6b60dd6503918/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-android-arm-eabi",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-android-arm64",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-darwin-arm64",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-darwin-x64",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-freebsd-x64",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-arm-gnueabihf",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-arm64-gnu",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-arm64-musl",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-ppc64-gnu",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-s390x-gnu",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-x64-gnu",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-linux-x64-musl",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-openharmony-arm64",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-wasm32-wasi",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-win32-arm64-msvc",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@rolldown/binding-win32-x64-msvc",
+      "version": "1.3.0",
+      "license": "MIT",
+      "file": "licenses/rolldown-MIT.txt",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "https://raw.githubusercontent.com/rolldown/rolldown/be42c65ad38f2966edf35bfe7fe44262b44dafc8/LICENSE"
+    },
+    {
+      "name": "@vscode/l10n",
+      "version": "0.0.18",
+      "license": "MIT",
+      "file": "licenses/vscode-l10n-0.0.18-MIT.txt",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "source": "https://raw.githubusercontent.com/Microsoft/vscode-l10n/fc7e3d79ddb91a2cc24a9730aad912026a43dbf2/LICENSE"
+    },
+    {
+      "name": "boolbase",
+      "version": "1.0.0",
+      "license": "ISC",
+      "file": "licenses/boolbase-1.0.0-ISC.txt",
+      "sha256": "cdf4d87ae0a6c160227263bf4e39a0a10e30e89ae7256e0f7ac7bde0836552c6",
+      "source": "https://raw.githubusercontent.com/fb55/boolbase/be0bcd8a4e917a0a5895e95b523fbbed05a64871/LICENSE"
+    },
+    {
+      "name": "retext",
+      "version": "9.0.0",
+      "license": "MIT",
+      "file": "licenses/retext-MIT.txt",
+      "sha256": "9966260ba3ea9d6a5f839297dca80ddc99735a34b4ae82811cac7b956d2e3afd",
+      "source": "https://raw.githubusercontent.com/retextjs/retext/cd8ad9311a6da12d020f196c3a0547e548745d5b/license"
+    },
+    {
+      "name": "retext-latin",
+      "version": "4.0.0",
+      "license": "MIT",
+      "file": "licenses/retext-MIT.txt",
+      "sha256": "9966260ba3ea9d6a5f839297dca80ddc99735a34b4ae82811cac7b956d2e3afd",
+      "source": "https://raw.githubusercontent.com/retextjs/retext/2ce29e891b9e344d45cc9db9e8ca8770b7120b0d/license"
+    },
+    {
+      "name": "retext-stringify",
+      "version": "4.0.0",
+      "license": "MIT",
+      "file": "licenses/retext-MIT.txt",
+      "sha256": "9966260ba3ea9d6a5f839297dca80ddc99735a34b4ae82811cac7b956d2e3afd",
+      "source": "https://raw.githubusercontent.com/retextjs/retext/0ceda984ab36cd24d5e01f4e600e76f3c86e3ccc/license"
+    }
+  ]
+}

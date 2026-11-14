@@ -66,7 +66,7 @@ npm --prefix website ci
 npm --prefix website test
 npm --prefix website run check
 npm --prefix website run build
-npm --prefix website run check-links
+npm --prefix website run check-links -- --without-tutorial-media
 ```
 
 Keep the README focused on entry paths. Preserve existing source links and
@@ -88,6 +88,39 @@ The default site is `https://microsoft.github.io/kognition/`. Set `DOCS_SITE_URL
 to an HTTPS origin and `DOCS_BASE_PATH` to an absolute path for another approved
 target. The workflow retains dependency legal texts with `npm run notices`
 before uploading a deployment artifact. Missing attribution blocks publication.
+
+Some upstream npm packages omit standalone license files. The website retains
+their original legal texts with exact package versions, immutable upstream
+commit URLs and SHA256 hashes in `website/notices/manifest.json`. Notice
+collection uses these texts only when the installed package has no packaged
+legal text and its declared license matches. It rejects altered files, moving
+source URLs and unknown versions; it does not infer legal clearance from an
+SPDX identifier. Review and update this inventory when the lockfile changes.
+
+#### Updating the video tutorial
+
+The [tutorial page](docs/guides/video-tutorial.md) is the canonical written source
+and transcript. Its player is added by the website, so repository readers can
+still read the same document without a second maintained copy.
+
+- Store approved MP4, SRT, WebVTT caption/chapter tracks and poster images as
+  versioned Release assets in this repository. Do not commit the MP4.
+- Pin the release tag, asset byte lengths, SHA256 hashes, duration and chapter
+  offsets in `website/tutorial.json`. Generate caption tracks and transcript
+  from the approved SRT without changing words or timing.
+- Run `npm --prefix website run tutorial:fetch` while authenticated with `gh`
+  to download and verify all five assets into an ignored directory. Then run
+  the build and `npm --prefix website run check-links` without the preview flag.
+- Pull-request and other non-publishing builds do not download private media.
+  Their explicit `--without-tutorial-media` validation only permits the five
+  pinned media targets to be absent; it does not validate media integrity.
+- Dependency-notice validation also runs on pull requests without network
+  downloads or deployment permissions, catching missing legal texts before merge.
+- Trusted publication downloads the pinned assets, fails on missing or changed
+  files, and checks all rendered media links before uploading Pages content.
+  Captions and video are served from the same site, not from an authenticated
+  Release redirect. Keep existing private Pages access unchanged unless a
+  separate publication decision authorizes otherwise.
 
 ## Code of Conduct
 

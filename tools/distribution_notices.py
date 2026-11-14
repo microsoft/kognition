@@ -39,6 +39,7 @@ def is_legal_file(path: Path) -> bool:
 class LegalText:
     name: str
     content: bytes
+    source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,7 +88,8 @@ def write_notices(
         texts = []
         for text in component.texts:
             lines.extend(("", f"--- Original {text.name} ---", text.content.decode("utf-8-sig"), ""))
-            texts.append({"name": text.name, "sha256": digest(text.content)})
+            texts.append({"name": text.name, "sha256": digest(text.content),
+                          **({"source": text.source} if text.source else {})})
         records.append({
             "component": component.name,
             "version": component.version,
@@ -118,10 +120,47 @@ def write_notices(
     return unresolved
 
 
-def npm_components(root: Path) -> list[Component]:
+def supplemental_npm_texts(
+    manifest: Path, packages: dict
+) -> dict[tuple[str, str], tuple[str, LegalText]]:
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    if data.get("schemaVersion") != 1 or not isinstance(data.get("components"), list):
+        raise ValueError("Invalid supplemental npm notices manifest")
+    known = {(relative.rsplit("node_modules/", 1)[-1], metadata["version"])
+             for relative, metadata in packages.items() if relative}
+    result = {}
+    directory = manifest.parent.resolve()
+    for entry in data["components"]:
+        if not isinstance(entry, dict) or set(entry) != {
+            "name", "version", "license", "file", "sha256", "source",
+        } or not all(isinstance(value, str) and value for value in entry.values()):
+            raise ValueError("Supplemental notice entries require exact component and source fields")
+        key = (entry["name"], entry["version"])
+        if key not in known or key in result:
+            raise ValueError(f"Unknown or duplicate supplemental npm component: {key}")
+        if not re.fullmatch(r"[a-f0-9]{64}", entry["sha256"]) or not re.fullmatch(
+            r"https://raw\.githubusercontent\.com/[^/?#]+/[^/?#]+/[a-f0-9]{40}/[^?#]+",
+            entry["source"],
+        ):
+            raise ValueError(f"Supplemental notice requires a checksum and immutable source: {key}")
+        filename = directory / entry["file"]
+        if not filename.resolve().is_relative_to(directory) or filename.is_symlink() or not filename.is_file():
+            raise ValueError(f"Supplemental legal file is missing or escapes its manifest: {entry['file']}")
+        content = filename.read_bytes()
+        if not content.strip() or digest(content) != entry["sha256"]:
+            raise ValueError(f"Supplemental legal file checksum mismatch: {entry['file']}")
+        content.decode("utf-8-sig")
+        result[key] = (entry["license"], LegalText(
+            f"supplemental/{entry['file']}", content, source=entry["source"],
+        ))
+    return result
+
+
+def npm_components(root: Path, supplemental_notices: Path | None = None) -> list[Component]:
     lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
     if lock.get("lockfileVersion") != 3 or not isinstance(lock.get("packages"), dict):
         raise ValueError("A version 3 npm lockfile with package records is required")
+    supplements = supplemental_npm_texts(supplemental_notices, lock["packages"]) if supplemental_notices else {}
     components = []
     for relative, metadata in sorted(lock["packages"].items()):
         if not relative:
@@ -150,6 +189,13 @@ def npm_components(root: Path) -> list[Component]:
                 raise ValueError(f"Legal file escapes its npm package: {relative}")
             texts.append(LegalText(path.relative_to(directory).as_posix(), path.read_bytes()))
         license_name = metadata.get("license") or installed.get("license") or "UNRESOLVED"
+        supplement = supplements.get((installed["name"], version))
+        if supplement:
+            expected_license, legal_text = supplement
+            if expected_license != license_name:
+                raise ValueError(f"Supplemental license differs from the declared npm license: {relative}")
+            if not texts:
+                texts.append(legal_text)
         components.append(Component(installed["name"], version, license_name, texts))
     return components
 
@@ -249,6 +295,7 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     npm = commands.add_parser("npm")
     npm.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    npm.add_argument("--supplemental-notices", type=Path)
     python = commands.add_parser("python")
     python.add_argument("--site-packages", type=Path)
     python.add_argument("--include-interpreter", action="store_true")
@@ -274,9 +321,12 @@ def main() -> None:
         check_source_binaries(arguments.root)
         return
     if arguments.command == "npm":
-        components = npm_components(arguments.root)
+        components = npm_components(arguments.root, arguments.supplemental_notices)
         manifests = [arguments.root / "package.json", arguments.root / "package-lock.json"]
         scope = "npm lockfile dependency graph; absent optional packages explicitly identified"
+        if arguments.supplemental_notices:
+            manifests.append(arguments.supplemental_notices)
+            scope += "; missing packaged legal texts use checksum-pinned immutable upstream sources"
     else:
         components = python_components(arguments.site_packages)
         manifests = []

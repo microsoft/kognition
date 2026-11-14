@@ -105,7 +105,7 @@ test('PR validation has no deploy permissions and publication requires explicit 
   assert.equal(upload.if, deploymentGuard);
   assert.equal(upload.with.path, 'website/dist');
   const notices = workflow.jobs.build.steps.find((step) => step.run === 'npm run notices');
-  assert.equal(notices.if, deploymentGuard);
+  assert.equal(notices.if, undefined);
   assert.ok(workflow.jobs.build.steps.indexOf(notices) < workflow.jobs.build.steps.indexOf(upload));
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.match(manifest.scripts.notices, / --strict(?:\s|$)/);

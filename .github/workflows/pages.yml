@@ -65,18 +65,26 @@ jobs:
         run: npm test
       - name: Check types and content
         run: npm run check
+      - name: Fetch verified tutorial release assets
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DOCS_PAGES_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm run tutorial:fetch
       - name: Build site
         run: npm run build
       - name: Validate rendered pages, anchors and assets
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DOCS_PAGES_ENABLED == 'true'
         run: npm run check-links
+      - name: Validate non-publishing pages without private media downloads
+        if: github.ref != 'refs/heads/main' || github.event_name == 'pull_request' || vars.DOCS_PAGES_ENABLED != 'true'
+        run: npm run check-links -- --without-tutorial-media
       - name: Report deployment policy
         env:
           PUBLISH_ENABLED: ${{ vars.DOCS_PAGES_ENABLED == 'true' }}
         run: |
           echo "Documentation build and link validation passed." >> "$GITHUB_STEP_SUMMARY"
           echo "Publishing enabled: ${PUBLISH_ENABLED}. Deployment requires a trusted main run and approved Pages configuration." >> "$GITHUB_STEP_SUMMARY"
-      - name: Verify distribution notices before publication
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DOCS_PAGES_ENABLED == 'true'
+      - name: Verify distribution notices
         run: npm run notices
       - name: Upload Pages artifact
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DOCS_PAGES_ENABLED == 'true'

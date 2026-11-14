@@ -1,0 +1,80 @@
+{
+  "repository": "microsoft/kognition",
+  "releaseTag": "tutorial-2026-11-14",
+  "title": "Build, govern and verify an assistant",
+  "recordedOn": "2026-11-14",
+  "durationSeconds": 1430.44,
+  "chapters": [
+    {
+      "title": "Welcome and build the assistant",
+      "startSeconds": 0
+    },
+    {
+      "title": "Connect and authorize a calculator",
+      "startSeconds": 224.64
+    },
+    {
+      "title": "Ground answers in product knowledge",
+      "startSeconds": 346.68
+    },
+    {
+      "title": "Retain customer preferences",
+      "startSeconds": 435.28
+    },
+    {
+      "title": "Build and run a connected Workflow",
+      "startSeconds": 527.68
+    },
+    {
+      "title": "Understand TrustProfiles and trace their evidence",
+      "startSeconds": 620.6
+    },
+    {
+      "title": "Inspect boundary decisions in Trust Focus",
+      "startSeconds": 862.12
+    },
+    {
+      "title": "Inspect authorization and approval outcomes",
+      "startSeconds": 953.4
+    },
+    {
+      "title": "Inspect evaluation outcomes",
+      "startSeconds": 1000.8
+    },
+    {
+      "title": "Inspect Solution revisions",
+      "startSeconds": 1179.96
+    },
+    {
+      "title": "Inspect operational resources in Studio",
+      "startSeconds": 1257.04
+    }
+  ],
+  "assets": {
+    "video": {
+      "name": "kognition-tutorial.en-us.mp4",
+      "bytes": 87738980,
+      "sha256": "01594736dc4aec259e9b496e507ac32c3f07db3522c7f4d832e075ddb6307118"
+    },
+    "subtitles": {
+      "name": "kognition-tutorial.en-us.srt",
+      "bytes": 24026,
+      "sha256": "2b1eb6ba74a475b585a99251f88daef2057d2ef941c252d09d583ae7ca647945"
+    },
+    "captions": {
+      "name": "kognition-tutorial.en-us.vtt",
+      "bytes": 24034,
+      "sha256": "da1264a9aed746a948d1da7378e492bb7479dc9d2e126c76f36752991da48151"
+    },
+    "chapters": {
+      "name": "kognition-tutorial.chapters.en-us.vtt",
+      "bytes": 769,
+      "sha256": "e05b0dc719d458cb85a2aa7bac3b60ac36b76eae1237a32b59dda339c8f1b4d9"
+    },
+    "poster": {
+      "name": "kognition-tutorial.webp",
+      "bytes": 20302,
+      "sha256": "4a9d7524ce8d2b5774f27a9570d4cc6a31dd25e5d2f279e3e956e1ae954c778c"
+    }
+  }
+}

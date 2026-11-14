@@ -19,6 +19,7 @@ export const pages = [
   { source: 'getting-started/first-agent.md', id: 'getting-started/first-agent' },
   { source: 'concepts/resource-model.md', id: 'concepts/resource-model' },
   { source: 'guides/README.md', id: 'guides' },
+  { source: 'guides/video-tutorial.md', id: 'guides/video-tutorial' },
   { source: 'operations/README.md', id: 'operations' },
   { source: 'reference/README.md', id: 'reference' },
   { source: 'reference/cli.md', id: 'reference/cli' },
