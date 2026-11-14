@@ -8,10 +8,9 @@ Choose a deployment path, install the platform, then configure a first Agent.
 | Kubernetes | [Kubernetes setup](docs/getting-started/kubernetes.md). |
 | Azure Kubernetes Service | [AKS setup](docs/getting-started/aks.md). |
 
-Kubernetes bootstrap ends at verified inactive admission; it does not start the
-controller. Workloads require separately approved activation with the documented
-acceptance evidence. Production activation remains blocked by its outstanding
-gates. The installer does not provision providers or install samples.
+The Kubernetes fresh installer installs and verifies admission and database
+components before starting the controller. It refuses to overwrite an existing
+release and does not provision model providers or install samples.
 
 After installation, follow [First agent](docs/getting-started/first-agent.md) to
 declare the Agent and model grant, invoke a turn and inspect the result.

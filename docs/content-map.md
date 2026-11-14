@@ -25,7 +25,7 @@ repository documents until individually integrated.
 
 | Material | How to use it |
 | --- | --- |
-| [Installation and recovery](features/knowledge-provider-execution/installation-recovery-contract.md), [bootstrap verification](features/knowledge-provider-execution/bootstrap-verification-contract.md), [activation](features/knowledge-provider-execution/activation-transaction-contract.md) and [drain verification](features/knowledge-provider-execution/drain-verification-contract.md) | Authoritative installation, activation, recovery and enforcement contracts. Getting-started guides explain these boundaries without replacing their evidence or approval requirements. |
+| [Installation and recovery](features/knowledge-provider-execution/installation-recovery-contract.md), [bootstrap verification](features/knowledge-provider-execution/bootstrap-verification-contract.md), [activation](features/knowledge-provider-execution/activation-transaction-contract.md) and [drain verification](features/knowledge-provider-execution/drain-verification-contract.md) | Detailed upgrade/recovery and enforcement contracts. Fresh installations follow the getting-started workflow; existing paths remain stable. |
 | [Architecture references](architecture/reference/README.md) and [ADRs](adr/README.md) | Design structure and decision rationale; read status and scope. |
 | [Testing](testing.md) and [development gates](development-gates.md) | Contributor validation requirements. |
 | [Development plans and review records](development-plans/README.md) | Historical implementation context and scoped evidence, not current product certification. |

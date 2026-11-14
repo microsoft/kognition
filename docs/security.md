@@ -12,6 +12,7 @@ Design rationale for the larger decisions lives in the ADRs:
 - [ADR-0004 — Multi-replica watch fan-out via PostgreSQL NOTIFY](adr/0004-watch-fanout-pg-notify.md)
 - [ADR-0005 — Secretless outbound provider auth](adr/0005-secretless-provider-auth.md)
 - [ADR-0007 — Agent Gateway Fabric](adr/0007-agent-gateway-fabric.md)
+- [ADR-0028: First installation lifecycle](adr/0028-first-installation-lifecycle.md)
 
 ## Deployment modes and the security baseline
 
@@ -27,7 +28,12 @@ Network, pod-hardening, PDB, and provider-auth controls apply to both.
 
 ### Guarded Kubernetes Installation
 
-Kubernetes installation, enrollment changes and recovery must follow the
+For a new release, the [fresh installer](getting-started/kubernetes.md) verifies
+admission, migrations and service readiness before granting permissions and
+starting the controller. It issues a distinct first-install record and does not
+fabricate release-qualification reports.
+
+Existing-installation upgrades, enrollment changes and recovery follow the
 [installation and recovery contract](features/knowledge-provider-execution/installation-recovery-contract.md)
 and [separate activation contract](features/knowledge-provider-execution/activation-transaction-contract.md).
 The installation security owner approves dedicated workload credential domains;
@@ -42,7 +48,7 @@ installation, or recover a compromised controller. For suspected compromise,
 follow the installation contract's containment and issuer-revocation procedure;
 routine previous-key overlap retains the compromised key's authority. Source
 Secret deletion or rotation alone does not invalidate existing copies, processes
-or sessions. Production activation remains blocked by its acceptance gates.
+or sessions. Production qualification remains separate from installation readiness.
 See the [SG-09 review](development-plans/features/knowledge-provider-execution/sg09-operator-contract-review.md)
 for current historical-finding dispositions and remaining approvals.
 

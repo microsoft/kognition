@@ -225,9 +225,10 @@ Assert-HelmTemplateFails `
     -SetValues @("mode=kubernetes", "networkPolicy.enabled=true") `
     -Pattern "networkPolicy.kubeletProbeIngressCIDRs must list" `
     -TestName "NetworkPolicy: missing kubelet probe CIDRs fail fast"
-$ciliumProbePolicyOutput = Invoke-HelmTemplate -SetValues @("mode=kubernetes", "networkPolicy.enabled=true", "networkPolicy.ciliumHostProbeIngress=true", "toolGateway.enabled=true")
+$ciliumProbePolicyOutput = Invoke-HelmTemplate -SetValues @("mode=kubernetes", "k8sController.managedNamespaces[0]=team-a", "networkPolicy.enabled=true", "networkPolicy.ciliumHostProbeIngress=true", "toolGateway.enabled=true")
 Assert-Contains $ciliumProbePolicyOutput "kind: CiliumNetworkPolicy" "Cilium: host probe policy renders when enabled"
-Assert-Contains $ciliumProbePolicyOutput "kind: CiliumClusterwideNetworkPolicy" "Cilium: dynamic runtime probe policy spans workload namespaces"
+Assert-Contains $ciliumProbePolicyOutput "kind: CiliumClusterwideNetworkPolicy" "Cilium: dynamic runtime probe policy renders for enrolled namespaces"
+Assert-RegexMatch $ciliumProbePolicyOutput '(?s)kind: CiliumClusterwideNetworkPolicy(?:(?!\r?\n---)[\s\S])*?key: k8s:io\.kubernetes\.pod\.namespace\s+operator: In\s+values: \["team-a"\]' "Cilium: runtime probe ingress is limited to enrolled namespaces"
 Assert-Contains $ciliumProbePolicyOutput "fromEntities:" "Cilium: host probe policy uses Cilium entities"
 Assert-Contains $ciliumProbePolicyOutput "remote-node" "Cilium: host probe policy permits remote nodes"
 Assert-NotContains $ciliumProbePolicyOutput "- world" "Cilium: probe policy does not permit world traffic"

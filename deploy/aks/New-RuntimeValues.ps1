@@ -9,7 +9,10 @@ param(
     [ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')][string]$ReleaseFullname = 'kognition',
     [ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')][string]$DatabaseSecret = 'kognition-database',
     [ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')][string]$RuntimeSecret = 'kognition-runtime-auth',
-    [ValidatePattern('^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$')][string]$KubeletProbeIngressCidr = '10.240.0.0/22'
+    [ValidatePattern('^$|^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$')][string]$KubeletProbeIngressCidr = '',
+    [ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')][string]$WorkloadNamespace = 'kognition-agents',
+    [ValidatePattern('^$|^sha256:[a-f0-9]{64}$')][string]$ControllerImageDigest = '',
+    [switch]$GenerateCredentials
 )
 
 Set-StrictMode -Version Latest
@@ -40,18 +43,28 @@ $values = [ordered]@{
     kbIngester = @{ enabled = $true }
     k8sController = @{
         agentImage = "${ImageRegistry}/kognition-agent-runtime:${ImageTag}"
+        managedNamespaces = @($WorkloadNamespace)
     }
+    admissionGuard = @{ stdioIsolationProfile = 'cilium' }
+    migrations = @{ retainCompletedJobs = $true }
     intentGateway = @{ enabled = $true }
     ingress = @{ enabled = $false }
     networkPolicy = @{
         enabled = $true
-        kubeletProbeIngressCIDRs = @($KubeletProbeIngressCidr)
+        kubeletProbeIngressCIDRs = @()
         ciliumHostProbeIngress = $true
+        ciliumApiServerEgress = $true
     }
     podDisruptionBudget = @{ enabled = $false }
 }
 foreach ($component in @('k8sController', 'intentGateway', 'memoryService', 'memoryPolicyGateway', 'toolGateway', 'modelGateway', 'agentCommunicationGateway', 'kbIngester')) {
     $values[$component].image = @{ tag = $ImageTag; pullPolicy = 'IfNotPresent' }
     if ($component -ne 'kbIngester') { $values[$component].replicaCount = 1 }
+}
+if ($ControllerImageDigest) { $values.k8sController.image['digest'] = $ControllerImageDigest }
+if ($KubeletProbeIngressCidr) { $values.networkPolicy.kubeletProbeIngressCIDRs = @($KubeletProbeIngressCidr) }
+if ($GenerateCredentials) {
+    $values.runtimeAuth = @{ create = $true; existingSecret = '' }
+    $values.postgres.auth.existingSecret = ''
 }
 $values | ConvertTo-Json -Depth 10

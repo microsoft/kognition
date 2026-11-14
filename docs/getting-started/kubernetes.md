@@ -1,95 +1,184 @@
 ---
 title: Kubernetes setup
-description: Prepare an inactive Kubernetes installation and understand the separate activation requirements.
+description: Install a new Kognition release, verify its components and start the controller.
 ---
 
 # Kubernetes setup
 
-The committed installer ends at verified inactive admission. It does not activate the controller,
-provision providers or install samples. Running workloads requires separately approved activation
-with genuine acceptance evidence for the exact target. Production activation remains
-blocked by the outstanding gates in the
-[activation contract](../features/knowledge-provider-execution/activation-transaction-contract.md).
+The fresh installer completes platform setup in one operation. It installs the
+admission and database components, checks their readiness and security behavior,
+then starts the controller. It does not configure model providers or install
+sample workloads.
 
-Use this page to orient installation preparation. The
-[installation and recovery contract](../features/knowledge-provider-execution/installation-recovery-contract.md)
-defines the complete plan, commands and recovery requirements.
+For AKS authentication and image-registry setup, follow [AKS setup](aks.md).
 
-## 1. Prepare an explicitly authorized target
+## 1. Prepare the cluster and images
 
-The operator must review and prepare:
+You need:
 
-- A separate static kubeconfig for the authorized cluster. The installer rejects
-  exec/auth-provider credential plugins, insecure TLS and impersonation.
-- Installation and dedicated workload namespaces, plus a separate
-  administrator-owned authority namespace, with their recorded UIDs.
-- The required Kubernetes and Cilium APIs, CRDs, image availability and
-  cert-manager infrastructure. These are separate reviewed changes.
-- Database migration, backup and credential requirements for the selected profile.
-- A writer freeze covering operators, GitOps, autoscalers and workload producers.
-  Existing work must drain before admission changes.
+- An explicit kubeconfig and installation permissions for namespaces, RBAC,
+  admission policies and Kubernetes impersonation used by the admission checks.
+- A Kubernetes version with `ValidatingAdmissionPolicy` support.
+- cert-manager and Cilium installed, with their APIs available.
+- The Kognition images for the chart version, accessible to the cluster.
+- Dedicated installation and Agent namespaces. The installer can create missing
+  namespaces, but refuses existing releases and workloads.
+- The Go version declared in [go.mod](../../go.mod), Helm 3 and kubectl.
+- Python 3.12 or newer for chart notice preparation when packaging from source.
 
-Do not enroll namespaces containing unrelated credentials. A controller compromise
-can expose credentials throughout its enrolled trust domain.
+Build and publish images separately, or use your organization's published release.
+Pin the controller image by digest. Provider credentials are not required to
+install the platform.
+Do not enroll namespaces containing unrelated credentials.
 
-Use the Go version in [go.mod](../../go.mod), Helm and kubectl. See
-[AKS setup](aks.md) for AKS-specific authentication and networking constraints.
-
-## 2. Prepare immutable installation artifacts
-
-Follow the installation contract's
-[reviewed plan](../features/knowledge-provider-execution/installation-recovery-contract.md#reviewed-plan)
-and the [trusted-render contract](../features/knowledge-provider-execution/bootstrap-verification-contract.md).
-Review the chart archive, values, inactive manifest, digest-pinned images,
-namespace inventory and retained objects. The controller must render with zero
-replicas and without workload permissions.
-
-Protect local plans, values, kubeconfigs and snapshots as credentials. The example
-uses an ignored `.local/reviewed/` directory; creating that directory does not
-produce a valid plan or approve a target. Preserve exact artifact bytes and hashes.
-
-## 3. Run inactive bootstrap
-
-Only after completing the contract's preparation, drain and plan review:
+Select the target kubeconfig before running the cluster commands:
 
 ```powershell
-go build -o .\bin\kognition-install.exe .\tools\kognition-install
-.\bin\kognition-install.exe bootstrap --plan .\.local\reviewed\install.json --writers-frozen
+$Kubeconfig = '.\.local\cluster.kubeconfig'
+kubectl --kubeconfig $Kubeconfig get nodes
 ```
 
-`--writers-frozen` confirms an externally maintained freeze; it does not acquire
-a cluster-wide lock. The installer does not create namespaces, install CRDs or
-cert-manager, load images or obtain cloud credentials.
+## 2. Package the chart and install its CRDs
 
-A successful result reports **verified inactive bootstrap**. The admission
-services are available, but the controller remains stopped and producers must
-remain frozen. Helm success and ready gateway Pods do not authorize workloads
-or prove database schema readiness.
+From the repository root:
 
-Automatic `bootstrap.ps1`, `quickstart` and `fresh-kubernetes-demo` paths are
-blocked by the current installation workflow. Do not bypass them with direct
-Helm activation, replica changes or synthetic acceptance reports.
+```powershell
+New-Item -ItemType Directory -Force .\.local\charts | Out-Null
+python .\tools\distribution_notices.py charts
+helm package .\deploy\helm\kognition --destination .\.local\charts
+```
 
-## 4. Review the separate activation requirements
+Set `$Chart` to the archive just produced. The example uses the current chart
+version and preserves the kubeconfig selected above:
 
-Retire the completed bootstrap claim only as described in the installation
-contract, then follow the
-[activation transaction](../features/knowledge-provider-execution/activation-transaction-contract.md).
-Activation requires genuine acceptance and administrator approval for the exact
-target. Dated local evidence and Deployment readiness do not replace those gates.
+```powershell
+$Chart = '.\.local\charts\kognition-0.1.0.tgz'
+helm show crds $Chart | kubectl --kubeconfig $Kubeconfig apply -f -
+```
 
-This guide does not authorize activation. Continue to
-[First agent](first-agent.md) only on an installation whose applicable activation,
-provider and access-policy requirements have already been satisfied.
+Install cert-manager through your cluster's normal dependency-management process
+before continuing.
 
-## Failure, upgrades and recovery
+## 3. Configure the release
 
-Retain the original error, exact executable and reviewed artifacts. Follow the
-[explicit recovery procedure](../features/knowledge-provider-execution/installation-recovery-contract.md#explicit-recovery)
-with the transaction's exact claim UID and the required settlement confirmations.
-Do not reset the installation, strip finalizers or use an automatic rollback to
-make a failed operation appear successful.
+Create a private values file such as `.local/values.yaml`. Use the registry and
+digests for your published images:
 
-Existing releases and namespace-enrollment changes use the same authoritative
-installation, drain and activation contracts. See
-[Operations](../operations/README.md) for the corresponding references.
+```yaml
+global:
+  imageRegistry: registry.example.com/kognition
+k8sController:
+  image:
+    digest: sha256:<controller-image-digest>
+  agentImage: registry.example.com/kognition/kognition-agent-runtime@sha256:<runtime-image-digest>
+```
+
+The remaining image tags default to the chart's application version. Configure
+them explicitly when publishing under another tag. See [chart values](../../deploy/helm/kognition/values.yaml).
+
+The fresh installer supplies the Cilium isolation and node-health policies,
+selects the requested workload namespaces and generates new default credentials
+once. To use external databases or pre-provisioned Secrets, configure their
+existing-secret references in the values file.
+
+## 4. Install
+
+Choose the namespaces and ensure no other installer, GitOps process or workload
+writer changes them during this operation:
+
+```powershell
+.\bootstrap.ps1 -Kubeconfig $Kubeconfig -Chart $Chart `
+    -Values .\.local\values.yaml -Namespace kognition-system `
+    -WorkloadNamespace team-a -StateDirectory .\.local\kognition-install `
+    -Exclusive
+```
+
+`-Exclusive` confirms that coordination. The installer:
+
+1. Checks cluster identity, required APIs, release absence and resource inventory.
+2. Installs the chart with the controller stopped and without workload permissions.
+3. Waits for admission, database migrations and the other platform services.
+4. Verifies admission behavior and checks that the target has not changed.
+5. Grants the reviewed controller permissions, starts it and verifies its rollout.
+
+The installation record is generated by the command. No manually authored
+activation report is needed for a fresh installation.
+
+### Alternative entry points
+
+Use one entry point for the installation; these commands are alternatives to the
+PowerShell invocation above.
+
+With GNU Make:
+
+```bash
+make quickstart \
+  KUBECONFIG=.local/cluster.kubeconfig \
+  CHART_PACKAGE=.local/charts/kognition-0.1.0.tgz \
+  INSTALL_VALUES=.local/values.yaml \
+  WORKLOAD_NAMESPACES=team-a \
+  INSTALL_EXCLUSIVE=true
+```
+
+On Windows, use the shim with the same variables:
+
+```powershell
+.\make.ps1 quickstart "KUBECONFIG=$Kubeconfig" "CHART_PACKAGE=$Chart" `
+    INSTALL_VALUES=.local/values.yaml WORKLOAD_NAMESPACES=team-a `
+    INSTALL_EXCLUSIVE=true
+```
+
+To invoke the Go installer directly on Linux or macOS:
+
+```bash
+go run ./tools/kognition-install fresh \
+  --kubeconfig .local/cluster.kubeconfig \
+  --chart .local/charts/kognition-0.1.0.tgz \
+  --values .local/values.yaml \
+  --namespace kognition-system \
+  --workload-namespaces team-a \
+  --state-dir .local/kognition-install \
+  --exclusive
+```
+
+## 5. Verify the result
+
+```powershell
+kubectl --kubeconfig $Kubeconfig -n kognition-system get deployments,statefulsets,jobs
+kubectl --kubeconfig $Kubeconfig -n kognition-system rollout status `
+    deployment/kognition-k8s-controller --timeout=120s
+```
+
+Expect the controller and admission deployments to be ready and migration Jobs
+to have completed. A stopped controller after an error is a failed installation,
+not the expected final result.
+
+Retain the state directory privately: it contains captured values, credentials,
+manifests and the exact installer executable needed for recovery. Do not commit it.
+
+## Next steps and existing releases
+
+Configure a model in the workload namespace, then follow [First agent](first-agent.md).
+The installation verifies platform startup; it does not prove a model invocation.
+
+The fresh command refuses existing or failed Helm release history. For upgrades,
+data migration or partial installations, use the
+[installation and recovery procedure](../features/knowledge-provider-execution/installation-recovery-contract.md).
+Preserve the original error and state; do not use a reset or forced finalizer
+removal as a retry procedure.
+
+If failure occurred after an activation record was printed, the retained
+installer supports first-install recovery:
+
+```powershell
+.\.local\kognition-install\kognition-install.exe fresh-recover `
+    --plan .\.local\kognition-install\install.json `
+    --record '<record-name>' --writers-frozen --executors-stopped
+```
+
+Confirm that the earlier installer has stopped and no other writers are running
+before using those flags. Recovery refuses user workloads, removes only the
+transaction's recorded permissions/probes and leaves the controller stopped.
+On Linux or macOS, invoke the retained `kognition-install` binary without `.exe`.
+Earlier bootstrap failures use the claim UID printed by the
+[installation recovery command](../features/knowledge-provider-execution/installation-recovery-contract.md).

@@ -1,10 +1,18 @@
 # Installation And Recovery Contract
 
-- Status: implemented local SG-05 workflow; production activation remains blocked.
-- Updated: 2026-10-21.
+For a new release, use [Kubernetes setup](../../getting-started/kubernetes.md).
+The fresh installer completes admission checks, migrations and controller startup
+as one operation under [ADR-0028](../../adr/0028-first-installation-lifecycle.md).
+The reviewed-plan and cleanup procedures below remain the existing-release,
+upgrade and partial-installation recovery reference.
+
+- Status: reviewed-plan workflow implemented for local review; production
+  qualification remains separate from installation readiness.
+- Implementation evidence date: 2026-10-21; documentation scope updated 2026-11-13.
 - Implementation: [installer](../../../tools/kognition-install/main.go), [plan](../../../internal/k8s/installation/plan.go), [workflow](../../../internal/k8s/installation/workflow.go).
 
-The installer ends at verified inactive admission. Keep writers frozen until the
+The `bootstrap --plan` operation ends with the controller stopped and admission
+verified. Keep writers frozen until the
 separate [activation transaction](activation-transaction-contract.md) succeeds
 with genuine SG-03/07/08/09 evidence. Neither Helm success nor this document
 authorizes production activation.

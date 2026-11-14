@@ -42,11 +42,10 @@ deployment boundaries and current limitations.
 | Find a capability walkthrough | [Guides and samples](docs/guides/README.md). |
 | Operate or troubleshoot a deployment | [Operations](docs/operations/README.md). |
 
-Kubernetes installation ends at verified inactive admission. Starting the
-controller requires separately approved activation with the documented acceptance
-evidence; production activation remains blocked by its outstanding gates. Follow
-[Kubernetes setup](docs/getting-started/kubernetes.md) or
-[AKS setup](docs/getting-started/aks.md) before configuring providers and samples.
+The Kubernetes installer checks the target, installs admission and database
+components, verifies their readiness, then starts the controller. It refuses to
+overwrite an existing installation. Follow [Kubernetes setup](docs/getting-started/kubernetes.md)
+or [AKS setup](docs/getting-started/aks.md); configure providers and samples afterward.
 
 ## Documentation
 

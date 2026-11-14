@@ -16,7 +16,7 @@ state and execution results for that installation.
 | New Kubernetes installation | [Kubernetes setup](../getting-started/kubernetes.md) or [AKS setup](../getting-started/aks.md). |
 | Kubernetes installation and recovery | [Installation contract](../features/knowledge-provider-execution/installation-recovery-contract.md). |
 | Inactive admission | [Bootstrap verification](../features/knowledge-provider-execution/bootstrap-verification-contract.md). |
-| Controller activation and recovery | [Activation transaction](../features/knowledge-provider-execution/activation-transaction-contract.md). |
+| Existing-installation activation and recovery | [Activation transaction](../features/knowledge-provider-execution/activation-transaction-contract.md). |
 | Settling producers | [Drain verification](../features/knowledge-provider-execution/drain-verification-contract.md). |
 | Authentication, identity and network boundaries | [Security guide](../security.md). |
 | Metrics, logs and opt-in traces | [Observability](../observability.md). |
@@ -43,7 +43,7 @@ state and execution results for that installation.
 | Compose startup fails | Inspect `docker compose ps -a` and the failing service's logs; require a successful migration. |
 | A CLI request reaches an unexpected installation | Select `--mode`, endpoint or reviewed kubeconfig explicitly. |
 | An Agent cannot invoke a model | Inspect the binding, ModelGrant, namespace, events and provider configuration. |
-| Admission is healthy but workloads do not reconcile | Inactive bootstrap deliberately leaves the controller stopped. Check the separate activation prerequisites and exact-target approval; do not scale it manually to bypass a gate. |
+| Admission is healthy but workloads do not reconcile | Inspect the installer result and controller Deployment; a failed check leaves it stopped. Resolve that failure before recovery. |
 | A KnowledgeBase indexed but retrieval fails | Verify the retrieval runtime and provider path independently from ingestion. |
 | A request timed out after possible provider execution | Preserve session and accounting evidence before another invocation. |
 

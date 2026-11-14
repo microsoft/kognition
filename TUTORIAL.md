@@ -1904,21 +1904,20 @@ dependencies:
 
 This is a packaging illustration, not a supported Kubernetes installation path.
 The [umbrella sample](samples/helm-umbrella/README.md) combines platform and producer
-resources and cannot bypass the bootstrap writer freeze. Prepare the core platform through
+resources. Install a new core platform through
 [Kubernetes setup](docs/getting-started/kubernetes.md) or
 [AKS setup](docs/getting-started/aks.md), then configure governance and pipeline
-workloads only after separately approved activation. Existing releases use the
+workloads separately. Existing releases use the
 [upgrade/recovery workflow](docs/features/knowledge-provider-execution/installation-recovery-contract.md).
-Do not refresh bundled archives during recovery. Missing security gates block
-activation even for local examples.
+Do not refresh bundled archives during recovery.
 
 ---
 
 ## Securing the Platform
 
 Standalone API authentication and TLS are configurable. Baseline pod/container
-hardening is enabled by default. Kubernetes installation ends at verified inactive
-admission; separately approved activation requires its acceptance evidence. Review
+hardening is enabled by default, and the fresh Kubernetes installer requires its
+admission and Cilium enforcement profile before starting the controller. Review
 the [security guide](docs/security.md) for production configuration and the
 [ADRs](docs/adr/) for design rationale.
 

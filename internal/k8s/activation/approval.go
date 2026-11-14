@@ -14,6 +14,8 @@ import (
 const ApprovalVersion = "kognition.dev/activation/v1"
 const ApprovalLifetime = 30 * time.Minute
 
+type approvalValidator func(Approval, ActivationTarget, time.Time) error
+
 type ActivationTarget struct {
 	ClusterUID         string            `json:"clusterUID"`
 	Endpoint           string            `json:"endpoint"`

@@ -297,6 +297,14 @@ def test_privacy_notice_and_documented_tracing_opt_out_are_shipped() -> None:
     assert "Data Collection. The software may collect" not in readme
 
 
+def test_installation_state_is_excluded_from_source_and_image_contexts() -> None:
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert "/.local/" in gitignore
+    assert ".local/" in dockerignore
+    assert ".azure/" in dockerignore
+
+
 @pytest.mark.parametrize("archive", ["kognition-0.1.0.tgz", "kognition-governance-0.1.0.tgz"])
 def test_bundled_chart_archives_retain_current_legal_files(archive: str) -> None:
     result = invoke("archives", str(ROOT / "samples" / "helm-umbrella" / "charts" / archive))

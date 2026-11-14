@@ -43,28 +43,26 @@ test('publication is an explicit unique list of reader pages', () => {
   }
 });
 
-test('installation guidance preserves the committed bootstrap and activation boundary', () => {
+test('installation entry points stay generic and preserve the selected AKS target', () => {
   for (const relative of [
-    'README.md', 'QUICKSTART.md', 'TUTORIAL.md',
-    'docs/getting-started/kubernetes.md', 'docs/getting-started/aks.md',
+    'README.md', 'QUICKSTART.md', 'deploy/QUICKSTART.md', 'deploy/aks/README.md',
+    'docs/bootstrapping.md', 'docs/getting-started/kubernetes.md', 'docs/getting-started/aks.md',
   ]) {
     const source = readFileSync(path.join(repositoryRoot, relative), 'utf8');
     assert.doesNotMatch(source, /az\s+aks\s+(?:start|stop)\b/i, relative);
-    assert.doesNotMatch(source, /kognition-install(?:\.exe)?\s+fresh(?:-recover)?\b/i, relative);
-    assert.doesNotMatch(source, /bootstrap\.ps1[^\n]*-Kubeconfig/i, relative);
+    assert.doesNotMatch(source, /automatic[^\n]*(?:bootstrap|quickstart)[^\n]*blocked/i, relative);
   }
-  const kubernetes = readFileSync(path.join(docsDirectory, 'getting-started', 'kubernetes.md'), 'utf8');
-  assert.match(kubernetes, /kognition-install\.exe bootstrap --plan/);
-  assert.match(kubernetes, /--writers-frozen/);
-  assert.match(kubernetes, /does not activate the controller/);
-  assert.match(kubernetes, /separately approved activation/);
   const aks = readFileSync(path.join(docsDirectory, 'getting-started', 'aks.md'), 'utf8');
-  assert.match(aks, /exec\/auth-provider credential plugins are unsupported/);
-  assert.match(aks, /static kubeconfig/);
-  assert.match(aks, /separate activation/);
+  assert.equal((aks.match(/^\$Kubeconfig\s*=/gm) ?? []).length, 1);
+  assert.equal((aks.match(/^\$Context\s*=/gm) ?? []).length, 1);
+  assert.match(aks, /helm show crds \$Chart \| kubectl --kubeconfig \$Kubeconfig --context \$Context apply -f -/);
+  const bootstrap = readFileSync(path.join(docsDirectory, 'bootstrapping.md'), 'utf8');
+  assert.match(bootstrap, /^### Configure an Azure tenant$/m);
+  const verification = readFileSync(path.join(docsDirectory, 'features', 'knowledge-provider-execution', 'bootstrap-verification-contract.md'), 'utf8');
+  assert.match(verification, /Nine policies and nine bindings/);
 });
 
-test('canonical Markdown links resolve to site routes or repository sources and fail closed', () => {
+test('canonical Markdown links resolve to site routes or repository sources and fail closed', async () => {
   const source = { path: path.join(docsDirectory, 'README.md') };
   const processor = unified().use(repositoryLinks);
   const tree = (href) => ({
@@ -74,18 +72,18 @@ test('canonical Markdown links resolve to site routes or repository sources and 
       { type: 'paragraph', children: [{ type: 'link', url: href, children: [{ type: 'text', value: 'Guide' }] }] },
     ],
   });
-  const published = processor.runSync(tree('getting-started/local.md#1-prepare-the-checkout-and-tools'), source);
+  const published = await processor.run(tree('getting-started/local.md#1-prepare-the-checkout-and-tools'), source);
   assert.equal(published.children.length, 1);
   assert.equal(published.children[0].children[0].url,
     `${pagePath('getting-started/local')}#1-prepare-the-checkout-and-tools`);
-  const repository = processor.runSync(tree('../CONTRIBUTING.md'), source);
+  const repository = await processor.run(tree('../CONTRIBUTING.md'), source);
   assert.equal(repository.children[0].children[0].url,
     'https://github.com/microsoft/kognition/blob/main/CONTRIBUTING.md');
-  const external = processor.runSync(tree('https://example.org/guide'), source);
+  const external = await processor.run(tree('https://example.org/guide'), source);
   assert.equal(external.children[0].children[0].url, 'https://example.org/guide');
-  assert.throws(() => processor.runSync(tree('missing-guide.md'), source), /missing link target/);
-  assert.throws(() => processor.runSync(tree('../../outside.md'), source), /escapes the repository/);
-  assert.throws(() => processor.runSync(tree('javascript:alert(1)'), source), /unsupported link protocol/);
+  await assert.rejects(processor.run(tree('missing-guide.md'), source), /missing link target/);
+  await assert.rejects(processor.run(tree('../../outside.md'), source), /escapes the repository/);
+  await assert.rejects(processor.run(tree('javascript:alert(1)'), source), /unsupported link protocol/);
 });
 
 test('PR validation has no deploy permissions and publication requires explicit trusted-main opt-in', () => {

@@ -11,8 +11,8 @@ guarded Kubernetes path have different prerequisites and approval boundaries.
 | Path | Prepare | Continue when |
 | --- | --- | --- |
 | [Local development](local.md) | Docker Compose, local credentials, database migrations and the CLI. | The local API is healthy and authenticated resource access works. |
-| [Kubernetes setup](kubernetes.md) | A reviewed static kubeconfig, available images, chart artifacts and the installation plan. | Inactive bootstrap and separately approved activation have completed for the exact target. |
-| [AKS setup](aks.md) | AKS access, a supported static kubeconfig, Cilium and registry access for the nodes. | The same installation and separate activation requirements have been met. |
+| [Kubernetes setup](kubernetes.md) | Cluster access, available images, a chart archive and installation values. | The installer reports the controller ready. |
+| [AKS setup](aks.md) | AKS access, kubelogin and registry access for the nodes. | The same Kubernetes installation checks and controller rollout complete. |
 
 If you already have access to a prepared installation and an approved model,
 continue to [First agent](first-agent.md).

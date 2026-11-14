@@ -19,7 +19,7 @@
         up down migrate
         deploy-standalone deploy-kubernetes
         undeploy-standalone undeploy-kubernetes
-        install uninstall fresh-kubernetes-demo
+        install uninstall quickstart fresh-kubernetes-demo
         observability observability-install observability-uninstall jaeger jaeger-install jaeger-ui jaeger-uninstall grafana-ui
         foundry-creds
         samples-list samples-install samples-uninstall
@@ -28,7 +28,7 @@
 
     Examples:
         .\make.ps1 build
-        .\make.ps1 deploy-kubernetes
+        .\make.ps1 quickstart KUBECONFIG=target.kubeconfig CHART_PACKAGE=kognition.tgz INSTALL_VALUES=values.yaml WORKLOAD_NAMESPACES=team-a INSTALL_EXCLUSIVE=true
         .\make.ps1 samples-install SAMPLE=simple-agent
         .\make.ps1 status
         .\make.ps1 services ACTION=start SERVICE=postgres
@@ -646,9 +646,33 @@ function Target-UndeployStandalone {
 # ---------------------------------------------------------------------------
 
 function Target-DeployKubernetes {
-    if (-not $parsed.Vars['INSTALL_PLAN']) { throw 'INSTALL_PLAN is required for inactive Kubernetes bootstrap.' }
+    if (-not $parsed.Vars['INSTALL_PLAN']) {
+        Target-FreshKubernetes
+        return
+    }
     if ($parsed.Vars['INSTALL_WRITERS_FROZEN'] -ne 'true') { throw 'INSTALL_WRITERS_FROZEN=true is required after controlled drain preparation.' }
     Invoke-Native 'go' @('run', './tools/kognition-install', 'bootstrap', '--plan', $parsed.Vars['INSTALL_PLAN'], '--writers-frozen')
+}
+
+function Target-FreshKubernetes {
+    foreach ($name in @('KUBECONFIG', 'CHART_PACKAGE', 'INSTALL_VALUES', 'WORKLOAD_NAMESPACES')) {
+        if (-not $parsed.Vars[$name]) { throw "$name is required for a fresh Kubernetes installation. See docs/getting-started/kubernetes.md." }
+    }
+    if ($parsed.Vars['INSTALL_EXCLUSIVE'] -ne 'true') { throw 'INSTALL_EXCLUSIVE=true confirms exclusive writes to the selected installation namespaces.' }
+    $parameters = @{
+        Kubeconfig = $parsed.Vars['KUBECONFIG']
+        Chart = $parsed.Vars['CHART_PACKAGE']
+        Values = $parsed.Vars['INSTALL_VALUES']
+        WorkloadNamespace = @($parsed.Vars['WORKLOAD_NAMESPACES'] -split ',')
+        Namespace = $Namespace
+        Release = $Release
+        Exclusive = $true
+    }
+    if ($parsed.Vars['KUBE_CONTEXT']) { $parameters.Context = $parsed.Vars['KUBE_CONTEXT'] }
+    if ($parsed.Vars['INSTALL_STATE']) { $parameters.StateDirectory = $parsed.Vars['INSTALL_STATE'] }
+    if ($parsed.Vars['INSTALL_AUTHORITY_NAMESPACE']) { $parameters.AuthorityNamespace = $parsed.Vars['INSTALL_AUTHORITY_NAMESPACE'] }
+    if ($parsed.Vars['INSTALL_REPLICAS']) { $parameters.Replicas = [int]$parsed.Vars['INSTALL_REPLICAS'] }
+    & (Join-Path $RepoRoot 'bootstrap.ps1') @parameters
 }
 
 function Target-UndeployKubernetes {
@@ -928,23 +952,8 @@ function Ensure-CertManagerForKubernetes {
 }
 
 function Target-FreshKubernetesDemo {
-    throw 'Automatic reset is blocked during SG-05: preserve the existing release and use deploy-kubernetes with INSTALL_PLAN after controlled drain.'
-    Write-Host '==> Fresh Kubernetes demo reset starting...'
-    $script:FreshKubernetesDemoImageTag = 'fresh-' + (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')
-    Write-Host "==> Fresh Kubernetes demo image tag: $FreshKubernetesDemoImageTag"
-    Invoke-TargetWithRetry -Name 'Kubernetes image build' -Attempts 2 -Script { Target-DockerK8sForFreshDemo -Tag $FreshKubernetesDemoImageTag }
-    Stop-ManagedJaegerPortForward
-    Target-ObservabilityUninstall
-    Target-Uninstall
-    Wait-KognitionUninstalled
-    Target-Install -Vars @{ MODE = 'kubernetes' }
-    Target-ObservabilityInstall
-    Target-SamplesInstall -Vars @{}
-    Start-ManagedJaegerPortForward
-    Target-Status
-    Write-Host ''
-    Write-Host 'Fresh Kubernetes demo environment is ready.'
-    Write-Host 'Jaeger UI: http://localhost:16686'
+    Write-Host 'Legacy alias: installs a new release only; never resets a cluster or installs samples.'
+    Target-FreshKubernetes
 }
 
 # ---------------------------------------------------------------------------
@@ -1848,12 +1857,12 @@ function Target-Help {
                 '  up                   docker compose up -d',
                 '  down                 docker compose down',
                 '  deploy-standalone    Deploy standalone mode via Helm',
-                '  deploy-kubernetes    Deploy Kubernetes mode via Helm',
+                '  deploy-kubernetes    Checked fresh install; INSTALL_PLAN selects the existing-release workflow',
                 '  undeploy-standalone  Remove standalone Helm release',
                 '  undeploy-kubernetes  Remove Kubernetes mode Helm release',
                 '  install              Install the platform (MODE=standalone|kubernetes)',
                 '  uninstall            Uninstall everything (release, CRDs, namespace)',
-                '  fresh-kubernetes-demo  Uninstall, rebuild, install Kubernetes mode, observability, samples, and Jaeger port-forward',
+                '  fresh-kubernetes-demo  Legacy alias for a checked new Kubernetes installation; no reset',
                 '  observability         Alias for observability-install',
                 '  observability-install Install Jaeger, Prometheus, Grafana, and Kognition monitoring integrations',
                 '  observability-uninstall Remove the development observability bundle and disable integrations',
@@ -1862,7 +1871,7 @@ function Target-Help {
                 '  jaeger-ui            Port-forward Jaeger UI to localhost:16686',
                 '  grafana-ui           Port-forward Grafana UI to localhost:3000',
                 '  jaeger-uninstall     Backward-compatible alias for observability-uninstall',
-                '  quickstart           One-command bootstrap: build + install + samples (runs bootstrap.ps1)',
+                '  quickstart           Install a new Kubernetes release and start its controller after checks',
                 '  foundry-creds        Regenerate foundry-creds.yaml from .env and apply it (AGENT_NAMESPACE=ns1,ns2)',
                 '  samples-list         List available samples',
                 '  samples-install      Install samples (SAMPLE=<name> for one)',
@@ -1973,7 +1982,7 @@ switch ($parsed.Target) {
     'logs'                 { Target-Logs -Vars $parsed.Vars }
     'port-forward'         { Target-PortForward }
     'studio'               { Target-Studio -Vars $parsed.Vars }
-    'quickstart'           { throw 'Automatic bootstrap and producer resumption are blocked during SG-05; use deploy-kubernetes with INSTALL_PLAN.' }
+    'quickstart'           { Target-FreshKubernetes }
     'e2e'                  { Target-E2E }
     'e2e-kubernetes-memory' { Target-E2EKubernetesMemory }
     'e2e-kubernetes-audit'  { Target-E2EKubernetesAudit }

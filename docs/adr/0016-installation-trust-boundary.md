@@ -1,6 +1,9 @@
 # ADR-0016: Installation Trust Boundary
 
-- Status: Accepted.
+- Status: Accepted; first-install manual approval requirements partially
+  superseded by [ADR-0028](0028-first-installation-lifecycle.md). The original
+  decision below remains the historical record; upgrade/recovery and namespace
+  isolation requirements remain in force.
 - Date: 2026-09-24; Cilium isolation decision added 2026-09-25.
 - Approval scope: the three decisions below were approved in conversation;
   production activation remains blocked by outstanding security gates.
