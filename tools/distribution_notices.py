@@ -117,6 +117,11 @@ def write_notices(
     if unresolved:
         print(f"{unresolved} component(s) need legal-text or license verification; see inventory.json",
               file=sys.stderr)
+        for component in components:
+            if component.installed and (not component.texts or component.license == "UNRESOLVED"):
+                reason = "missing legal text" if not component.texts else "unresolved declared license"
+                print(f"Unresolved: {component.name}@{component.version} "
+                      f"(declared license: {component.license}; {reason})", file=sys.stderr)
     return unresolved
 
 

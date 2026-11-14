@@ -122,12 +122,12 @@ test('rendered media validation checks video, poster and tracks; preview excepti
   const media = tutorialPaths('/kognition/');
   await writeFile(path.join(root, 'index.html'), `<video poster="${media.poster}">
     <source src="${media.video}"><track src="${media.captions}"><track src="${media.chapters}"></video>`);
-  assert.throws(() => checkSite(root), /missing target/);
+  assert.throws(() => checkSite(root, getSiteConfig({})), /missing target/);
   assert.equal(checkSite(root, getSiteConfig({}), { allowMissingTutorialMedia: true }).missingTutorialMedia, 4);
   const directory = path.join(root, 'media', 'tutorial', tutorial.releaseTag);
   await mkdir(directory, { recursive: true });
   await writeAssets(directory, tutorial);
-  assert.equal(checkSite(root).missingTutorialMedia, 0);
+  assert.equal(checkSite(root, getSiteConfig({})).missingTutorialMedia, 0);
   await writeFile(path.join(root, 'index.html'), '<video poster="/kognition/unlisted.webp"><source src="/kognition/unlisted.mp4"></video>');
   assert.throws(() => checkSite(root, getSiteConfig({}), { allowMissingTutorialMedia: true }), /unlisted/);
 });

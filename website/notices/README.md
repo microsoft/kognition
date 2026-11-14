@@ -1,6 +1,6 @@
 # Supplemental dependency licenses
 
-Publication remains blocked by the four unresolved upstream legal texts listed below.
+Publication remains blocked by the three unresolved upstream legal texts listed below.
 The manifest supplies authenticated original text for 77 exact package versions
 across eight files. It does not establish that the dependency tree is fully cleared.
 
@@ -32,10 +32,21 @@ copyright notice cannot replace the missing text.
 
 | Package and version | Official release source inspected |
 | --- | --- |
-| `@epic-web/invariant@1.0.0` | [Release README](https://raw.githubusercontent.com/epicweb-dev/invariant/547be2246d3c39f8ca44dd0502b1aa70bf4378af/README.md) |
 | `am-i-vibing@0.5.0` | [Release README](https://raw.githubusercontent.com/ascorbic/am-i-vibing/a858d9865e3f5a278504aad0a775a8b7a8d70bbc/packages/am-i-vibing/README.md) |
 | `piccolore@0.1.3` | [Release manifest](https://raw.githubusercontent.com/delucis/piccolore/5af9fa6834292e3cb3a2bc778e4057517c1505e0/package.json) |
 | `process-ancestry@0.1.0` | [Release README](https://raw.githubusercontent.com/ascorbic/process-ancestry/45004fd6155437eef40a632877a567db1b9addc5/packages/process-ancestry/README.md) |
 
 Obtain authentic upstream legal texts or an approved dependency change before
 publishing. Do not waive these missing texts because the other entries resolve.
+
+## Dependency remediation
+
+The website uses `cross-env@7.0.3`, which retains the same cross-platform
+environment-variable behavior without the missing-text
+`@epic-web/invariant@1.0.0` dependency. The Astro and Starlight versions remain
+unchanged. An older compatible framework candidate was rejected because its
+dependency audit reported high and critical vulnerabilities.
+
+Strict failures name each installed unresolved component, version, declared
+license and reason. Linux CI may install different optional components than
+Windows; use that exact inventory rather than assuming matching counts.

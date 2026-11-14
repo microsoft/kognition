@@ -88,6 +88,15 @@ def test_npm_fails_explicitly_for_incomplete_installed_components(tmp_path: Path
     assert result.stderr
 
 
+def test_strict_notice_failure_identifies_the_exact_unresolved_components(tmp_path: Path) -> None:
+    npm_fixture(tmp_path, legal=False)
+    result = invoke("npm", "--root", str(tmp_path), "--output", str(tmp_path / "output"), "--strict")
+    assert result.returncode == 1
+    assert "Unresolved: example@1.0.0" in result.stderr
+    assert "declared license: MIT" in result.stderr
+    assert "missing legal text" in result.stderr
+
+
 def test_absent_optional_package_is_explicit_not_a_claim_of_legal_clearance(tmp_path: Path) -> None:
     npm_fixture(tmp_path)
     lock_path = tmp_path / "package-lock.json"
