@@ -4,7 +4,7 @@
   acceptance complete. The recovery-enabled candidate is activated through the
   supported protocol; native and AutoGen governed retrieval pass. Authenticated
   real Azure Blob ingestion and cited native retrieval also pass.
-- Updated: 2026-10-28. Implementation approved on 2026-10-24.
+- Updated: 2026-11-14. Implementation approved on 2026-10-24.
 - Scope: Governed pgvector retrieval, local S3 and real Azure Blob acceptance.
 - Security: [design controls](security-review-architecture.md).
 
@@ -96,7 +96,35 @@ it is not a prerequisite for runtime knowledge search.
   dimension. Fail explicitly when incompatible; never mix vector spaces merely
   because their dimensions match. Switch existing claims only after validation.
 
+## Compatible Bundle Indexing Scope
+
+The approved governed bundle relies on automatic initial indexing for Azure
+Blob, S3 and Kognition-docs KBs. It excludes only their bundled named reindex
+demos: `azure-docs-reindex-now`, `s3-docs-reindex-now` and
+`kognition-docs-reindex-now` in the mapped default namespace. The provider
+lifecycle seals each namespace, KB UID, generation and backend configuration to
+one operation ID; these additional runs would duplicate the operation for the
+same immutable generation. Implementing manual provider reindex lifecycle
+support is outside this compatible-bundle scope.
+
+Unprofiled behavior and the inline native reindex demo remain unchanged.
+The [sample matrix](../../../sample-matrix.md#provider-reindex-demo-exclusions)
+documents the exact run/KB pairs and the empty rendering of the docs-only
+`indexrun.yaml`. Shared apply/delete helpers skip empty streams successfully;
+direct kubectl consumers must also skip them. Historical duplicate-run failures
+remain preserved; this source fix does not retry or remove them.
+
+Focused offline rendering and installer regressions pass. They do not establish
+current deployed full-bundle acceptance or change the platform/provider lifecycle.
+
 ## S3 Fixture
+
+The [explicit governed sample profile](../../../sample-matrix.md#governed-installer-profile)
+now renders namespace-local backend references, scoped Secret/TLS references,
+reviewed fixture digests and bounded quotas through the supported installer.
+Focused offline checks cover profile rejection, namespace integrity, source
+ordering, upload verification and legacy compatibility. This software coverage
+does not establish a successful deployed full-bundle run or retrieval acceptance.
 
 Use the qualified **SeaweedFS 4.49 source build** with upstream `weed mini` in a
 single Pod. Keep the Kognition source provider as `s3`; no SeaweedFS-specific core

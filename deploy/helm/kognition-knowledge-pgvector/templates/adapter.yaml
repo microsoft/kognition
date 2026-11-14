@@ -13,6 +13,9 @@
 {{- if and $adapter.networkPolicy.ciliumApiServerEgress (not $adapter.networkPolicy.enabled) }}
 {{- fail "adapter Cilium API egress requires enforced NetworkPolicy" }}
 {{- end }}
+{{- if and $adapter.networkPolicy.ciliumHostProbeIngress (not $adapter.networkPolicy.enabled) }}
+{{- fail "adapter Cilium probe ingress requires enforced NetworkPolicy" }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -53,6 +56,10 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get"]
+    {{- with $adapter.secretNames }}
+    resourceNames:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -139,12 +146,14 @@ spec:
               {{- required "provider client podSelector is required" $client.podSelector | toYaml | nindent 14 }}
       ports: [{protocol: TCP, port: 9443}]
     {{- end }}
+    {{- if not $adapter.networkPolicy.ciliumHostProbeIngress }}
     {{- range $cidr := required "adapter.networkPolicy.kubeletProbeIngressCIDRs is required" $adapter.networkPolicy.kubeletProbeIngressCIDRs }}
     {{- if not (or (hasSuffix "/32" $cidr) (hasSuffix "/128" $cidr)) }}
     {{- fail "adapter kubelet probe ingress must use exact reviewed node addresses" }}
     {{- end }}
     - from: [{ipBlock: {cidr: {{ $cidr | quote }}}}]
       ports: [{protocol: TCP, port: 9092}]
+    {{- end }}
     {{- end }}
   egress:
     - ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
@@ -173,6 +182,24 @@ spec:
     - toEntities: [host, kube-apiserver]
       toPorts:
         - ports: [{port: "443", protocol: TCP}, {port: "6443", protocol: TCP}]
+{{- end }}
+{{- if $adapter.networkPolicy.ciliumHostProbeIngress }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ $name }}-probes
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpointSelector:
+    matchLabels: {k8s:app.kubernetes.io/name: {{ $name }}}
+  enableDefaultDeny:
+    ingress: false
+    egress: false
+  ingress:
+    - fromEntities: [host, remote-node, health]
+      toPorts:
+        - ports: [{port: "9092", protocol: TCP}]
 {{- end }}
 {{- end }}
 {{- end }}

@@ -70,7 +70,7 @@ Assert-Equal $typed.apiVersion '2024-02-01' 'The API version must not change'
 Assert-Equal ($typed.enabled -is [bool]) $true 'Boolean settings must remain booleans'
 Assert-Equal ($typed.dimension -is [long] -or $typed.dimension -is [int]) $true 'Numeric dimensions must remain numbers'
 
-$temporary = Join-Path ([IO.Path]::GetTempPath()) "kognition-azure-settings-$([guid]::NewGuid().ToString('N')).env"
+$temporary = Join-Path $repoRoot ".azure-settings-test-$([guid]::NewGuid().ToString('N')).env"
 try {
     [IO.File]::WriteAllText($temporary, "MS_FOUNDRY_MODEL=gpt-6-luna`n")
     $rejected = $false

@@ -21,6 +21,10 @@ $ErrorActionPreference = "Stop"
 
 $sampleDir = $PSScriptRoot
 . (Join-Path $sampleDir '..\azure-settings.ps1')
+if (Get-AzureSampleProfile) {
+    Invoke-AzureSampleKnowledgeInstall -Source azure -SampleDirectory $sampleDir
+    return
+}
 $sourceNs  = if ($env:KOGNITION_PLATFORM_NAMESPACE) { $env:KOGNITION_PLATFORM_NAMESPACE } else { "kognition-system" }
 $targetNs  = "default"
 $serviceNs = "samples-azure-blob-services"

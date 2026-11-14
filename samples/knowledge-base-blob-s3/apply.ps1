@@ -20,6 +20,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$sampleDir = $PSScriptRoot
+. (Join-Path $sampleDir '..\azure-settings.ps1')
+if (Get-AzureSampleProfile) {
+    Invoke-AzureSampleKnowledgeInstall -Source s3 -SampleDirectory $sampleDir
+    return
+}
 if (-not $Kubeconfig -or -not (Test-Path -LiteralPath $Kubeconfig -PathType Leaf)) {
     throw 'Pass an explicit existing -Kubeconfig, or set KUBECONFIG to the approved target file.'
 }
