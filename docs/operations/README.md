@@ -47,6 +47,43 @@ state and execution results for that installation.
 | A KnowledgeBase indexed but retrieval fails | Verify the retrieval runtime and provider path independently from ingestion. |
 | A request timed out after possible provider execution | Preserve session and accounting evidence before another invocation. |
 
+## Agent rollout status
+
+For managed Kubernetes runtimes, the default Agent table reports the backing
+Deployment's rollout. The commands work in Bash and PowerShell; replace the
+kubeconfig and context with the reviewed target:
+
+```sh
+kubectl --kubeconfig ./reviewed/target.kubeconfig --context reviewed-context get agents -A
+kubectl --kubeconfig ./reviewed/target.kubeconfig --context reviewed-context get agents -A -o wide
+```
+
+| Column | Meaning |
+| --- | --- |
+| `READY` | Ready runtime Pods divided by the Agent's desired replicas, for example `0/2`, `1/2` or `2/2`. |
+| `UP-TO-DATE` | Replicas of the current runtime Deployment template. Reports zero until the Deployment controller observes a new generation. |
+| `AVAILABLE` | Deployment replicas satisfying availability, including any configured minimum-ready interval. |
+| `AGE` | Time since the Agent resource was created. |
+| `PHASE` (wide output) | Agent lifecycle state; includes controller-owned instance/session readiness and remains separate from the runtime rollout. |
+
+These observations live in `status.runtime`. A scaled-to-zero runtime reports
+`0/0`; observed zero counts remain explicit rather than blank. A missing runtime
+reports `0/<desired>` after reconciliation. Before the updated controller has
+observed an Agent, the new columns can be blank; that is unknown status, not a
+healthy runtime.
+
+The existing top-level `status.readyReplicas` counts ready controller-owned
+AgentInstances, and `status.replicas` retains the desired instance count for
+compatibility. `Running` means instances
+exist but have not all reported readiness; it does not mean a model turn is
+currently executing. Warm instances become `Ready` after runtime health checks,
+without requiring a paid invocation. Pod readiness and Agent phase do not prove
+model-provider access or successful execution.
+
+Install the updated Agent CRD and controller together through the
+[reviewed upgrade procedure](../features/knowledge-provider-execution/installation-recovery-contract.md).
+Changing printer columns alone cannot populate the new observations.
+
 ## Handle diagnostic data carefully
 
 Kognition trace export is opt-in. Operators choose its destination, which can be

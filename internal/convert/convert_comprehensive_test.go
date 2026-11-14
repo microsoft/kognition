@@ -135,6 +135,9 @@ func TestAgentStatusRoundTrip(t *testing.T) {
 			Replicas:      5,
 			ReadyReplicas: 3,
 			RevisionCount: 7,
+			Runtime: &api.AgentRuntimeStatus{
+				Ready: "3/5", DesiredReplicas: 5, Replicas: 4, ReadyReplicas: 3, UpdatedReplicas: 2, AvailableReplicas: 1,
+			},
 			Conditions: []api.Condition{
 				{Type: "Ready", Status: "True", LastTransitionTime: now, Message: "all good"},
 			},
@@ -146,6 +149,13 @@ func TestAgentStatusRoundTrip(t *testing.T) {
 
 	if out.Status.Replicas != 5 || out.Status.ReadyReplicas != 3 || out.Status.RevisionCount != 7 {
 		t.Errorf("status counts: %d/%d/%d", out.Status.Replicas, out.Status.ReadyReplicas, out.Status.RevisionCount)
+	}
+	if out.Status.Runtime == nil || *out.Status.Runtime != *in.Status.Runtime {
+		t.Fatalf("runtime rollout lost in conversion: %+v", out.Status.Runtime)
+	}
+	k8sObj.Status.Runtime.Ready = "0/5"
+	if in.Status.Runtime.Ready != "3/5" || out.Status.Runtime.Ready != "3/5" {
+		t.Fatal("runtime rollout aliases source or converted status")
 	}
 	if len(out.Status.Conditions) != 1 {
 		t.Fatalf("conditions: got %d", len(out.Status.Conditions))

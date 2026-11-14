@@ -108,11 +108,23 @@ type AgentMemorySpec struct {
 
 // AgentStatus describes the observed state of an Agent.
 type AgentStatus struct {
-	Phase         Phase       `json:"phase,omitempty" yaml:"phase,omitempty"`
-	Conditions    []Condition `json:"conditions,omitempty" yaml:"conditions,omitempty"`
-	Replicas      int32       `json:"replicas,omitempty" yaml:"replicas,omitempty"`
-	ReadyReplicas int32       `json:"readyReplicas,omitempty" yaml:"readyReplicas,omitempty"`
-	RevisionCount int64       `json:"revisionCount,omitempty" yaml:"revisionCount,omitempty"`
+	Phase         Phase               `json:"phase,omitempty" yaml:"phase,omitempty"`
+	Conditions    []Condition         `json:"conditions,omitempty" yaml:"conditions,omitempty"`
+	Replicas      int32               `json:"replicas,omitempty" yaml:"replicas,omitempty"`
+	ReadyReplicas int32               `json:"readyReplicas,omitempty" yaml:"readyReplicas,omitempty"`
+	RevisionCount int64               `json:"revisionCount,omitempty" yaml:"revisionCount,omitempty"`
+	Runtime       *AgentRuntimeStatus `json:"runtime,omitempty" yaml:"runtime,omitempty"`
+}
+
+// AgentRuntimeStatus observes the managed runtime workload, independently of
+// AgentInstance session phases or successful provider invocations.
+type AgentRuntimeStatus struct {
+	Ready             string `json:"ready" yaml:"ready"`
+	DesiredReplicas   int32  `json:"desiredReplicas" yaml:"desiredReplicas"`
+	Replicas          int32  `json:"replicas" yaml:"replicas"`
+	ReadyReplicas     int32  `json:"readyReplicas" yaml:"readyReplicas"`
+	UpdatedReplicas   int32  `json:"updatedReplicas" yaml:"updatedReplicas"`
+	AvailableReplicas int32  `json:"availableReplicas" yaml:"availableReplicas"`
 }
 
 // AgentInstance represents a running instance of an Agent.
