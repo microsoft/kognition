@@ -70,11 +70,11 @@ if ($LASTEXITCODE -ne 0) { throw "azurite did not become ready" }
 
 # --- 2. Upload docs into Azurite via a temporary port-forward ----------------
 Write-Host "== Uploading sample docs into Azurite ($azAccount/product-docs)"
-$pf = Start-Process kubectl -ArgumentList @('port-forward', '-n', $serviceNs, 'svc/azurite', "${localPort}:10000") -PassThru -WindowStyle Hidden
+$processOptions = Get-AzureSampleProcessOptions
+$pf = Start-Process kubectl -ArgumentList @('port-forward', '-n', $serviceNs, 'svc/azurite', "${localPort}:10000") -PassThru @processOptions
 try {
     Start-Sleep -Seconds 3
-    $py = if ($env:VIRTUAL_ENV) { Join-Path $env:VIRTUAL_ENV 'Scripts/python.exe' } else { 'python' }
-    if (-not (Test-Path $py)) { $py = 'python' }
+    $py = Resolve-AzureSamplePython
     $env:KOGNITION_BLOB_CONNECTION_STRING = $localConn
     & $py (Join-Path $sampleDir 'upload_docs.py')
     $uploadExit = $LASTEXITCODE

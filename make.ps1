@@ -171,8 +171,7 @@ function Target-Tidy { Invoke-Native 'go' @('mod', 'tidy') }
 
 function Invoke-BoundedTest {
     param([string[]]$Arguments)
-    $python = Join-Path $RepoRoot '.venv/Scripts/python.exe'
-    if (-not (Test-Path $python)) { $python = Resolve-Tool 'python' }
+    $python = Resolve-AzureSamplePython -RepositoryRoot $RepoRoot
     Invoke-Native $python (@((Join-Path $RepoRoot 'tools/run_bounded.py'), '--timeout', '1800', '--', 'go') + $Arguments)
 }
 
@@ -908,7 +907,8 @@ function Start-ManagedJaegerPortForward {
     $stdout = Join-Path $logDir 'jaeger-port-forward.out.log'
     $stderr = Join-Path $logDir 'jaeger-port-forward.err.log'
     $args = @('port-forward', '-n', $ObservabilityNamespace, 'svc/jaeger-collector', '16686:16686')
-    $proc = Start-Process -FilePath $kubectl -ArgumentList $args -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $processOptions = Get-AzureSampleProcessOptions
+    $proc = Start-Process -FilePath $kubectl -ArgumentList $args -PassThru @processOptions -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     Set-Content -Path $pidFile -Value $proc.Id -Encoding ascii
     Write-Host "==> Started Jaeger port-forward (PID $($proc.Id)). Logs: $stdout, $stderr"
     Write-Host '==> Jaeger UI: http://localhost:16686'
