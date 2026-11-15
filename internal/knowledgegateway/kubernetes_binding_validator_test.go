@@ -119,21 +119,21 @@ func TestKubernetesCapabilityBindingValidatorRejectsRevokedKnowledgeAccess(t *te
 	}
 	newObjects := func() (*k8s.Agent, *k8s.AgentIdentity, *k8s.AgentInstance, *k8s.KnowledgeBaseClaim) {
 		return &k8s.Agent{
-				ObjectMeta: metav1.ObjectMeta{Name: claims.AgentName, Namespace: claims.Namespace, UID: types.UID(claims.AgentUID)},
-				Spec:       k8s.AgentSpec{KnowledgeBaseClaims: []k8s.KnowledgeBaseClaimRef{{Name: "docs-access"}}},
-			}, &k8s.AgentIdentity{
-				ObjectMeta: metav1.ObjectMeta{Name: claims.AgentIdentityName, Namespace: claims.Namespace, UID: types.UID(claims.AgentIdentityUID)},
-				Spec:       k8s.AgentIdentitySpec{AgentRef: k8s.LocalObjectReference{Name: claims.AgentName}},
-				Status:     k8s.AgentIdentityStatus{Phase: string(api.PhaseReady)},
-			}, &k8s.AgentInstance{
-				ObjectMeta: metav1.ObjectMeta{Name: claims.InstanceName, Namespace: claims.Namespace, UID: types.UID(claims.InstanceUID)},
-				Spec:       k8s.AgentInstanceSpec{AgentRef: k8s.LocalObjectReference{Name: claims.AgentName}},
-				Status:     k8s.AgentInstanceStatus{Phase: string(api.PhaseRunning), SessionID: claims.SessionID},
-			}, &k8s.KnowledgeBaseClaim{
-				ObjectMeta: metav1.ObjectMeta{Name: "docs-access", Namespace: claims.Namespace, Generation: 2},
-				Spec:       k8s.KnowledgeBaseClaimSpec{KnowledgeBaseName: "docs"},
-				Status:     k8s.KnowledgeBaseClaimStatus{Phase: string(api.PhaseBound), BoundKnowledgeBase: "docs", ObservedGeneration: 2},
-			}
+			ObjectMeta: metav1.ObjectMeta{Name: claims.AgentName, Namespace: claims.Namespace, UID: types.UID(claims.AgentUID)},
+			Spec:       k8s.AgentSpec{KnowledgeBaseClaims: []k8s.KnowledgeBaseClaimRef{{Name: "docs-access"}}},
+		}, &k8s.AgentIdentity{
+			ObjectMeta: metav1.ObjectMeta{Name: claims.AgentIdentityName, Namespace: claims.Namespace, UID: types.UID(claims.AgentIdentityUID)},
+			Spec:       k8s.AgentIdentitySpec{AgentRef: k8s.LocalObjectReference{Name: claims.AgentName}},
+			Status:     k8s.AgentIdentityStatus{Phase: string(api.PhaseReady)},
+		}, &k8s.AgentInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: claims.InstanceName, Namespace: claims.Namespace, UID: types.UID(claims.InstanceUID)},
+			Spec:       k8s.AgentInstanceSpec{AgentRef: k8s.LocalObjectReference{Name: claims.AgentName}},
+			Status:     k8s.AgentInstanceStatus{Phase: string(api.PhaseRunning), SessionID: claims.SessionID},
+		}, &k8s.KnowledgeBaseClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "docs-access", Namespace: claims.Namespace, Generation: 2},
+			Spec:       k8s.KnowledgeBaseClaimSpec{KnowledgeBaseName: "docs"},
+			Status:     k8s.KnowledgeBaseClaimStatus{Phase: string(api.PhaseBound), BoundKnowledgeBase: "docs", ObservedGeneration: 2},
+		}
 	}
 
 	tests := []struct {
