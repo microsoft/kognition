@@ -16,25 +16,26 @@ const checks = {
   links: 'Publication links and assets',
   preview_links: 'Validation-only links',
   notices: 'Distribution notices',
+  evidence: 'Retain notice verification evidence',
   upload: 'Upload Pages artifact',
 };
 const labels = { success: 'Passed', failure: 'Failed', skipped: 'Skipped', cancelled: 'Cancelled', '': 'Not run' };
 const escape = (text) => String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
   .replaceAll('>', '&gt;').replaceAll('|', '&#124;').replaceAll('`', '&#96;').replace(/\r?\n/g, ' ');
 
-function readNoticeInventory(filename) {
+function readNoticeInventory(filename, label = 'dist/third-party/inventory.json') {
   let text;
   try {
     text = readFileSync(filename, 'utf8');
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
-    return { inventoryError: 'dist/third-party/inventory.json was not produced.' };
+    return { inventoryError: `${label} was not produced.` };
   }
   try {
     return { inventory: JSON.parse(text) };
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
-    return { inventoryError: 'dist/third-party/inventory.json is not valid JSON.' };
+    return { inventoryError: `${label} is not valid JSON.` };
   }
 }
 
@@ -54,13 +55,15 @@ function unresolvedComponents(inventory) {
   return { unresolved };
 }
 
-export function documentationSummary({ outcomes, publishEnabled, ref, eventName, inventory, inventoryError }) {
+export function documentationSummary({
+  outcomes, publishEnabled, ref, eventName, inventory, inventoryError, buildInventory, buildInventoryError,
+}) {
   if (typeof publishEnabled !== 'boolean' || typeof ref !== 'string' || typeof eventName !== 'string' ||
       !outcomes || Object.keys(checks).some((id) => !Object.hasOwn(labels, outcomes[id]))) {
     throw new Error('Documentation reporting requires explicit publication context and valid step outcomes.');
   }
   const eligible = publishEnabled && ref === 'refs/heads/main' && eventName !== 'pull_request';
-  const required = ['checkout', 'node', 'install', 'tests', 'types', 'site', 'notices',
+  const required = ['checkout', 'node', 'install', 'tests', 'types', 'site', 'notices', 'evidence',
     ...(eligible ? ['media', 'links'] : ['preview_links'])];
   const failed = Object.keys(checks).filter((id) => outcomes[id] === 'failure');
   const cancelled = Object.keys(checks).some((id) => outcomes[id] === 'cancelled');
@@ -84,6 +87,26 @@ export function documentationSummary({ outcomes, publishEnabled, ref, eventName,
     ...Object.entries(checks).map(([id, title]) => `| ${title} | ${labels[outcomes[id]]} |`),
     '',
   ];
+  if (noticeReport && !noticeReport.inventoryError && inventory.publicationEvidence) {
+    const evidence = inventory.publicationEvidence;
+    if (!Number.isSafeInteger(evidence.filesVerified) || evidence.filesVerified < 1 ||
+        !Array.isArray(evidence.sourcePackagePaths) || !evidence.sourcePackagePaths.length) {
+      throw new Error('Published notice inventory lacks verified file and source-package evidence.');
+    }
+    lines.push('### Notice verification scope', '',
+      `The strict publication gate covers **${evidence.filesVerified} emitted files** and ` +
+      `**${evidence.sourcePackagePaths.length} published npm source packages**.`,
+      'File hashes, lockfile identity and emitted package provenance were verified before collecting notices.', '');
+    const buildReport = buildInventoryError ? { inventoryError: buildInventoryError } : unresolvedComponents(buildInventory);
+    if (buildReport.inventoryError) {
+      lines.push(`Build-tool diagnostic inventory unavailable: ${buildReport.inventoryError}`, '');
+    } else {
+      lines.push(`The broader installed build-tool inventory has **${buildReport.unresolved.length} unresolved components**. ` +
+        'It is retained separately in `.astro/build-tool-notices/inventory.json` and is not included in the Pages artifact.',
+      'Download the **documentation-notice-evidence** Actions artifact for both inventories and the published-file evidence.',
+      'This does not claim legal clearance for the build environment.', '');
+    }
+  }
   if (failed.length) lines.push(`**Failed checks:** ${failed.map((id) => checks[id]).join(', ')}.`, '');
   if (noticeReport?.inventoryError) {
     lines.push(`Notice inventory unavailable: ${noticeReport.inventoryError}`,
@@ -99,7 +122,9 @@ export function documentationSummary({ outcomes, publishEnabled, ref, eventName,
   } else if (!noticesRan) {
     lines.push('Notice inventory was not generated in this run because the notice step did not complete.', '');
   } else {
-    lines.push('The notice inventory contains no unresolved installed components. This is not legal clearance.', '');
+    lines.push(inventory.publicationEvidence
+      ? 'The published npm component inventory contains no unresolved notices. This is not legal clearance.'
+      : 'The notice inventory contains no unresolved installed components. This is not legal clearance.', '');
   }
   lines.push('### Publication', '');
   if (result !== 'documentation validation passed') {
@@ -127,9 +152,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const outcomes = JSON.parse(process.env.DOCS_STEP_OUTCOMES);
   const notice = ['success', 'failure'].includes(outcomes.notices)
     ? readNoticeInventory(path.resolve('dist', 'third-party', 'inventory.json')) : {};
+  const buildNotice = notice.inventory?.publicationEvidence
+    ? readNoticeInventory(path.resolve('.astro', 'build-tool-notices', 'inventory.json'),
+      '.astro/build-tool-notices/inventory.json') : {};
   const markdown = documentationSummary({
     outcomes, publishEnabled: process.env.DOCS_PUBLISH_ENABLED === 'true',
     ref: process.env.GITHUB_REF, eventName: process.env.GITHUB_EVENT_NAME, ...notice,
+    buildInventory: buildNotice.inventory, buildInventoryError: buildNotice.inventoryError,
   });
   appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n${markdown}`);
   console.log(markdown);

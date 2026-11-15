@@ -6,6 +6,7 @@ import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import repositoryLinks from './src/repository-links';
 import { repositoryURL, site } from './site.mjs';
+import publishedDependencies from './scripts/published-dependencies.mjs';
 
 export default defineConfig({
   site: site.origin,
@@ -55,5 +56,6 @@ export default defineConfig({
         },
       ],
     }),
+    publishedDependencies(),
   ],
 });

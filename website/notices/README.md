@@ -1,8 +1,10 @@
 # Supplemental dependency licenses
 
-Publication remains blocked by five unresolved components in Linux CI.
-Windows has the three JavaScript-package gaps listed below; Linux additionally
-installs two libvips shared-library packages without their native legal texts.
+The static Pages publication gate verifies the npm code actually shipped in the
+site artifact, using generated dependency provenance and emitted-file hashes.
+The broader installed build-tool inventory still has five unresolved components
+in Linux CI. Windows has the three JavaScript-package gaps listed below; Linux
+additionally installs two libvips shared-library packages without their native legal texts.
 The manifest supplies authenticated original text for 77 exact package versions
 across eight files. It does not establish that the dependency tree is fully cleared.
 
@@ -24,7 +26,7 @@ across eight files. It does not establish that the dependency tree is fully clea
   version `1.0.0`; its `index.js` Git blob is identical to the initial published
   version's source. No later-version license was substituted.
 
-## Unresolved publication blockers
+## Unresolved build-tool legal texts
 
 These release sources declare an SPDX identifier without providing the complete
 original legal text. The release trees, current official repository trees, and
@@ -50,8 +52,24 @@ Its [third-party notice table](https://raw.githubusercontent.com/lovell/sharp-li
 identifies shared-library licenses, but does not contain their complete original
 legal texts. Neither file alone substitutes for those native-library notices.
 
-Obtain authentic upstream legal texts or an approved dependency change before
-publishing. Do not waive these missing texts because the other entries resolve.
+These components are not attributed to the static site's emitted code. They
+remain unresolved in `.astro/build-tool-notices/inventory.json`, outside the
+Pages artifact. Obtain authentic upstream legal texts or an approved dependency
+change before distributing these build tools or their native libraries.
+If they enter the client graph, strict publication verification blocks them.
+No license identifier or reconstructed text substitutes for their original notices.
+
+## Strict static-artifact verification
+
+The Astro build records every emitted file and checksum, the exact source
+package paths, and hashes of the npm manifest and lockfile. Provenance includes
+client modules, renderer CSS and inline providers, injected Vite/Rolldown helpers,
+Expressive Code runtime assets and Pagefind-generated JavaScript and WebAssembly.
+
+The strict collector rejects stale or incomplete evidence, unknown executable
+output, copied scripts without bundler provenance, native build binaries,
+changed packages and missing legal texts for any published npm component.
+The publication inventory remains scoped evidence, not complete legal clearance.
 
 ## Dependency remediation
 

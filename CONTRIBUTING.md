@@ -86,8 +86,9 @@ a private repository does not automatically produce a private Pages site.
 
 The default site is `https://microsoft.github.io/kognition/`. Set `DOCS_SITE_URL`
 to an HTTPS origin and `DOCS_BASE_PATH` to an absolute path for another approved
-target. The workflow retains dependency legal texts with `npm run notices`
-before uploading a deployment artifact. Missing attribution blocks publication.
+target. The workflow retains published dependency legal texts with `npm run notices`
+before uploading a deployment artifact. Missing attribution for a published
+dependency blocks publication.
 
 The application job is named **Build application binaries**. The separate
 Documentation workflow uses **Validate documentation and notices** and
@@ -109,6 +110,37 @@ collection uses these texts only when the installed package has no packaged
 legal text and its declared license matches. It rejects altered files, moving
 source URLs and unknown versions; it does not infer legal clearance from an
 SPDX identifier. Review and update this inventory when the lockfile changes.
+
+#### Static publication notice scope
+
+Pages distributes the static `website/dist` artifact, not `node_modules`, the
+Node.js build environment or native image-processing libraries.
+`npm run notices` performs two distinct operations:
+
+- Retain the complete installed npm build-tool notice inventory in
+  `.astro/build-tool-notices`. Missing upstream texts remain explicitly
+  unresolved there. This diagnostic inventory is not uploaded to Pages and
+  does not claim legal clearance for the build environment.
+- Strictly verify notices for npm source packages attributed to emitted site
+  files. A build integration generates `.astro/published-files.json` from the
+  client module graph, renderer styles, injected bundler helpers, Expressive Code
+  assets and Pagefind's generated runtime. It binds the evidence to the exact
+  package manifest, lockfile, emitted file hashes and package paths.
+
+The strict gate fails for unlisted or changed output, missing source packages,
+copied scripts without provenance, unexpected generated code, native binaries,
+changed lockfiles, or missing legal texts for a published dependency.
+Pinned tutorial media is checked against its approved Release hashes.
+If a previously build-only dependency enters the client graph, it becomes
+subject to the publication gate automatically.
+
+Use the full inventory when distributing a build image, server installation or
+dependency tree; the static-site scope does not authorize those distributions.
+An unresolved build-tool license is still unresolved, even when that component
+is absent from the Pages artifact.
+The workflow retains both inventories, original notices and the published-file
+evidence in a private Actions artifact for fourteen days. Only those explicitly
+named files are uploaded; other hidden build state is excluded.
 
 #### Updating the video tutorial
 

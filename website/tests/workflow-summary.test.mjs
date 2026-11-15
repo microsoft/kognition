@@ -16,7 +16,7 @@ const ciFile = new URL('../../.github/workflows/ci.yml', import.meta.url);
 const complete = {
   checkout: 'success', node: 'success', install: 'success', tests: 'success', types: 'success',
   media: 'skipped', site: 'success', links: 'skipped', preview_links: 'success',
-  notices: 'success', upload: 'skipped',
+  notices: 'success', evidence: 'success', upload: 'skipped',
 };
 const unresolved = [
   { component: '@img/sharp-libvips-linux-x64', version: '1.3.4', license: 'LGPL-3.0-or-later' },
@@ -26,7 +26,7 @@ const unresolved = [
   { component: 'process-ancestry', version: '0.1.0', license: 'MIT' },
 ];
 
-function summary(t, outcomes, inventory, context = {}) {
+function summary(t, outcomes, inventory, context = {}, buildInventory) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'kognition-docs-summary-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const output = path.join(root, 'summary.md');
@@ -34,6 +34,10 @@ function summary(t, outcomes, inventory, context = {}) {
   if (inventory !== undefined) {
     mkdirSync(path.join(root, 'dist', 'third-party'), { recursive: true });
     writeFileSync(path.join(root, 'dist', 'third-party', 'inventory.json'), JSON.stringify(inventory));
+  }
+  if (buildInventory !== undefined) {
+    mkdirSync(path.join(root, '.astro', 'build-tool-notices'), { recursive: true });
+    writeFileSync(path.join(root, '.astro', 'build-tool-notices', 'inventory.json'), JSON.stringify(buildInventory));
   }
   const result = spawnSync(process.execPath, [fileURLToPath(script)], { cwd: root, encoding: 'utf8', env: {
     ...process.env, GITHUB_STEP_SUMMARY: output, DOCS_STEP_OUTCOMES: JSON.stringify(outcomes),
@@ -149,4 +153,17 @@ test('notice metadata cannot inject HTML or break the summary table', (t) => {
   });
   assert.match(content, /&lt;img src=x&gt;&#124;&#96;fake&#96; name/);
   assert.doesNotMatch(content, /<img src=x>/);
+});
+
+test('a passed artifact gate distinguishes published packages from the broader unresolved build-tool inventory', (t) => {
+  const content = summary(t, complete, {
+    unresolved: 0, components: [],
+    publicationEvidence: { filesVerified: 63, sourcePackagePaths: ['node_modules/astro', 'node_modules/pagefind'] },
+  }, {}, { unresolved: 5, components: unresolved.map((entry) => ({ ...entry, installed: true, texts: [] })) });
+  assert.match(content, /\*\*Result: documentation validation passed\.\*\*/);
+  assert.match(content, /63 emitted files/);
+  assert.match(content, /2 published npm source packages/);
+  assert.match(content, /build-tool inventory has \*\*5 unresolved components/);
+  assert.match(content, /not included in the Pages artifact/);
+  assert.match(content, /does not claim legal clearance for the build environment/);
 });

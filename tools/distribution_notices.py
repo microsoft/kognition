@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import hashlib
 import importlib.metadata
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import sys
 import sysconfig
@@ -56,7 +56,8 @@ def digest(content: bytes) -> str:
 
 
 def write_notices(
-    output: Path, scope: str, components: list[Component], manifests: list[Path]
+    output: Path, scope: str, components: list[Component], manifests: list[Path],
+    publication_evidence: dict | None = None,
 ) -> int:
     components.sort(key=lambda component: (component.name.lower(), component.version))
     lines = [
@@ -108,6 +109,8 @@ def write_notices(
         "unresolved": unresolved,
         "components": records,
     }
+    if publication_evidence is not None:
+        inventory["publicationEvidence"] = publication_evidence
     output.mkdir(parents=True, exist_ok=True)
     (output / "NOTICE").write_bytes(notice)
     (output / "inventory.json").write_text(
@@ -161,7 +164,82 @@ def supplemental_npm_texts(
     return result
 
 
-def npm_components(root: Path, supplemental_notices: Path | None = None) -> list[Component]:
+def verify_static_distribution(root: Path, directory: Path, manifest: Path) -> tuple[set[str], dict]:
+    evidence = json.loads(manifest.read_text(encoding="utf-8"))
+    if evidence.get("schemaVersion") != 1 or evidence.get("kind") != "kognition-static-pages-npm":
+        raise ValueError("Invalid static publication evidence")
+    for field, filename in (("lockfileSHA256", "package-lock.json"), ("packageJsonSHA256", "package.json")):
+        if evidence.get(field) != digest((root / filename).read_bytes()):
+            raise ValueError(f"Static publication evidence does not match {filename}")
+    packages = evidence.get("packages")
+    files = evidence.get("files")
+    lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
+    if not isinstance(packages, list) or not packages or not all(isinstance(item, str) for item in packages):
+        raise ValueError("Static publication requires explicit source packages")
+    selected = set(packages)
+    if len(selected) != len(packages) or not selected.issubset(lock["packages"]) or any(
+        not item.startswith("node_modules/") or "\\" in item or ".." in PurePosixPath(item).parts
+        for item in selected
+    ):
+        raise ValueError("Static publication references unknown or duplicate source packages")
+    if not isinstance(files, list) or not files:
+        raise ValueError("Static publication requires a complete file inventory")
+    directory = directory.resolve(strict=True)
+    if directory == root.resolve() or not directory.is_relative_to(root.resolve()):
+        raise ValueError("Static publication directory must be inside the npm project")
+    recorded = set()
+    referenced = set()
+    generated_notices = {"third-party/NOTICE", "third-party/inventory.json"}
+    origins = {"vite-client", "rendered-page", "rendered-style", "expressive-code",
+               "pagefind", "first-party-static", "verified-tutorial"}
+    for entry in files:
+        relative = entry.get("path") if isinstance(entry, dict) else None
+        if not isinstance(relative, str) or "\\" in relative or ":" in relative:
+            raise ValueError("Static publication contains an invalid relative path")
+        pure = PurePosixPath(relative)
+        if pure.is_absolute() or pure.as_posix() != relative or ".." in pure.parts or relative in recorded:
+            raise ValueError(f"Static publication path is unsafe or duplicated: {relative}")
+        if relative in generated_notices:
+            raise ValueError("Generated notice files cannot be source publication evidence")
+        filename = directory / relative
+        if filename.is_symlink() or not filename.is_file() or not filename.resolve().is_relative_to(directory):
+            raise ValueError(f"Static publication file is missing or unsafe: {relative}")
+        source_packages = entry.get("packages")
+        if not isinstance(source_packages, list) or not all(isinstance(item, str) for item in source_packages):
+            raise ValueError(f"Static publication lacks package provenance: {relative}")
+        if not set(source_packages).issubset(selected) or entry.get("origin") not in origins:
+            raise ValueError(f"Static publication package provenance is inconsistent: {relative}")
+        hash_value = hashlib.sha256()
+        with filename.open("rb") as stream:
+            signature = stream.read(8)
+            if signature.startswith((b"MZ", b"\x7fELF", b"!<arch>\n", b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf")):
+                raise ValueError(f"Native build binaries cannot be published with static Pages: {relative}")
+            hash_value.update(signature)
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                hash_value.update(block)
+        if hash_value.hexdigest() != entry.get("sha256"):
+            raise ValueError(f"Static publication file checksum mismatch: {relative}")
+        recorded.add(relative)
+        referenced.update(source_packages)
+    actual = set()
+    for filename in directory.rglob("*"):
+        if filename.is_symlink():
+            raise ValueError(f"Static publication cannot contain symlinks: {filename.name}")
+        if filename.is_file():
+            relative = filename.relative_to(directory).as_posix()
+            if relative not in generated_notices:
+                actual.add(relative)
+    if actual != recorded:
+        raise ValueError("Static publication file inventory is incomplete or stale")
+    if referenced != selected:
+        raise ValueError("Static publication source packages do not match emitted file provenance")
+    return selected, {"manifestSHA256": digest(manifest.read_bytes()), "filesVerified": len(recorded),
+                      "sourcePackagePaths": sorted(selected)}
+
+
+def npm_components(
+    root: Path, supplemental_notices: Path | None = None, selected_paths: set[str] | None = None,
+) -> list[Component]:
     lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
     if lock.get("lockfileVersion") != 3 or not isinstance(lock.get("packages"), dict):
         raise ValueError("A version 3 npm lockfile with package records is required")
@@ -170,6 +248,8 @@ def npm_components(root: Path, supplemental_notices: Path | None = None) -> list
     for relative, metadata in sorted(lock["packages"].items()):
         if not relative:
             continue
+        if selected_paths is not None and relative not in selected_paths:
+            continue
         directory = (root / relative).resolve()
         if not directory.is_relative_to(root.resolve()) or "node_modules" not in Path(relative).parts:
             raise ValueError(f"Package path is outside the dependency tree: {relative}")
@@ -177,7 +257,7 @@ def npm_components(root: Path, supplemental_notices: Path | None = None) -> list
         license_name = metadata.get("license") or "UNRESOLVED"
         manifest = directory / "package.json"
         if not manifest.is_file():
-            if not metadata.get("optional"):
+            if selected_paths is not None or not metadata.get("optional"):
                 raise ValueError(f"Required npm package is not installed: {relative}; run npm ci")
             components.append(Component(relative, version, license_name, [], installed=False))
             continue
@@ -301,6 +381,8 @@ def main() -> None:
     npm = commands.add_parser("npm")
     npm.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     npm.add_argument("--supplemental-notices", type=Path)
+    npm.add_argument("--distribution-root", type=Path)
+    npm.add_argument("--distribution-manifest", type=Path)
     python = commands.add_parser("python")
     python.add_argument("--site-packages", type=Path)
     python.add_argument("--include-interpreter", action="store_true")
@@ -316,6 +398,7 @@ def main() -> None:
     source = commands.add_parser("source")
     source.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     arguments = parser.parse_args()
+    publication_evidence = None
     if arguments.command == "charts":
         prepare_charts(arguments.root, arguments.check)
         return
@@ -326,9 +409,19 @@ def main() -> None:
         check_source_binaries(arguments.root)
         return
     if arguments.command == "npm":
-        components = npm_components(arguments.root, arguments.supplemental_notices)
+        if bool(arguments.distribution_root) != bool(arguments.distribution_manifest):
+            raise ValueError("Static publication requires both --distribution-root and --distribution-manifest")
+        selected = None
+        if arguments.distribution_root:
+            selected, publication_evidence = verify_static_distribution(
+                arguments.root, arguments.distribution_root, arguments.distribution_manifest,
+            )
+        components = npm_components(arguments.root, arguments.supplemental_notices, selected)
         manifests = [arguments.root / "package.json", arguments.root / "package-lock.json"]
         scope = "npm lockfile dependency graph; absent optional packages explicitly identified"
+        if publication_evidence:
+            scope = "Published static-site npm dependencies; emitted files and package provenance verified"
+            manifests.append(arguments.distribution_manifest)
         if arguments.supplemental_notices:
             manifests.append(arguments.supplemental_notices)
             scope += "; missing packaged legal texts use checksum-pinned immutable upstream sources"
@@ -348,7 +441,7 @@ def main() -> None:
                 "Python interpreter", sys.version.split()[0], "PSF-2.0 and bundled notices",
                 [LegalText("LICENSE.txt", legal.read_bytes())],
             ))
-    unresolved = write_notices(arguments.output, scope, components, manifests)
+    unresolved = write_notices(arguments.output, scope, components, manifests, publication_evidence)
     if arguments.strict == "true" and unresolved:
         raise SystemExit(1)
 

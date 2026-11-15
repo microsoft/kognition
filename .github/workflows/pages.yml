@@ -91,6 +91,21 @@ jobs:
       - name: Verify distribution notices
         id: notices
         run: npm run notices
+      - name: Upload notice verification evidence
+        id: evidence
+        if: always() && steps.notices.outcome != 'skipped' && steps.notices.outcome != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: documentation-notice-evidence-${{ github.run_id }}
+          retention-days: 14
+          include-hidden-files: true
+          if-no-files-found: error
+          path: |
+            website/.astro/published-files.json
+            website/.astro/build-tool-notices/inventory.json
+            website/.astro/build-tool-notices/NOTICE
+            website/dist/third-party/inventory.json
+            website/dist/third-party/NOTICE
       - name: Upload Pages artifact
         id: upload
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DOCS_PAGES_ENABLED == 'true'
@@ -114,6 +129,7 @@ jobs:
               "links": "${{ steps.links.outcome }}",
               "preview_links": "${{ steps.preview_links.outcome }}",
               "notices": "${{ steps.notices.outcome }}",
+              "evidence": "${{ steps.evidence.outcome }}",
               "upload": "${{ steps.upload.outcome }}"
             }
         run: node scripts/report-documentation.mjs
