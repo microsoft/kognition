@@ -35,10 +35,14 @@ func TestSpanAttributeValueLengthLimitCountsReplacementRunes(t *testing.T) {
 			span.End()
 
 			ended := recorder.Ended()
-			if len(ended) != 1 || len(ended[0].Attributes()) != 1 {
-				t.Fatalf("unexpected recorded spans: %d", len(ended))
+			if len(ended) != 1 {
+				t.Fatalf("recorded %d spans, want 1", len(ended))
 			}
-			stored := ended[0].Attributes()[0].Value.AsString()
+			attributes := ended[0].Attributes()
+			if len(attributes) != 1 {
+				t.Fatalf("recorded %d attributes, want 1", len(attributes))
+			}
+			stored := attributes[0].Value.AsString()
 			if got := utf8.RuneCountInString(stored); got > limit {
 				t.Fatalf("stored %d characters, want at most %d", got, limit)
 			}
