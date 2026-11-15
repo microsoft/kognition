@@ -1,6 +1,43 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+function Resolve-AzureSamplePython {
+    param(
+        [string]$RepositoryRoot,
+        [PlatformID]$Platform = [Environment]::OSVersion.Platform
+    )
+
+    $windowsHost = $Platform -eq [PlatformID]::Win32NT
+    $relative = if ($windowsHost) { 'Scripts\python.exe' } else { 'bin\python' }
+    if ($env:VIRTUAL_ENV) {
+        $python = Join-Path $env:VIRTUAL_ENV $relative
+        if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+            throw "VIRTUAL_ENV must contain $relative. Reactivate a Python environment created for this host."
+        }
+        return $python
+    }
+    if ($RepositoryRoot) {
+        $python = Join-Path (Join-Path $RepositoryRoot '.venv') $relative
+        if (Test-Path -LiteralPath $python -PathType Leaf) { return $python }
+    }
+    $names = if ($windowsHost) { @('python', 'python3') } else { @('python3', 'python') }
+    foreach ($name in $names) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($command) {
+            if ($command.Source) { return $command.Source }
+            return $command.Name
+        }
+    }
+    throw 'Python is required. Activate a host-native virtual environment or install python3/python on PATH.'
+}
+
+function Get-AzureSampleProcessOptions {
+    param([PlatformID]$Platform = [Environment]::OSVersion.Platform)
+
+    if ($Platform -eq [PlatformID]::Win32NT) { return @{ WindowStyle = 'Hidden' } }
+    return @{}
+}
+
 function Get-AzureSampleProfile {
     param([string]$Path = $env:KOGNITION_SAMPLE_PROFILE_PATH)
 
@@ -256,8 +293,9 @@ function Invoke-AzureSampleFixtureUpload {
     }
     $pf = $null
     try {
+        $processOptions = Get-AzureSampleProcessOptions
         $pf = Start-Process kubectl -ArgumentList @('port-forward', '--address=127.0.0.1', '-n', $Namespace, "svc/$service", "${port}:$remotePort") `
-            -PassThru -WindowStyle Hidden -RedirectStandardOutput "$logBase.out" -RedirectStandardError "$logBase.err"
+            -PassThru @processOptions -RedirectStandardOutput "$logBase.out" -RedirectStandardError "$logBase.err"
         $deadline = [DateTime]::UtcNow.AddSeconds(30)
         do {
             if ($pf.HasExited) { throw 'The owned sample upload port-forward exited before binding.' }
@@ -302,7 +340,7 @@ function Invoke-AzureSampleKnowledgeInstall {
         $configMap | & kubectl apply --server-side -f -
         if ($LASTEXITCODE -ne 0) { throw 'Docs fixture ConfigMap setup failed.' }
     } else {
-        $python = if ($env:VIRTUAL_ENV) { Join-Path $env:VIRTUAL_ENV 'Scripts\python.exe' } else { 'python' }
+        $python = Resolve-AzureSamplePython
         $dependency = if ($Source -eq 'azure') { 'azure.storage.blob' } else { 'boto3' }
         & $python -c "import $dependency"
         if ($LASTEXITCODE -ne 0) { throw "Install the $dependency upload SDK in the selected Python environment before sample installation." }

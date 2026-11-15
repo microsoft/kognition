@@ -239,6 +239,34 @@ kubectl rollout restart deployment/kognition-tool-gateway -n kognition-system
 kubectl rollout status deployment/kognition-tool-gateway -n kognition-system --timeout=180s
 ```
 
+**Bash (Linux/macOS), with Python 3 available:**
+
+Run in a protected shell with tracing disabled. This builds the Secret patch
+in memory and pipes it to kubectl rather than printing key material:
+
+```bash
+set -o pipefail
+kubectl get secret kognition-tool-gateway -n kognition-system -o json |
+  python3 -c '
+import base64, json, secrets, string, sys
+data = json.load(sys.stdin)["data"]
+encode = lambda value: base64.b64encode(value.encode()).decode()
+key = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(48))
+print(json.dumps({"data": {
+    "capability-hmac-key": encode(key),
+    "capability-hmac-key-id": encode("2026-08-19-rotation-1"),
+    "capability-hmac-previous-key": data["capability-hmac-key"],
+    "capability-hmac-previous-key-id": data["capability-hmac-key-id"]
+}}))
+' | kubectl patch secret kognition-tool-gateway -n kognition-system \
+      --type merge --patch-file /dev/stdin || exit 1
+kubectl rollout restart deployment/kognition-tool-gateway -n kognition-system
+kubectl rollout status deployment/kognition-tool-gateway -n kognition-system --timeout=180s
+```
+
+Use a new reviewed key ID for each rotation in either shell. `/dev/stdin` is
+available on Linux and macOS; no GNU-specific `base64` decoding flags are needed.
+
 Apply the same procedure to `kognition-memory-policy-gateway`, then restart
 `kognition-k8s-controller` after both gateways are ready.
 
@@ -377,6 +405,19 @@ kubectl rollout status deployment $deployment -n $namespace --timeout=180s
 kubectl patch lease kognition-runtime-approval-binding-keys -n $namespace --type merge -p '{"spec":{"holderIdentity":""}}'
 kubectl scale deployment $deployment -n $namespace --replicas=$replicas
 kubectl rollout status deployment $deployment -n $namespace --timeout=180s
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+namespace=kognition-system
+deployment=kognition-k8s-controller
+replicas="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.spec.replicas}')" || exit 1
+kubectl scale deployment "$deployment" -n "$namespace" --replicas=0
+kubectl rollout status deployment "$deployment" -n "$namespace" --timeout=180s
+kubectl patch lease kognition-runtime-approval-binding-keys -n "$namespace" --type merge -p '{"spec":{"holderIdentity":""}}'
+kubectl scale deployment "$deployment" -n "$namespace" --replicas="$replicas"
+kubectl rollout status deployment "$deployment" -n "$namespace" --timeout=180s
 ```
 
 Do not delete the Lease or edit

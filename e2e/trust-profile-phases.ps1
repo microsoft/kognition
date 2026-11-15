@@ -192,7 +192,7 @@ function Approve-RuntimeApproval {
         throw "RuntimeApproval/$Name is not the expected pending Communication invocation: $($approval | ConvertTo-Json -Compress -Depth 10)"
     }
     $decidedAt = [DateTime]::UtcNow.ToString("o")
-    $issuer = "kognition-hackathon-e2e"
+    $issuer = "kognition-demo-e2e"
     $subject = "trust-profile"
     $patch = @{ status = @{
         decisionState = "Approved"
@@ -223,7 +223,7 @@ function Approve-RuntimeApproval {
     Wait-ForJsonPath -Resource "runtimeapproval/$Name" -JsonPath "{.status.decisionState}" -Expected "Approved"
 }
 
-Write-Host "=== Hackathon Model and Communication trust phases ===" -ForegroundColor Cyan
+Write-Host "=== Demo Model and Communication trust phases ===" -ForegroundColor Cyan
 
 try {
     if (-not $CommunicationOnly) {
@@ -239,8 +239,12 @@ try {
     $previousGOARCH = $env:GOARCH
     $previousCGOEnabled = $env:CGO_ENABLED
     try {
-        $env:GOOS = "windows"
-        $env:GOARCH = "amd64"
+        $goHostJSON = & go env -json GOHOSTOS GOHOSTARCH
+        if ($LASTEXITCODE -ne 0) { throw "resolve native Go host for Model Gateway capability helper failed" }
+        $goHost = ($goHostJSON -join "`n") | ConvertFrom-Json
+        if (-not $goHost.GOHOSTOS -or -not $goHost.GOHOSTARCH) { throw "Go did not report its native host target" }
+        $env:GOOS = $goHost.GOHOSTOS
+        $env:GOARCH = $goHost.GOHOSTARCH
         $env:CGO_ENABLED = "0"
         & go build -o $modelCapabilityHelper ./e2e/mint-model-session-capability.go
         if ($LASTEXITCODE -ne 0) { throw "build Model Gateway capability helper failed" }
@@ -309,6 +313,7 @@ HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
     Apply-KubernetesObject @{ apiVersion = "kognition.dev/v1alpha1"; kind = "AgentCommunicationPolicy"; metadata = @{ name = $communicationPolicy; namespace = $ScopeNamespace; labels = @{ "kognition.dev/demo-run" = $DemoRunId } }; spec = @{ defaultDeny = $true; allowFrom = @(@{ name = $sourceAgent }); allowTo = @(@{ name = $targetAgent }) } }
     Apply-KubernetesObject @{ apiVersion = "kognition.dev/v1alpha1"; kind = "AgentInstance"; metadata = @{ name = $sourceInstance; namespace = $ScopeNamespace; labels = @{ "kognition.dev/demo-run" = $DemoRunId } }; spec = @{ agentRef = @{ name = $sourceAgent }; revision = 1 } }
     Wait-ForJsonPath -Resource "agentinstance/$sourceInstance" -JsonPath "{.status.phase}" -Expected "Running" -TimeoutSeconds 180
+    Wait-ForJsonPath -Resource "agent/$sourceAgent" -JsonPath "{.status.phase}" -Expected "Ready" -TimeoutSeconds 180
 
     $sourceUID = (Invoke-Kubectl @("get", "agentinstance/$sourceInstance", "-n", $ScopeNamespace, "-o", "jsonpath={.metadata.uid}") | Out-String).Trim()
     $sessionID = (Invoke-Kubectl @("get", "agentinstance/$sourceInstance", "-n", $ScopeNamespace, "-o", "jsonpath={.status.sessionID}") | Out-String).Trim()
@@ -364,4 +369,4 @@ finally {
     }
 }
 
-if (-not $phasePassed) { throw "Hackathon Model and Communication trust phases did not complete" }
+if (-not $phasePassed) { throw "Demo Model and Communication trust phases did not complete" }

@@ -82,11 +82,22 @@ helm upgrade --install kognition ./deploy/helm/kognition -n kognition-system `
   --set kbIngester.enabled=true
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+helm upgrade --install kognition ./deploy/helm/kognition -n kognition-system \
+  --set kbPgvector.enabled=true \
+  --set kbIngester.enabled=true
+```
+
 The ingester image is built by both `make docker` (POSIX) and
 `.\make.ps1 docker` (Windows). If you push to a registry, point the chart at
 it:
 
-```powershell
+The following are Helm argument fragments for either shell, not standalone
+commands:
+
+```text
 --set kbIngester.image.repository=<your-registry>/kognition-kb-ingester
 --set kbIngester.image.tag=<version>
 ```

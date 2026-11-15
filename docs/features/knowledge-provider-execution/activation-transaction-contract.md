@@ -63,6 +63,22 @@ $activationArgs = @(
 ./bin/check-admission-activation.exe prepare @activationArgs
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+go build -o ./bin/check-admission-activation ./tools/check-admission-activation
+activationArgs=(
+    --manifest ./reviewed/bootstrap.yaml
+    --chart ./reviewed/kognition.tgz
+    --kubeconfig ./reviewed/target.kubeconfig
+    --release reviewed-release
+    --authority-namespace activation-authority
+    --replicas 1
+    --writers-frozen
+)
+./bin/check-admission-activation prepare "${activationArgs[@]}"
+```
+
 Substitute administrator-reviewed artifacts and an explicitly authorized target.
 `prepare` verifies inactive/drained structural state and returns the exact target
 in JSON `result`; it does not issue approval. After genuine acceptance and approval,

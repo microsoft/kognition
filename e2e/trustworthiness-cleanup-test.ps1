@@ -5,7 +5,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $tokens = $null
 $parseErrors = $null
-$ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot "hackathon-trustworthiness-e2e.ps1"), [ref]$tokens, [ref]$parseErrors)
+$ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot "trustworthiness-e2e.ps1"), [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 & {
     $nativeHelper = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq "Invoke-Kubectl" }, $true)
@@ -17,7 +17,7 @@ if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 }
 $helper = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq "Remove-RehearsalScope" }, $true)
 . ([scriptblock]::Create($helper.Extent.Text))
-$namespace = "kognition-hack-cleanup-test"
+$namespace = "kognition-demo-cleanup-test"
 $DemoRunId = "cleanup-test"
 $ControllerNamespace = "kognition-system"
 function Invoke-Kubectl {

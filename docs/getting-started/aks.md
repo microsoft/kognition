@@ -42,6 +42,21 @@ kubelogin convert-kubeconfig --kubeconfig $Kubeconfig -l azurecli
 kubectl --kubeconfig $Kubeconfig --context $Context get nodes
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+mkdir -p .local
+ResourceGroup='<resource-group>'
+ClusterName='<aks-cluster>'
+Kubeconfig="$PWD/.local/aks.kubeconfig"
+Context='kognition-aks'
+
+az aks get-credentials --resource-group "$ResourceGroup" --name "$ClusterName" \
+    --file "$Kubeconfig" --context "$Context"
+kubelogin convert-kubeconfig --kubeconfig "$Kubeconfig" -l azurecli
+kubectl --kubeconfig "$Kubeconfig" --context "$Context" get nodes
+```
+
 Use the Azure CLI account and subscription that own the selected cluster.
 The installer supports the kubeconfig's kubelogin exec authentication.
 
@@ -54,6 +69,15 @@ az aks show --resource-group $ResourceGroup --name $ClusterName `
     --query '{plugin:networkProfile.networkPlugin,dataplane:networkProfile.networkDataplane}' `
     --output table
 kubectl --kubeconfig $Kubeconfig --context $Context api-resources --api-group=cilium.io
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+az aks show --resource-group "$ResourceGroup" --name "$ClusterName" \
+    --query '{plugin:networkProfile.networkPlugin,dataplane:networkProfile.networkDataplane}' \
+    --output table
+kubectl --kubeconfig "$Kubeconfig" --context "$Context" api-resources --api-group=cilium.io
 ```
 
 The profile must provide Cilium network and cluster-wide network policies.
@@ -79,6 +103,16 @@ $Chart = '.\.local\charts\kognition-0.1.0.tgz'
 helm show crds $Chart | kubectl --kubeconfig $Kubeconfig --context $Context apply -f -
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+mkdir -p .local/charts
+python3 ./tools/distribution_notices.py charts
+helm package ./deploy/helm/kognition --destination ./.local/charts
+Chart='./.local/charts/kognition-0.1.0.tgz'
+helm show crds "$Chart" | kubectl --kubeconfig "$Kubeconfig" --context "$Context" apply -f -
+```
+
 Use the archive version emitted by `helm package`. See
 [Kubernetes setup](kubernetes.md#2-package-the-chart-and-install-its-crds) for
 the shared prerequisites.
@@ -102,6 +136,25 @@ $ControllerDigest = 'sha256:<controller-image-digest>'
     -StateDirectory .\.local\aks-kognition-install -Exclusive
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+Registry='<registry>.azurecr.io'
+ImageTag='<release-image-tag>'
+ControllerDigest='sha256:<controller-image-digest>'
+
+pwsh -NoProfile -File ./deploy/aks/Install-RuntimeBase.ps1 \
+    -Kubeconfig "$Kubeconfig" -Context "$Context" -ChartPackage "$Chart" \
+    -Namespace kognition-system -WorkloadNamespace team-a \
+    -ImageRegistry "$Registry" -ImageTag "$ImageTag" \
+    -ControllerImageDigest "$ControllerDigest" \
+    -StateDirectory ./.local/aks-kognition-install -Exclusive
+```
+
+The AKS profile helper requires PowerShell 7 on Linux/macOS as well as Windows;
+see [command shells](../README.md#command-shells). It generates the same AKS
+values in both environments. Do not substitute a bare Helm install.
+
 This wrapper uses the same checked fresh installer. It does not provision Azure
 resources, publish images or configure inference endpoints.
 
@@ -110,6 +163,14 @@ resources, publish images or configure inference endpoints.
 ```powershell
 kubectl --kubeconfig $Kubeconfig --context $Context -n kognition-system get pods
 kubectl --kubeconfig $Kubeconfig --context $Context -n kognition-system rollout status `
+    deployment/kognition-k8s-controller --timeout=120s
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+kubectl --kubeconfig "$Kubeconfig" --context "$Context" -n kognition-system get pods
+kubectl --kubeconfig "$Kubeconfig" --context "$Context" -n kognition-system rollout status \
     deployment/kognition-k8s-controller --timeout=120s
 ```
 

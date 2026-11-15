@@ -38,6 +38,13 @@ $Kubeconfig = '.\.local\cluster.kubeconfig'
 kubectl --kubeconfig $Kubeconfig get nodes
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+Kubeconfig="$PWD/.local/cluster.kubeconfig"
+kubectl --kubeconfig "$Kubeconfig" get nodes
+```
+
 ## 2. Package the chart and install its CRDs
 
 From the repository root:
@@ -48,12 +55,27 @@ python .\tools\distribution_notices.py charts
 helm package .\deploy\helm\kognition --destination .\.local\charts
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+mkdir -p .local/charts
+python3 ./tools/distribution_notices.py charts
+helm package ./deploy/helm/kognition --destination ./.local/charts
+```
+
 Set `$Chart` to the archive just produced. The example uses the current chart
 version and preserves the kubeconfig selected above:
 
 ```powershell
 $Chart = '.\.local\charts\kognition-0.1.0.tgz'
 helm show crds $Chart | kubectl --kubeconfig $Kubeconfig apply -f -
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+Chart='./.local/charts/kognition-0.1.0.tgz'
+helm show crds "$Chart" | kubectl --kubeconfig "$Kubeconfig" apply -f -
 ```
 
 Install cert-manager through your cluster's normal dependency-management process
@@ -93,7 +115,17 @@ writer changes them during this operation:
     -Exclusive
 ```
 
-`-Exclusive` confirms that coordination. The installer:
+**Bash (Linux/macOS), using the Go installer directly:**
+
+```bash
+go run ./tools/kognition-install fresh \
+    --kubeconfig "$Kubeconfig" --chart "$Chart" \
+    --values ./.local/values.yaml --namespace kognition-system \
+    --workload-namespaces team-a --state-dir ./.local/kognition-install \
+    --exclusive
+```
+
+`-Exclusive` / `--exclusive` confirms that coordination. The installer:
 
 1. Checks cluster identity, required APIs, release absence and resource inventory.
 2. Installs the chart with the controller stopped and without workload permissions.
@@ -107,14 +139,14 @@ activation report is needed for a fresh installation.
 ### Alternative entry points
 
 Use one entry point for the installation; these commands are alternatives to the
-PowerShell invocation above.
+installation commands above.
 
 With GNU Make:
 
 ```bash
 make quickstart \
-  KUBECONFIG=.local/cluster.kubeconfig \
-  CHART_PACKAGE=.local/charts/kognition-0.1.0.tgz \
+  "KUBECONFIG=$Kubeconfig" \
+  "CHART_PACKAGE=$Chart" \
   INSTALL_VALUES=.local/values.yaml \
   WORKLOAD_NAMESPACES=team-a \
   INSTALL_EXCLUSIVE=true
@@ -128,24 +160,19 @@ On Windows, use the shim with the same variables:
     INSTALL_EXCLUSIVE=true
 ```
 
-To invoke the Go installer directly on Linux or macOS:
-
-```bash
-go run ./tools/kognition-install fresh \
-  --kubeconfig .local/cluster.kubeconfig \
-  --chart .local/charts/kognition-0.1.0.tgz \
-  --values .local/values.yaml \
-  --namespace kognition-system \
-  --workload-namespaces team-a \
-  --state-dir .local/kognition-install \
-  --exclusive
-```
-
 ## 5. Verify the result
 
 ```powershell
 kubectl --kubeconfig $Kubeconfig -n kognition-system get deployments,statefulsets,jobs
 kubectl --kubeconfig $Kubeconfig -n kognition-system rollout status `
+    deployment/kognition-k8s-controller --timeout=120s
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+kubectl --kubeconfig "$Kubeconfig" -n kognition-system get deployments,statefulsets,jobs
+kubectl --kubeconfig "$Kubeconfig" -n kognition-system rollout status \
     deployment/kognition-k8s-controller --timeout=120s
 ```
 
@@ -176,9 +203,16 @@ installer supports first-install recovery:
     --record '<record-name>' --writers-frozen --executors-stopped
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+./.local/kognition-install/kognition-install fresh-recover \
+    --plan ./.local/kognition-install/install.json \
+    --record '<record-name>' --writers-frozen --executors-stopped
+```
+
 Confirm that the earlier installer has stopped and no other writers are running
 before using those flags. Recovery refuses user workloads, removes only the
 transaction's recorded permissions/probes and leaves the controller stopped.
-On Linux or macOS, invoke the retained `kognition-install` binary without `.exe`.
 Earlier bootstrap failures use the claim UID printed by the
 [installation recovery command](../features/knowledge-provider-execution/installation-recovery-contract.md).

@@ -10,8 +10,15 @@ preflight checks and chooses the primary or local fixture fallback path. The
 fixture is not the production standalone API server or workflow runtime.
 
 ```powershell
-pwsh -NoProfile -File .\e2e\hackathon-trustworthiness-demo.ps1 `
-  -DemoRunId <unique-lowercase-run-id>
+pwsh -NoProfile -File .\e2e\trustworthiness-demo.ps1 `
+  -DemoRunId '<unique-lowercase-run-id>'
+```
+
+**Bash (Linux/macOS), with PowerShell 7 installed:**
+
+```bash
+pwsh -NoProfile -File ./e2e/trustworthiness-demo.ps1 \
+  -DemoRunId '<unique-lowercase-run-id>'
 ```
 
 Set an explicit `KUBECONFIG` and pass `-PreflightContext` to select the primary
@@ -20,13 +27,21 @@ The selector does not switch the global context. A failed preflight starts the
 local fixture and dashboard. For an already-enrolled namespace or retained scope,
 use the direct Kubernetes runner below; the selector does not expose those flags.
 
+### Scope identifiers
+
+New runs use the `kognition-demo-<run-id>` namespace and workspace, the
+`trustworthiness` sample label, and `test-results/trustworthiness-<run-id>.json`
+reports. Renaming the source does not migrate deployed resources or retained
+reports. For a retained run, use its exact recorded identifiers and the matching
+source revision; do not infer a new namespace from its run ID.
+
 ## Platform Prerequisites
 
 - Complete reviewed installation and separately approved activation under the
   [installation contract](../../docs/features/knowledge-provider-execution/installation-recovery-contract.md).
   Do not enroll a namespace, grant controller privileges or restart activation
   just to run this demo.
-- Pre-enroll the exact `kognition-hack-<run-id>` namespace. Keep the independent
+- Pre-enroll the exact `kognition-demo-<run-id>` namespace. Keep the independent
   sandbox guard and resource-admission server ready. Use the actual release and
   controller namespace, which may differ from defaults.
 - Complete [database initialization](../../docs/features/knowledge-provider-execution/installation-recovery-contract.md#database-prerequisites).
@@ -50,11 +65,27 @@ $context = 'reviewed-context'
 $release = 'reviewed-release'
 $systemNamespace = 'reviewed-system'
 $runId = 'reviewed-run-id'
-$scope = "kognition-hack-$runId"
-$report = "test-results/hackathon-trustworthiness-$runId.json"
-.\e2e\hackathon-trustworthiness-e2e.ps1 -DemoRunId $runId `
+$scope = "kognition-demo-$runId"
+$report = "test-results/trustworthiness-$runId.json"
+.\e2e\trustworthiness-e2e.ps1 -DemoRunId $runId `
   -KubernetesContext $context -ControllerNamespace $systemNamespace `
   -ReleaseName $release -ReportPath $report `
+  -PreprovisionedScope -KeepScopeNamespace -ApprovalMode automated
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+export KUBECONFIG="$PWD/reviewed/target.kubeconfig"
+context=reviewed-context
+release=reviewed-release
+systemNamespace=reviewed-system
+runId=reviewed-run-id
+scope="kognition-demo-$runId"
+report="test-results/trustworthiness-$runId.json"
+pwsh -NoProfile -File ./e2e/trustworthiness-e2e.ps1 -DemoRunId "$runId" \
+  -KubernetesContext "$context" -ControllerNamespace "$systemNamespace" \
+  -ReleaseName "$release" -ReportPath "$report" \
   -PreprovisionedScope -KeepScopeNamespace -ApprovalMode automated
 ```
 
@@ -100,6 +131,16 @@ go build -o ./bin/kognitionctl.exe ./cmd/kognitionctl
   --bind 127.0.0.1 --port 18080
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+go build -o ./bin/kognitionctl ./cmd/kognitionctl
+./bin/kognitionctl dashboard --mode kubernetes --kube-context "$context" \
+  --namespace "$scope" --kube-namespace "$systemNamespace" \
+  --audit-namespace "$systemNamespace" --run-proof "$report" \
+  --bind 127.0.0.1 --port 18080
+```
+
 Open `http://127.0.0.1:18080/?view=trust&runId=<run-id>&focus=1`.
 The audit namespace is the controller namespace, not
 the retained workload namespace. Use the same controller namespace as the runner.
@@ -133,7 +174,7 @@ is a normal resource-observation race; the runner waits for it. A terminal
 patching status or replacing history.
 
 - For a source-session failure before workflow creation, use
-  `hackathon-trust-profile-phases.ps1 -CommunicationOnly -AttemptId <new-id>`
+  `trust-profile-phases.ps1 -CommunicationOnly -AttemptId <new-id>`
   with the same explicit context, release, controller namespace, run ID and
   `-ScopeNamespace`. Keep the failed instance. The helper creates a distinct
   controller-owned instance and waits for both instance Running and Agent Ready.
@@ -150,25 +191,29 @@ patching status or replacing history.
 
 ### Verified Local Inspection
 
-The 2026-10-02 retained run `trust-rehearsal-c` in
-`kognition-hack-trust-rehearsal-c` passed 13 assertions with 39 durable timeline
+The 2026-10-02 retained run `trust-rehearsal-c` in its recorded namespace
+passed 13 assertions with 39 durable timeline
 entries. Chromium observed 29 executable decisions across Tool, Memory, Model and
 Communication, `Live`, Run Proof `13/13 passed`, no empty panels and no page errors.
 Approval was automated. The local dashboard was started at
 `http://127.0.0.1:52713/?view=trust&runId=trust-rehearsal-c&focus=1`; that URL works
 only while its process and cluster remain available.
 
-Ignored local artifacts are
-`test-results/hackathon-trustworthiness-trust-rehearsal-c-ready-20261002.json`,
-`test-results/memory-boundary-trust-rehearsal-c.json`, and
-`test-results/hackathon-trust-focus-20261002.png`. Earlier failed attempts were
+The acceptance report, memory-boundary report and screenshot remain private,
+identified by the run ID and evidence date above. Earlier failed attempts were
 preserved. This repaired inspection run does not close three-clean-run,
 presenter/narration, production, or deployed standalone-parity gates.
 
 ## Mode Parity Gate
 
 ```powershell
-pwsh -NoProfile -File .\e2e\hackathon-trustworthiness-parity-test.ps1
+pwsh -NoProfile -File .\e2e\trustworthiness-parity-test.ps1
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+pwsh -NoProfile -File ./e2e/trustworthiness-parity-test.ps1
 ```
 
 This gate requires every named production contract test to execute and pass;
@@ -214,12 +259,21 @@ For a fixture-only UI rehearsal, force an unavailable context, use fixed ports,
 and retain the processes while inspecting the dashboard:
 
 ```powershell
-pwsh -NoProfile -File .\e2e\hackathon-trustworthiness-demo.ps1 `
+pwsh -NoProfile -File .\e2e\trustworthiness-demo.ps1 `
   -DemoRunId trust-fallback-recording `
   -PreflightContext kognition-intentionally-unavailable `
   -FixturePort 18081 `
   -DashboardPort 18080 `
   -KeepFallbackServers
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+pwsh -NoProfile -File ./e2e/trustworthiness-demo.ps1 \
+  -DemoRunId trust-fallback-recording \
+  -PreflightContext kognition-intentionally-unavailable \
+  -FixturePort 18081 -DashboardPort 18080 -KeepFallbackServers
 ```
 
 Stop the two process IDs printed by the runner immediately after inspection.
@@ -247,7 +301,13 @@ production mode-parity claims from a fixture walkthrough.
 Run the degraded-environment acceptance test with:
 
 ```powershell
-pwsh -NoProfile -File .\e2e\hackathon-trustworthiness-fallback-e2e.ps1
+pwsh -NoProfile -File .\e2e\trustworthiness-fallback-e2e.ps1
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+pwsh -NoProfile -File ./e2e/trustworthiness-fallback-e2e.ps1
 ```
 
 ## Browser Rehearsal Contract
@@ -257,7 +317,13 @@ preparation documents. This executable fallback rehearsal has no dependency on
 them:
 
 ```powershell
-pwsh -NoProfile -File .\e2e\hackathon-trustworthiness-storyboard-e2e.ps1
+pwsh -NoProfile -File .\e2e\trustworthiness-storyboard-e2e.ps1
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+pwsh -NoProfile -File ./e2e/trustworthiness-storyboard-e2e.ps1
 ```
 
 The acceptance check starts a live fallback dashboard and drives Chromium at

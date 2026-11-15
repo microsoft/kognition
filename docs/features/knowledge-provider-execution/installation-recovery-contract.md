@@ -152,6 +152,12 @@ configuration and run:
 go test .\internal\store\postgres -run '^TestPgvector(PerVolumeDimensions|OpaqueVolumeHandleIsolation)$' -count=1 -timeout 3m
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+go test ./internal/store/postgres -run '^TestPgvector(PerVolumeDimensions|OpaqueVolumeHandleIsolation)$' -count=1 -timeout 3m
+```
+
 These regressions verify legacy/default and local dimensions, case-sensitive
 isolation, unchanged records after rejected mutations, concurrent provisioning,
 and deprovisioning.
@@ -319,6 +325,13 @@ go build -o ./bin/kognition-install.exe ./tools/kognition-install
 ./bin/kognition-install.exe bootstrap --plan ./reviewed/install.json --writers-frozen
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+go build -o ./bin/kognition-install ./tools/kognition-install
+./bin/kognition-install bootstrap --plan ./reviewed/install.json --writers-frozen
+```
+
 The common ordered stages are preflight, workload drain, controller stop, observed
 stop, grant revocation, drain verification, exact legacy policy deletion, completed migration retirement, admission
 bootstrap and bootstrap verification. A held Invocation or finalizer blocks before
@@ -381,6 +394,12 @@ Do not acknowledge these conditions until operational evidence supports them.
 
 ```powershell
 ./bin/kognition-install.exe recover --plan ./reviewed/install.json --writers-frozen --executors-stopped --requests-settled --claim-uid EXACT_REVIEWED_UID
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+./bin/kognition-install recover --plan ./reviewed/install.json --writers-frozen --executors-stopped --requests-settled --claim-uid EXACT_REVIEWED_UID
 ```
 
 Use the original plan and printed claim UID. The claim pins target and exact plan

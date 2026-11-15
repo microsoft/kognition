@@ -9,6 +9,12 @@ The strict local command is:
 .\make.ps1 samples-full-install
 ```
 
+**Bash (Linux/macOS), with PowerShell 7 installed:**
+
+```bash
+pwsh -NoProfile -File ./make.ps1 samples-full-install
+```
+
 Run this only after installation completes and the controller is ready, using an
 explicit kubeconfig and enrolled workload namespaces. Existing-release upgrades
 must complete their applicable activation procedure first.
@@ -45,7 +51,7 @@ were installed. Three original failed index runs were retained and three named
 replacement runs succeeded: docs 4 documents/1,307 chunks, S3 6/23, Azurite 6/23.
 This is recovered readiness, not an assertion that `samples-full-install` exited
 successfully or that every workflow was executed. Counts precede the separate
-Hackathon rehearsal.
+Demo rehearsal.
 
 On 2026-10-24, a dedicated kind installation completed guarded activation after
 fresh required deployed acceptance and exact-target owner approval. Nine platform
@@ -86,14 +92,32 @@ remain pending under T-0368 in the
 
 The optional `SAMPLE_PROFILE` selects reviewed namespace, backend, fixture and
 budget settings. Without it, existing sample defaults remain unchanged.
-Use PowerShell with `powershell-yaml`, Helm, kubectl and a selected Python
+Use PowerShell 7 with `powershell-yaml`, Helm, kubectl and a selected Python
 environment containing `azure-storage-blob` and `boto3`. No image build, Docker
 import, cloud provisioning, platform upgrade or activation occurs in this path.
+See [command shells](README.md#command-shells) for installing the shared helper
+dependencies. Select the uploader environment with `$env:VIRTUAL_ENV` in
+PowerShell or `export VIRTUAL_ENV="$PWD/.venv"` in Bash.
 
 ```powershell
 .\make.ps1 samples-full-install KUBECONFIG=C:\private\approved.kubeconfig SAMPLE_PROFILE=C:\private\governed-samples.json
 .\make.ps1 samples-install SAMPLE=knowledge-base-blob-s3 KUBECONFIG=C:\private\approved.kubeconfig SAMPLE_PROFILE=C:\private\governed-samples.json
 ```
+
+**Bash (Linux/macOS):**
+
+```bash
+pwsh -NoProfile -File ./make.ps1 samples-full-install \
+    "KUBECONFIG=$HOME/private/approved.kubeconfig" \
+    "SAMPLE_PROFILE=$HOME/private/governed-samples.json"
+pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=knowledge-base-blob-s3 \
+    "KUBECONFIG=$HOME/private/approved.kubeconfig" \
+    "SAMPLE_PROFILE=$HOME/private/governed-samples.json"
+```
+
+These are full-bundle and individual-sample alternatives, not sequential
+instructions. Pass profile/target arguments directly to `make.ps1` from Bash;
+the GNU Make full-bundle wrapper does not forward these arguments.
 
 Keep the profile outside source control. The following JSON uses fake image
 digests; replace them with reviewed, published digests before installation.
@@ -264,6 +288,16 @@ python -B -m unittest discover -s samples\knowledge-base-blob-azure -p test_uplo
 python -B -m unittest discover -s samples\knowledge-base-blob-s3 -p test_upload_docs.py
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+pwsh -NoProfile -File ./deploy/tests/azure-sample-settings-tests.ps1
+pwsh -NoProfile -File ./deploy/tests/governed-sample-profile-tests.ps1
+pwsh -NoProfile -File ./deploy/tests/azure-blob-provisioning-tests.ps1
+python3 -B -m unittest discover -s samples/knowledge-base-blob-azure -p test_upload_docs.py
+python3 -B -m unittest discover -s samples/knowledge-base-blob-s3 -p test_upload_docs.py
+```
+
 ## Compatible Bundle
 
 | Sample | Install path | Primary coverage | Bundle status |
@@ -353,6 +387,6 @@ python -B -m unittest discover -s samples\knowledge-base-blob-s3 -p test_upload_
 - Select the repository Python environment explicitly for Azurite uploads. The
   helper can report `SKIP` with exit zero when the SDK is absent. Confirm actual
   uploaded documents; the current sample blob stores are ephemeral.
-- The [Hackathon four-plane workload](../samples/hackathon-trustworthiness/runbook.md)
+- The [Demo four-plane workload](../samples/trustworthiness/runbook.md)
   is a separate runner in a reviewed, enrolled scope; applying the compatible
   bundle does not execute its scenario.

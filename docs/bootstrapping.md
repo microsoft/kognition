@@ -38,7 +38,21 @@ file is not required to install the platform.
     -Exclusive
 ```
 
-Use the archive version and paths prepared for your release. `-Exclusive` confirms
+**Bash (Linux/macOS):**
+
+```bash
+go run ./tools/kognition-install fresh \
+    --kubeconfig ./.local/cluster.kubeconfig \
+    --chart ./.local/charts/kognition-0.1.0.tgz \
+    --values ./.local/values.yaml \
+    --namespace kognition-system \
+    --workload-namespaces team-a \
+    --state-dir ./.local/kognition-install \
+    --exclusive
+```
+
+Use the archive version and paths prepared for your release. `-Exclusive` /
+`--exclusive` confirms
 that no other installer, GitOps process or workload writer changes the selected
 scope during installation.
 
@@ -69,6 +83,13 @@ kubectl --kubeconfig .\.local\cluster.kubeconfig -n kognition-system get deploym
 go build -o .\bin\kognitionctl.exe .\cmd\kognitionctl
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+kubectl --kubeconfig ./.local/cluster.kubeconfig -n kognition-system get deployments,statefulsets,jobs
+go build -o ./bin/kognitionctl ./cmd/kognitionctl
+```
+
 Select the workload namespace and kubeconfig context explicitly when using the
 CLI. Follow [First agent](getting-started/first-agent.md) to configure an Agent,
 grant model access and verify an invocation.
@@ -78,6 +99,14 @@ For Studio, use the same target:
 ```powershell
 $env:KUBECONFIG = (Resolve-Path .\.local\cluster.kubeconfig).Path
 .\bin\kognitionctl.exe --mode kubernetes --kube-context '<context>' `
+    --namespace team-a --kube-namespace kognition-system studio
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+export KUBECONFIG="$PWD/.local/cluster.kubeconfig"
+./bin/kognitionctl --mode kubernetes --kube-context '<context>' \
     --namespace team-a --kube-namespace kognition-system studio
 ```
 
@@ -103,6 +132,16 @@ deployments and workload namespaces:
 ```powershell
 Get-Help .\deploy\azure-samples\Configure.ps1 -Detailed
 ```
+
+**Bash (Linux/macOS), with PowerShell 7 installed:**
+
+```bash
+pwsh -NoProfile -Command 'Get-Help ./deploy/azure-samples/Configure.ps1 -Detailed'
+```
+
+Invoke the selected provisioning parameters from Bash with
+`pwsh -NoProfile -File ./deploy/azure-samples/Configure.ps1`; this is the same
+helper, not a separate Bash provisioning implementation.
 
 Pass those selected parameters with `-ValidateOnly` before provisioning. Review
 the resource changes, costs and credential outputs before running without that

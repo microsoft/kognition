@@ -140,7 +140,7 @@ All identifiers follow the schema defined in PROJECT.md Section 0.5.
 | EPIC-0019 | Workflow Engine Enhancement | MVP-1 | US-0075..US-0083 | EPIC-0003, EPIC-0005 | ✅ Done |
 | EPIC-0020 | Memory Recall Quality | Post-MVP | US-0084 | EPIC-0005 | ✅ Done |
 | EPIC-0021 | Evaluation Pipelines | Post-MVP | US-0085 | EPIC-0012, EPIC-0013, EPIC-0014, EPIC-0017 | Done |
-| EPIC-0022 | Hackathon Trustworthiness Hardening | MVP-3, MVP-4, MVP-7 | US-0088..US-0090 | EPIC-0008, EPIC-0009, EPIC-0014, EPIC-0018 | In progress |
+| EPIC-0022 | Demo Trustworthiness Hardening | MVP-3, MVP-4, MVP-7 | US-0088..US-0090 | EPIC-0008, EPIC-0009, EPIC-0014, EPIC-0018 | In progress |
 | EPIC-0023 | Kognition Studio Authoring Completion | MVP-1, MVP-3, MVP-4, MVP-7 | US-0092..US-0099 | Existing API slices of EPIC-0001, EPIC-0004, EPIC-0005, EPIC-0006, EPIC-0008, EPIC-0009, EPIC-0013, EPIC-0018, EPIC-0021 | In progress: authoring and core tutorial locally verified; installed/protected-action and pilot qualification open |
 
 ---
@@ -246,7 +246,7 @@ completing Studio does not require implementing deferred backend capabilities.
 | **Phase 4 — Security & Governance** | EPIC-0008, EPIC-0009 | MVP-3, MVP-7 | Phase 5: Control plane prototype |
 | **Phase 5 — Observability & Self-Healing** | EPIC-0014, EPIC-0010 | MVP-2, MVP-4, MVP-8 | Phase 5: Control plane prototype |
 | **Phase 6 — Intent Layer & Release** | EPIC-0013, EPIC-0015 | MVP-6, MVP-1 (complete) | Phase 7: MVP release candidate |
-| **Phase 7 - Hackathon Trust Hardening** | EPIC-0022; reopened US-0060 | MVP-3, MVP-4, MVP-7, MVP-8 | Sep 21, 2026 video-ready demonstration |
+| **Phase 7 - Demo Trust Hardening** | EPIC-0022; reopened US-0060 | MVP-3, MVP-4, MVP-7, MVP-8 | Sep 21, 2026 video-ready demonstration |
 
 ---
 
@@ -2821,12 +2821,12 @@ certification remain separate. Earlier timeout/failure receipts remain in the
 
 ---
 
-### EPIC-0022 - Hackathon Trustworthiness Hardening - IN PROGRESS
+### EPIC-0022 - Demo Trustworthiness Hardening - IN PROGRESS
 
-> **Goal:** Make Kognition's existing runtime trust enforcement understandable and reproducible, then close the highest-value semantic probe gap without placing the Hackathon video at risk.
+> **Goal:** Make Kognition's existing runtime trust enforcement understandable and reproducible, then close the highest-value semantic probe gap while keeping the demonstration reproducible.
 > **MVP Gates:** MVP-3, MVP-4, MVP-7, MVP-8. US-0037 and its ADR-0012 contract-hardening ledger are complete.
 > **Dependencies:** EPIC-0008 (four-plane isolation), EPIC-0009 (governance), EPIC-0014 (audit and traces), EPIC-0018 (Kubernetes projection).
-> **Milestones:** Hackathon begins September 14, 2026. Project video is due September 21, 2026 at 11:59 PM Pacific Time.
+> **Completion gate:** Reproducible technical evidence and an explicitly attested presenter rehearsal.
 > **Status:** In progress. Planned on 2026-08-26 after final Executive Challenge and source-level capability review. P0 implementation, three-run evidence, and the Run Proof technical rehearsal are complete; only manual attestation of the narrated TC-0316 rehearsal remains open. T-0358's reviewed blocker decision is accepted as ADR-0014, and the P2 runtime autonomy implementation completed under T-0214 on 2026-09-06. P1a presentation links and P1b semantic-canary hardening are complete.
 
 #### Delivery Strategy
@@ -2877,7 +2877,7 @@ The presentation must not imply that existing Tool Gateway Grafana metrics cover
 
 | Dependency | Owner | Status | Impact if delayed |
 |---|---|---|---|
-| Four-plane Gateway audit producers | Kognition | Implemented with normalized, redacted Tool, Memory, Model, and Communication decisions | Complete for the Hackathon trust-decision scope. |
+| Four-plane Gateway audit producers | Kognition | Implemented with normalized, redacted Tool, Memory, Model, and Communication decisions | Complete for the Demo trust-decision scope. |
 | PostgreSQL and ConfigMap audit query stores | Kognition | Implemented | Low risk; blocks cross-mode query endpoint if regressions appear. |
 | Dashboard resource and local server APIs | Kognition | Implemented | Low risk; extension point for US-0089. |
 | Stable standalone and Kubernetes demo environments | Kognition | Verified on 2026-09-06: the supported Kubernetes deployment completed at Helm revision 9 with all workloads ready and stable external runtime-auth credential hashes | Complete for automated deployment readiness; standalone remains the documented fallback. |
@@ -2917,7 +2917,7 @@ The presentation must not imply that existing Tool Gateway Grafana metrics cover
 
 > As **Gabriela** (Governance Officer), I want every controlled agent operation to produce a normalized, redacted trust decision that I can query, so that I can verify which identity, grant, policy, and approval state caused an allow, deny, or revoke outcome.
 
-**Traces:** FR-0308, FR-0311, FR-0403, FR-0404, FR-0702 | MVP-3, MVP-4, MVP-7 | Hackathon 2026 Trustworthy Agents
+**Traces:** FR-0308, FR-0311, FR-0403, FR-0404, FR-0702 | MVP-3, MVP-4, MVP-7 | Demo 2026 Trustworthy Agents
 
 **Implementation surfaces:** `docs/adr/`, `internal/observability/auditlog.go`, `internal/toolgateway/store_ledger.go`, `internal/memory/policygateway/server.go`, `internal/modelgateway/`, `internal/agentgateway/`, `internal/store/postgres/auditlog.go`, `internal/k8s/audit/configmap_store.go`, `cmd/kognitionctl/cmd/dashboard.go`.
 
@@ -2945,7 +2945,7 @@ The presentation must not imply that existing Tool Gateway Grafana metrics cover
 
 > As **Gabriela** (Governance Officer), I want a read-only decision timeline that explains agent authority in plain language and links to its source resources, so that I can assess trust without interpreting raw YAML, logs, or traces.
 
-**Traces:** FR-0700, FR-0702 | MVP-4, MVP-7 | Hackathon 2026 Trust Through Transparency, Trust Signals That Matter
+**Traces:** FR-0700, FR-0702 | MVP-4, MVP-7 | Demo 2026 Trust Through Transparency, Trust Signals That Matter
 
 **Implementation surfaces:** `cmd/kognitionctl/cmd/dashboard.go`, `cmd/kognitionctl/cmd/dashboard_test.go`, `cmd/kognitionctl/cmd/dashboard_assets/index.html`, `cmd/kognitionctl/cmd/dashboard_assets/app.js`, `cmd/kognitionctl/cmd/dashboard_assets/style.css`.
 
@@ -2977,15 +2977,15 @@ The presentation must not imply that existing Tool Gateway Grafana metrics cover
 
 > As **Diego** (Agent Developer), I want one deterministic demonstration that proves scoped authority, explicit human approval, live revocation, and evidence, so that judges can verify the trustworthy-agent value without relying on architecture claims.
 
-**Traces:** MVP-3, MVP-4, MVP-7 | DIFF-2 | Hackathon 2026 Human-Aware Autonomy, Responsible Personalization, Broad Impact
+**Traces:** MVP-3, MVP-4, MVP-7 | DIFF-2 | Demo 2026 Human-Aware Autonomy, Responsible Personalization, Broad Impact
 
-**Implementation surfaces:** `samples/hackathon-trustworthiness/`, `e2e/hackathon-trustworthiness-e2e.ps1`, `deploy/helm/kognition/`, and the dashboard/gateway surfaces exercised by US-0088 and US-0089.
+**Implementation surfaces:** `samples/trustworthiness/`, `e2e/trustworthiness-e2e.ps1`, `deploy/helm/kognition/`, and the dashboard/gateway surfaces exercised by US-0088 and US-0089.
 
 **Tasks:**
 
 | ID | Task | US |
 |---|---|---|
-| T-0355 | **P0:** Add versioned demo manifests and an idempotent runner parameterized by `demoRunId`. Preflight requires the unique `kognition-hack-<demoRunId>` namespace/workspace to be absent; each operation uses idempotency key `<demoRunId>:<stepName>`; each run writes a machine-readable assertion report and proves an allowed Tool/Memory operation, a denied operation, an explicitly configured Workflow approval and ApprovalDecision, live grant revocation without restarting the policy gateway, and the resulting decision timeline. Cleanup removes the scoped resources and verifies no scoped workload remains. Three-run verification means three sequential runner invocations with distinct run IDs and successful preflight, assertions, and cleanup for each run. ✅ | US-0090 |
+| T-0355 | **P0:** Add versioned demo manifests and an idempotent runner parameterized by `demoRunId`. Preflight requires the unique `kognition-demo-<demoRunId>` namespace/workspace to be absent; each operation uses idempotency key `<demoRunId>:<stepName>`; each run writes a machine-readable assertion report and proves an allowed Tool/Memory operation, a denied operation, an explicitly configured Workflow approval and ApprovalDecision, live grant revocation without restarting the policy gateway, and the resulting decision timeline. Cleanup removes the scoped resources and verifies no scoped workload remains. Three-run verification means three sequential runner invocations with distinct run IDs and successful preflight, assertions, and cleanup for each run. ✅ | US-0090 |
 | T-0356 | **P0:** Add a demo runbook, automated assertions, claim measurements, cleanup steps, and video checklist. The primary path uses the known-good Kubernetes context. The fallback uses standalone mode with deterministic local Tool and Memory fixtures and is invoked when Kubernetes preflight fails. Require three consecutive primary-path runs from unique clean scopes before recording. ✅ | US-0090 |
 | T-0361 | **P0:** Add the 1-minute-55-second customer-story storyboard and recording checklist: Trust Focus is the sole competition-video screen; browser viewport/zoom, run ID, primary customer, protected business action, narration claims, fallback cuts, and prohibited on-camera secrets are fixed before rehearsal. Jaeger and Grafana remain off-camera technical follow-up surfaces. ✅ | US-0090 |
 
@@ -2997,9 +2997,9 @@ The presentation must not imply that existing Tool Gateway Grafana metrics cover
 | TC-0313 ✅ | Point preflight at an unavailable Kubernetes context, verify it fails before mutation, then execute the documented standalone fallback with deterministic local Tool and Memory fixtures. Verify allow, deny, approval evidence, revocation, and the decision explorer remain demonstrable, while Kubernetes-only claims are explicitly marked unavailable. | NFR-0001, NFR-0002 |
 | TC-0316 | Rehearse the fixed storyboard against one successful demo run. Verify the customer, protected action, approval, revocation, evidence, and Microsoft pathway sequence completes within 1 minute 55 seconds without manual resource editing, credential entry, unexplained empty panels, or unsupported claims; verify the final screen remains on Trust Focus. | MVP-3, MVP-4, MVP-7, DIFF-2 |
 
-> **Verification (2026-08-30):** Three consecutive primary runs passed all 11 assertions with 20 timeline entries and clean teardown, with no labeled Kubernetes resources remaining: `test-results/hackathon-trustworthiness-trust-final-a-20260828.json`, `test-results/hackathon-trustworthiness-trust-final-b2-20260830.json`, and `test-results/hackathon-trustworthiness-trust-final-c-20260830.json`. The unavailable-context fallback passed TC-0313. The prior isolated browser rehearsal completed in 1.39 measured seconds, captured `test-results/hackathon-trustworthiness-rehearsal-tc0316-final-isolated-20260828.png`, encountered no page errors or empty states, and finished on a live Trust Focus screen. TC-0316 was reopened because that technical traversal did not validate the new narrated customer story or 1-minute-55-second video contract.
+> **Verification (2026-08-30):** Three consecutive primary runs passed all 11 assertions with 20 timeline entries and clean teardown, with no labeled Kubernetes resources remaining. The private reports retain run IDs `trust-final-a-20260828`, `trust-final-b2-20260830`, and `trust-final-c-20260830`. The unavailable-context fallback passed TC-0313. The prior isolated browser rehearsal completed in 1.39 measured seconds, retained a private screenshot, encountered no page errors or empty states, and finished on a live Trust Focus screen. TC-0316 was reopened because that technical traversal did not validate the new narrated customer story or 1-minute-55-second video contract.
 >
-> **Run Proof verification (2026-09-06):** The updated automated fallback rehearsal passed in 1.36 measured seconds. It displayed run-matched Run Proof for `Delegated research with runtime protection`, the protected action `Publish delegated research result`, fallback mode, `Passed`, and `6/6 passed`; inspected all four executable decisions; reported no empty states or browser errors; finished Live on Trust Focus; and verified process cleanup. Evidence is recorded in `test-results/hackathon-trustworthiness-rehearsal-tc0316-runproof-final3.json` and `test-results/hackathon-trustworthiness-rehearsal-tc0316-runproof-final3.png`. This completes the automated technical evidence only. TC-0316 remains open until a presenter completes and attests every recording-checklist item, including the spoken narration and the 1-minute-55-second take.
+> **Run Proof verification (2026-09-06):** The updated automated fallback rehearsal passed in 1.36 measured seconds. It displayed run-matched Run Proof for `Delegated research with runtime protection`, the protected action `Publish delegated research result`, fallback mode, `Passed`, and `6/6 passed`; inspected all four executable decisions; reported no empty states or browser errors; finished Live on Trust Focus; and verified process cleanup. The report and screenshot remain private, identified by rehearsal `tc0316-runproof-final3`. This completes the automated technical evidence only. TC-0316 remains open until a presenter completes and attests every recording-checklist item, including the spoken narration and the 1-minute-55-second take.
 
 ---
 
@@ -3404,7 +3404,7 @@ write-before-effect evidence within its supported scope.
 | FR-0900..FR-0902 | Traceability Tooling | US-0054..US-0056 |
 | FR-0320..FR-0323 | Model Provider (ModelClass) | US-0063..US-0064 |
 | FR-0610..FR-0613 | CPI & Integration | US-0065..US-0066 |
-| FR-0308, FR-0311, FR-0403..FR-0404, FR-0700, FR-0702 | Hackathon Trust Evidence | US-0088..US-0090 |
+| FR-0308, FR-0311, FR-0403..FR-0404, FR-0700, FR-0702 | Demo Trust Evidence | US-0088..US-0090 |
 
 The cross-cutting reference-documentation story US-0091 traces NFR-0001,
 NFR-0004, NFR-0007, NFR-0008, NFR-0010, NFR-0012, NFR-0013, MVP-3, and MVP-4.

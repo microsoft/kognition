@@ -22,6 +22,7 @@ On Linux or macOS:
 ```bash
 go build -o ./bin/kognitionctl ./cmd/kognitionctl
 ./bin/kognitionctl --help
+./bin/kognitionctl chat --help
 ```
 
 Use the Go version declared in [go.mod](../../go.mod). Build from the same source
@@ -63,6 +64,16 @@ $target = @('--mode', 'standalone', '--server', 'http://127.0.0.1:8080',
 .\bin\kognitionctl.exe @target events agent hello-agent
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+target=(--mode standalone --server http://127.0.0.1:8080 --namespace team-a)
+./bin/kognitionctl "${target[@]}" get agents
+./bin/kognitionctl "${target[@]}" get agent hello-agent -o yaml
+./bin/kognitionctl "${target[@]}" apply -f ./first-agent.yaml
+./bin/kognitionctl "${target[@]}" events agent hello-agent
+```
+
 `apply` accepts a file or stdin with `-f -`. It accepts Kognition resources using
 `kognition.dev/v1alpha1`; a foreign manifest needs the explicit compatibility
 import workflow. The resource's embedded namespace matters.
@@ -96,6 +107,15 @@ identically in every deployment mode.
 .\bin\kognitionctl.exe @target revision-diff agent hello-agent 1 2 -o json
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+./bin/kognitionctl "${target[@]}" chat hello-agent "Reply with a short greeting."
+./bin/kognitionctl "${target[@]}" revisions agent hello-agent
+./bin/kognitionctl "${target[@]}" revision agent hello-agent 2
+./bin/kognitionctl "${target[@]}" revision-diff agent hello-agent 1 2 -o json
+```
+
 Use revision numbers that actually exist. Revision diffs describe immutable
 `spec` snapshots, not metadata or current status. In Kubernetes mode, interactive
 Agent chat uses a controller-owned AgentInstance and waits for its result.
@@ -105,6 +125,13 @@ Agent chat uses a controller-owned AgentInstance and waits for its result.
 ```powershell
 .\bin\kognitionctl.exe @target dashboard
 .\bin\kognitionctl.exe @target studio
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+./bin/kognitionctl "${target[@]}" dashboard
+./bin/kognitionctl "${target[@]}" studio
 ```
 
 These interfaces use the selected backend and its credentials. Keep local

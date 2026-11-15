@@ -40,7 +40,9 @@ Deployment/Service are declared in [`samples/workflows/tool-sandbox.yaml`](../wo
 
 ## Apply
 
-```powershell
+These commands work in Bash and PowerShell:
+
+```sh
 kubectl apply -f samples/workflows/tool-sandbox.yaml
 kubectl apply -f samples/tools-in-action/manifests.yaml
 kubectl -n default wait --for=jsonpath='{.status.phase}'=Ready agent/tool-user --timeout=120s
@@ -68,6 +70,14 @@ activation; direct Helm upgrade and `--reuse-values` are unsupported.
 # => The result of (123 + 456) * 2 is 1158. The current UTC time is "...".
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+./bin/kognitionctl chat tool-user "what is 17 * 23?" --mode kubernetes
+./bin/kognitionctl chat tool-user "what is the current UTC time?" --mode kubernetes
+./bin/kognitionctl chat tool-user "Compute (123 + 456) * 2, then get the current UTC time." --mode kubernetes
+```
+
 ## Verify tool execution
 
 The runtime logs every tool call. Tail the agent pod:
@@ -78,6 +88,12 @@ kubectl -n default logs deployment/agent-tool-user --tail=20 | Select-String "to
 # tool call: sandbox_datetime({}) -> 62 chars
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+kubectl -n default logs deployment/agent-tool-user --tail=20 | grep -F 'tool call'
+```
+
 Each invocation also emits a single `Invocation completed: tokens=... tools=N`
 line with the count of tool calls in that turn.
 
@@ -85,15 +101,17 @@ The completed `AgentInstance` retains bounded details for each Tool call. Use
 the instance name printed by `kognitionctl chat` to inspect the exact arguments,
 Tool result, and duration without retrieving the runtime's target endpoint:
 
-```powershell
-kubectl -n default get agentinstance <instance-name> -o jsonpath='{.status.toolCallsDetail}'
+Use the following command in either shell:
+
+```sh
+kubectl -n default get agentinstance '<instance-name>' -o jsonpath='{.status.toolCallsDetail}'
 # [{"args":"{\"expression\":\"17 * 23\"}","durationMs":243,"name":"sandbox_calculator","result":"{\"expression\": \"17 * 23\", \"result\": 391}"}]
 ```
 
 The Gateway also persists `ToolInvocationAuthorized` and
 `ToolInvocationCompleted` Kubernetes Events for the same instance:
 
-```powershell
+```sh
 kubectl -n default get events --field-selector 'involvedObject.kind=AgentInstance,involvedObject.name=<instance-name>'
 ```
 
@@ -118,6 +136,13 @@ kubectl -n default get events --field-selector 'involvedObject.kind=AgentInstanc
 
   ```powershell
   kubectl -n default exec deployment/agent-tool-user -- sh -c 'echo $KOGNITION_TOOLS_RESOLVED' | ConvertFrom-Json
+  ```
+
+  **Bash (Linux/macOS):**
+
+  ```bash
+  kubectl -n default exec deployment/agent-tool-user -- sh -c 'echo "$KOGNITION_TOOLS_RESOLVED"' |
+    python3 -m json.tool
   ```
 
 ## Adding your own tool

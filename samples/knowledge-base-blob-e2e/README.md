@@ -3,12 +3,22 @@
 ## Verified governed manual profile
 
 The existing local governed environment passed real Azure Blob acceptance on
-2026-10-28. Use `azure-live-docs-agent` for real Storage and keep
-`azure-docs-agent-v2` for the separate Azurite example:
+2026-10-28. The resource names below belong to that recorded environment, not
+every installation. Only on that prepared target, use `azure-live-docs-agent`
+for real Storage and keep `azure-docs-agent-v2` for the separate Azurite example.
+Select the operator-provided kubeconfig and context explicitly:
 
 ```powershell
-. "$env:USERPROFILE\.kube\Use-KognitionGovernedManual.ps1"
-kubectl kognition --mode kubernetes chat azure-live-docs-agent `
+$env:KUBECONFIG = (Resolve-Path ./reviewed/target.kubeconfig).Path
+.\bin\kognitionctl.exe --mode kubernetes --kube-context '<reviewed-context>' chat azure-live-docs-agent `
+  "Use knowledge_search to quote the Mark 7 prices and cite the source."
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+export KUBECONFIG="$PWD/reviewed/target.kubeconfig"
+./bin/kognitionctl --mode kubernetes --kube-context '<reviewed-context>' chat azure-live-docs-agent \
   "Use knowledge_search to quote the Mark 7 prices and cite the source."
 ```
 
@@ -67,6 +77,13 @@ Run this profile from a runner that can reach the Storage account data plane:
 ```powershell
 .\make.ps1 samples-provision-azure
 .\make.ps1 samples-install SAMPLE=knowledge-base-blob-e2e
+```
+
+**Bash (Linux/macOS), with PowerShell 7 installed:**
+
+```bash
+pwsh -NoProfile -File ./make.ps1 samples-provision-azure
+pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=knowledge-base-blob-e2e
 ```
 
 The provisioning target creates an isolated test Storage account, uploads the
@@ -131,7 +148,13 @@ environment; a local kind cluster cannot reach that Blob data plane.
 Run the secret-safe preflight before provisioning or applying the profile:
 
 ```powershell
-.\e2e\azure-blob-preflight.ps1 -StorageAccount <account-name>
+.\e2e\azure-blob-preflight.ps1 -StorageAccount '<account-name>'
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+pwsh -NoProfile -File ./e2e/azure-blob-preflight.ps1 -StorageAccount '<account-name>'
 ```
 
 Then install the profile. It creates the namespace-local SecretRefs, copies the
@@ -142,9 +165,18 @@ resources:
 .\make.ps1 samples-install SAMPLE=knowledge-base-blob-e2e
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=knowledge-base-blob-e2e
+```
+
 Wait for the pipeline to finish:
 
-```powershell
+The following inspection commands work in Bash and PowerShell (`jq` is required
+for the formatted JSON view):
+
+```sh
 # 1. Ingester Job runs to completion.
 kubectl -n samples-azure-blob get jobs -l kognition.dev/kb=azure-docs-kb --watch
 
@@ -158,7 +190,7 @@ kubectl -n samples-azure-blob rollout status deployment/agent-azure-docs-agent
 If ingestion fails, the summary appears both in the Job's Pod log and on
 the KB's `status.conditions`:
 
-```powershell
+```sh
 kubectl -n samples-azure-blob logs job/kb-ingest-azure-docs-kb-1
 kubectl -n samples-azure-blob describe knowledgebase azure-docs-kb
 ```
@@ -171,12 +203,27 @@ kubectl -n samples-azure-blob describe knowledgebase azure-docs-kb
   --mode kubernetes
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+./bin/kognitionctl chat azure-docs-agent \
+  "Summarise the Mark 7 launch checklist. Cite the source blobs." \
+  --mode kubernetes
+```
+
 The runtime logs each tool call. The `knowledge_search` invocation
 appears with the query it sent to pgvector:
 
 ```powershell
 kubectl -n default logs deployment/agent-azure-docs-agent --tail=80 |
   Select-String "knowledge_search"
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+kubectl -n default logs deployment/agent-azure-docs-agent --tail=80 |
+  grep -F 'knowledge_search'
 ```
 
 You can also confirm rows landed in pgvector directly:
@@ -186,6 +233,20 @@ $dsn = kubectl -n default get secret kognition-kb-pgvector `
   -o jsonpath='{.data.connectionString}' | ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) }
 psql "$dsn" -c "SELECT kb_namespace, kb_name, source_uri, chunk_idx FROM kognition_kb_chunks WHERE kb_name = 'azure-docs-kb' LIMIT 20;"
 ```
+
+**Bash (Linux/macOS), for this legacy direct-database profile only:**
+
+```bash
+set -o pipefail
+dsn="$(kubectl -n default get secret kognition-kb-pgvector \
+  -o jsonpath='{.data.connectionString}' |
+  python3 -c 'import base64,sys; print(base64.b64decode(sys.stdin.read()).decode())')" || exit 1
+psql "$dsn" -c "SELECT kb_namespace, kb_name, source_uri, chunk_idx FROM kognition_kb_chunks WHERE kb_name = 'azure-docs-kb' LIMIT 20;"
+unset dsn
+```
+
+Keep shell tracing disabled and do not print the DSN. This legacy inspection is
+not the governed provider path; do not copy database credentials into Agent Pods.
 
 ## What each file does
 
@@ -215,7 +276,9 @@ Two CRDs provide explicit reindex history, scheduling, and RBAC separation:
 
 Watch progress with:
 
-```powershell
+Use either shell:
+
+```sh
 kubectl get kbrun -n default -w
 kubectl get kbsched -n default
 ```

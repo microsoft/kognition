@@ -66,6 +66,7 @@ function global:kubectl {
     throw "Unexpected Kubernetes operation: $command"
 }
 function python { $global:LASTEXITCODE = 0 }
+function python3 { $global:LASTEXITCODE = 0 }
 function global:helm {
     $global:LASTEXITCODE = 0
     $global:SampleProfileTestEvents.Add(@{ command = "helm $($args -join ' ')"; documents = @() })

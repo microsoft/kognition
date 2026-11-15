@@ -93,8 +93,10 @@ normalization errors, cancellation and expired deadlines fail verification.
 
 Run from the repository with administrator-reviewed paths:
 
-```powershell
-go run ./tools/check-admission-activation --manifest <trusted-render.yaml> --kubeconfig <explicit-kubeconfig>
+Run in Bash or PowerShell:
+
+```sh
+go run ./tools/check-admission-activation --manifest '<trusted-render.yaml>' --kubeconfig '<explicit-kubeconfig>'
 ```
 
 This default structural mode never uses an implicit kubeconfig. Requests have a 15-second timeout

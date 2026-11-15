@@ -5,7 +5,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $parseErrors = $null
 $tokens = $null
-$source = Join-Path $PSScriptRoot "hackathon-trustworthiness-parity-test.ps1"
+$source = Join-Path $PSScriptRoot "trustworthiness-parity-test.ps1"
 $ast = [Management.Automation.Language.Parser]::ParseFile($source, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count -gt 0) { throw "Parity gate syntax errors" }
 $function = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq "Assert-ConformanceEvents" }, $true)

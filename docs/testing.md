@@ -16,6 +16,17 @@ python tools/run_bounded.py --timeout 1800 -- go test ./... -count=1 -timeout=3m
 bash .github/scripts/check-go-coverage.sh --profile coverage.out --min 80
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+python3 tools/run_bounded.py --timeout 1800 -- go test ./... -count=1 -timeout=3m \
+    "-coverpkg=github.com/kognition-ai/kognition/..." "-coverprofile=coverage.out"
+bash .github/scripts/check-go-coverage.sh --profile coverage.out --min 80
+```
+
+The PowerShell example also needs Bash, for example Git Bash on Windows, for
+the coverage-check script.
+
 ## Test Tiers
 
 For local selection and evidence reuse, follow the
@@ -152,6 +163,50 @@ $env:KUBEBUILDER_ASSETS = (setup-envtest use 1.30.x -p path)
 go test -tags=integration -count=1 ./internal/k8s/webhook/...
 ```
 
+**Bash (Linux/macOS):**
+
+Install PowerShell 7 for the repository's `.ps1` test helpers. Create the virtual
+environment first if needed with `python3 -m venv .venv`; on Windows use
+`python -m venv .venv`. Install the pinned YAML module before integration tests
+in either shell.
+
+```bash
+pwsh -NoProfile -Command 'Install-Module powershell-yaml -RequiredVersion 0.4.12 -Scope CurrentUser'
+make test
+make integration
+go run ./tools/securitygate identity-fixture
+
+./.venv/bin/python -m pip install -r runtime/agent/requirements-test.txt
+./.venv/bin/python tools/run_bounded.py --timeout 600 -- ./.venv/bin/python -m pytest -q runtime/agent
+./.venv/bin/python -m pip install -r runtime/ingester/requirements-test.txt
+./.venv/bin/python tools/run_bounded.py --timeout 600 -- ./.venv/bin/python -m pytest -q runtime/ingester
+
+helm lint deploy/helm/kognition
+pwsh -NoProfile -File ./deploy/helm/kognition/tests/helm-regression-tests.ps1
+
+# These are deployed tests; use only the separately approved test installation.
+make e2e-kubernetes-memory NAMESPACE=kognition-system RELEASE=kognition
+make e2e-kubernetes-tool NAMESPACE=kognition-system RELEASE=kognition
+make e2e-kubernetes-runtime-tool NAMESPACE=kognition-system RELEASE=kognition
+make e2e-kubernetes-model NAMESPACE=kognition-system RELEASE=kognition
+make e2e-kubernetes-tool-exec-probe NAMESPACE=kognition-system RELEASE=kognition
+
+# Linux host/container with the Unix Docker socket available.
+KOGNITION_DOCKER_EXEC_PROBE_INTEGRATION=1 \
+    go test ./internal/controller -run TestDockerExecProbeRunnerFunctional -count=1
+
+pwsh -NoProfile -File ./e2e/kubernetes-tool-gateway-network-policy-e2e.ps1 \
+    -KubeContext kind-kognition-cilium-e2e \
+    -ControllerNamespace kognition-cilium-system -ReleaseName kognition-cilium
+
+# Explicitly approved live key-rotation and cross-workspace tests.
+make e2e-kubernetes-capability-rotation NAMESPACE=kognition-system RELEASE=kognition
+make e2e-kubernetes-agent-communication NAMESPACE=kognition-system RELEASE=kognition
+
+export KUBEBUILDER_ASSETS="$(setup-envtest use 1.30.x -p path)"
+go test -tags=integration -count=1 ./internal/k8s/webhook/...
+```
+
 The SPIRE acceptance fixture keeps reviewed host-attestation, kubelet and CSI
 privileges. Its scanner policy applies only to that exact fixture and finding
 set; CI verifies both source and policy digests before scanning. Changed
@@ -234,7 +289,9 @@ Never copy generated tokens or Secret contents into reports.
 For the reviewed legacy pgvector profile with external provider routing disabled,
 the local 2026-10-02 run explicitly selected:
 
-```powershell
+This recorded selection uses shell-neutral arguments (Bash or PowerShell):
+
+```sh
 go test -json -tags=integration ./internal/traceability -count=1 -timeout=15m -run '^TestDeployedReviewedAdmissionTarget$/^(native-policies|deployed-attach|production-stdio|production-ingestion)$/^(success|deadline|non-root-failure|agent-runtime)$'
 ```
 
@@ -245,13 +302,20 @@ image/manifest hashes, failed attempts and cleanup results. Verify every require
 case ran; package PASS, skipped opt-in tests or healthy Deployments alone are not
 activation approval. Follow the [activation contract](features/knowledge-provider-execution/activation-transaction-contract.md).
 
-The [Trustworthiness runbook](../samples/hackathon-trustworthiness/runbook.md)
+The [Trustworthiness runbook](../samples/trustworthiness/runbook.md)
 describes the separate post-activation workload and UI checks. Its PowerShell
 publication/session regressions can run without changing the cluster:
 
 ```powershell
-.\e2e\hackathon-trustworthiness-publication-test.ps1
-.\e2e\hackathon-trustworthiness-session-test.ps1
+.\e2e\trustworthiness-publication-test.ps1
+.\e2e\trustworthiness-session-test.ps1
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+pwsh -NoProfile -File ./e2e/trustworthiness-publication-test.ps1
+pwsh -NoProfile -File ./e2e/trustworthiness-session-test.ps1
 ```
 
 ## Test Deadlines
@@ -293,6 +357,17 @@ try {
 		Remove-Item Env:KOGNITION_AZURESEARCH_LIVE_TEST -ErrorAction SilentlyContinue
 }
 ```
+
+**Bash (Linux/macOS):**
+
+```bash
+KOGNITION_AZURESEARCH_LIVE_TEST=1 ./.venv/bin/python tools/run_bounded.py \
+    --timeout 420 -- go test -tags=integration -count=1 -timeout=6m \
+    -run '^TestLiveAzureSearchLifecycle$' -v ./providers/azuresearch
+```
+
+The Bash assignment applies only to this command and its children; the opt-in
+does not remain enabled in the parent shell.
 
 The required target variables are `KOGNITION_AZURESEARCH_SERVICE`,
 `KOGNITION_AZURESEARCH_INDEX`, and `KOGNITION_AZURESEARCH_DIMENSIONS`.

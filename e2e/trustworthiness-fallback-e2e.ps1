@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$reportPath = Join-Path $repoRoot "test-results/hackathon-trustworthiness-$DemoRunId.json"
+$reportPath = Join-Path $repoRoot "test-results/trustworthiness-$DemoRunId.json"
 $missingContext = "kognition-unavailable-$DemoRunId"
 
 function Assert-True {
@@ -22,7 +22,7 @@ function Assert-True {
 }
 
 try {
-    & (Join-Path $PSScriptRoot "hackathon-trustworthiness-demo.ps1") -DemoRunId $DemoRunId -PreflightContext $missingContext -ReportPath $reportPath
+    & (Join-Path $PSScriptRoot "trustworthiness-demo.ps1") -DemoRunId $DemoRunId -PreflightContext $missingContext -ReportPath $reportPath
     if ($LASTEXITCODE -ne 0) {
         throw "Fallback runner exited with code $LASTEXITCODE"
     }
@@ -50,7 +50,7 @@ try {
     $approvalClaim = @($report.claims | Where-Object { $_.name -eq "approval" })
     Assert-True ($approvalClaim.Count -eq 1 -and $approvalClaim[0].availability -eq "standalone-evidence-only") "Fallback approval overstates Kubernetes evidence"
     Assert-True ($report.cleanup.passed) "Fallback cleanup did not pass"
-    Assert-True (-not (Test-Path (Join-Path $repoRoot ".tmp/hackathon-trustworthiness-$DemoRunId"))) "Fallback temp directory remains"
+    Assert-True (-not (Test-Path (Join-Path $repoRoot ".tmp/trustworthiness-$DemoRunId"))) "Fallback temp directory remains"
 
     Write-Host "TC-0313 passed for $DemoRunId"
 }

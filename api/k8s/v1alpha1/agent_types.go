@@ -12,10 +12,11 @@ import (
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
-// +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.runtime.ready`
+// +kubebuilder:printcolumn:name="Up-to-date",type=integer,JSONPath=`.status.runtime.updatedReplicas`
+// +kubebuilder:printcolumn:name="Available",type=integer,JSONPath=`.status.runtime.availableReplicas`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`,priority=1
 
 // Agent declares a cognitive agent workload.
 type Agent struct {
@@ -278,7 +279,7 @@ type AgentStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// Replicas is the current number of instances.
+	// Replicas is the desired number of controller-owned instances.
 	// +optional
 	Replicas int32 `json:"replicas,omitempty"`
 
@@ -289,6 +290,20 @@ type AgentStatus struct {
 	// RevisionCount is the number of spec revisions processed.
 	// +optional
 	RevisionCount int64 `json:"revisionCount,omitempty"`
+
+	// Runtime observes the backing Deployment rather than completed sessions.
+	// +optional
+	Runtime *AgentRuntimeStatus `json:"runtime,omitempty"`
+}
+
+// AgentRuntimeStatus is the observed rollout of the managed runtime Deployment.
+type AgentRuntimeStatus struct {
+	Ready             string `json:"ready"`
+	DesiredReplicas   int32  `json:"desiredReplicas"`
+	Replicas          int32  `json:"replicas"`
+	ReadyReplicas     int32  `json:"readyReplicas"`
+	UpdatedReplicas   int32  `json:"updatedReplicas"`
+	AvailableReplicas int32  `json:"availableReplicas"`
 }
 
 // +kubebuilder:object:root=true
