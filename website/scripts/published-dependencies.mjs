@@ -19,6 +19,12 @@ const searchCode = new Set([
 const generatedNotices = new Set(['third-party/NOTICE', 'third-party/inventory.json']);
 const dataScriptTypes = new Set(['application/json', 'application/ld+json', 'importmap', 'speculationrules']);
 const normalizeText = (value) => value.replace(/\s+/g, ' ').trim();
+// Browsers strip surrounding whitespace and embedded tabs/newlines, and treat
+// backslashes as slashes in http(s) URLs, so normalize before looking for a scheme or network path.
+const isExternalReference = (value) => {
+  const url = value.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '').replace(/[\t\n\r]/g, '').replaceAll('\\', '/');
+  return /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(url);
+};
 
 function astroFiles(directory) {
   if (!existsSync(directory)) return [];
@@ -147,7 +153,7 @@ export function createPublishedManifest({ projectRoot, directory, outputs, clien
       }
       for (const element of $('script[src], link[rel=stylesheet][href]').toArray()) {
         const target = $(element).attr('src') ?? $(element).attr('href');
-        if (target && /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(target)) {
+        if (target && isExternalReference(target)) {
           throw new Error(`External executable content is outside static publication evidence: ${relative}`);
         }
       }

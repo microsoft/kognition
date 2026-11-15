@@ -120,6 +120,25 @@ test('inline executable scripts need chunk or renderer-package evidence and are 
   }
 });
 
+test('external script and stylesheet references are rejected however the URL is spelled', (t) => {
+  const { directory, inputs } = fixture(t);
+  const forms = [
+    '<script src=" https://cdn.example.test/a.js"></script>',
+    '<script src="\thttps://cdn.example.test/a.js"></script>',
+    '<script src="ht&#10;tps://cdn.example.test/a.js"></script>',
+    '<script src="\\\\cdn.example.test\\a.js"></script>',
+    '<script src="/\\cdn.example.test/a.js"></script>',
+    '<script src="//cdn.example.test/a.js"></script>',
+    '<link rel="stylesheet" href=" //cdn.example.test/a.css">',
+  ];
+  for (const html of forms) {
+    writeFileSync(path.join(directory, 'index.html'), html);
+    assert.throws(() => createPublishedManifest(inputs), /External executable content/, html);
+  }
+  writeFileSync(path.join(directory, 'index.html'), '<script src="/_astro/app.js"></script><script src="\\_astro\\app.js"></script>');
+  createPublishedManifest(inputs);
+});
+
 test('copied scripts, unaccounted executable output and unknown generated search code block the build', (t) => {
   for (const mode of ['public-script', 'unaccounted-code', 'search-code', 'native', 'active-svg', 'external-code']) {
     const { root, directory, inputs } = fixture(t);
