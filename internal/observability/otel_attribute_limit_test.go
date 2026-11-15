@@ -27,7 +27,7 @@ func TestSpanAttributeValueLengthLimitCountsReplacementRunes(t *testing.T) {
 			limits := sdktrace.NewSpanLimits()
 			limits.AttributeValueLengthLimit = limit
 			recorder := tracetest.NewSpanRecorder()
-			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder), sdktrace.WithSpanLimits(limits))
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder), sdktrace.WithRawSpanLimits(limits))
 			defer func() { _ = provider.Shutdown(context.Background()) }()
 
 			_, span := provider.Tracer("limit-test").Start(context.Background(), "op")
