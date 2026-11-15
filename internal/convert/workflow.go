@@ -25,6 +25,7 @@ func WorkflowToK8s(in *api.Workflow) *k8s.Workflow {
 			CompletedSteps: in.Status.CompletedSteps,
 			ActiveStep:     in.Status.ActiveStep,
 			ActiveSteps:    in.Status.ActiveSteps,
+			EntryPoints:    in.Status.EntryPoints,
 			StepStatuses:   workflowStepStatusesToK8s(in.Status.StepStatuses),
 		},
 	}
@@ -89,6 +90,7 @@ func WorkflowFromK8s(in *k8s.Workflow) *api.Workflow {
 			CompletedSteps: in.Status.CompletedSteps,
 			ActiveStep:     in.Status.ActiveStep,
 			ActiveSteps:    in.Status.ActiveSteps,
+			EntryPoints:    in.Status.EntryPoints,
 			StepStatuses:   workflowStepStatusesFromK8s(in.Status.StepStatuses),
 		},
 	}

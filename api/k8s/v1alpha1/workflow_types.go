@@ -9,8 +9,7 @@ import (
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="Entry",type=string,JSONPath=`.spec.entryPoint`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Entry",type=string,JSONPath=`.status.entryPoints`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Workflow declares a multi-agent workflow DAG.
@@ -260,6 +259,11 @@ type WorkflowEdge struct {
 
 // WorkflowStatus describes the observed state of a Workflow.
 type WorkflowStatus struct {
+	// EntryPoints lists the step names where execution starts: spec.entryPoint
+	// when set, otherwise every step without an incoming edge.
+	// +optional
+	EntryPoints []string `json:"entryPoints,omitempty"`
+
 	// Phase is the current lifecycle phase.
 	// +optional
 	Phase string `json:"phase,omitempty"`

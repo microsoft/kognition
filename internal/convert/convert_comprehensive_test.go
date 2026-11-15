@@ -762,6 +762,7 @@ func TestWorkflowFullRoundTrip(t *testing.T) {
 			CompletedSteps: []string{"start"},
 			ActiveStep:     "exec",
 			ActiveSteps:    []string{"exec"},
+			EntryPoints:    []string{"start", "audit"},
 			StepStatuses: []api.WorkflowStepStatus{
 				{Name: "start", Phase: api.PhaseReady, Output: "planned"},
 				{Name: "exec", Phase: api.PhaseRunning},
@@ -770,6 +771,9 @@ func TestWorkflowFullRoundTrip(t *testing.T) {
 	}
 
 	k8sObj := convert.WorkflowToK8s(in)
+	if got := k8sObj.Status.EntryPoints; len(got) != 2 || got[0] != "start" || got[1] != "audit" {
+		t.Errorf("k8s EntryPoints: got %v, want [start audit]", got)
+	}
 	out := convert.WorkflowFromK8s(k8sObj)
 
 	if out.Spec.EntryPoint != "start" {
@@ -835,6 +839,9 @@ func TestWorkflowFullRoundTrip(t *testing.T) {
 	// ActiveSteps
 	if len(out.Status.ActiveSteps) != 1 || out.Status.ActiveSteps[0] != "exec" {
 		t.Errorf("ActiveSteps: got %v, want [exec]", out.Status.ActiveSteps)
+	}
+	if len(out.Status.EntryPoints) != 2 || out.Status.EntryPoints[0] != "start" || out.Status.EntryPoints[1] != "audit" {
+		t.Errorf("EntryPoints: got %v, want [start audit]", out.Status.EntryPoints)
 	}
 	// StepStatuses
 	if len(out.Status.StepStatuses) != 2 {
