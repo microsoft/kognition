@@ -54,29 +54,27 @@ Everything in this project must be traceable from a business-level need down to 
 
 Every implementation artifact carries forward references to its parents and backward references to its children, so the chain is navigable in both directions:
 
-```
-  Scenario (S1…S3)
-      │
-      ↓ satisfied by
-  Functional Requirement (FR-nnnn)  ← same level →  Non-Functional Requirement (NFR-nnnn)
-      │                                                       │
-      ↓ decided in                                            ↓ decided in
-  ADR-nnnn  (resolves an OPEN-* item)
-      │
-      ↓ grouped under
-  EPIC-nnnn
-      │
-      ↓ broken into
-  US-nnnn   ("As <persona>, I want <capability>, so that <FR/NFR/DIFF>")
-      │
-      ↓ implemented by
-  T-nnnn    (commit/PR carries `T-nnnn` and `US-nnnn` in message)
-      │
-      ↓ verified by
-  TC-nnnn   (test references the US/FR/NFR it verifies)
-      │
-      ↓ failure raises
-  BUG-nnnn  (references the TC that caught it)
+```mermaid
+flowchart TD
+    S["Scenario<br/>S1…S3"]
+    FR["Functional Requirement<br/>FR-nnnn"]
+    NFR["Non-Functional Requirement<br/>NFR-nnnn"]
+    ADR["ADR-nnnn<br/>resolves an OPEN-* item"]
+    EPIC["EPIC-nnnn"]
+    US["US-nnnn<br/>As persona, I want capability,<br/>so that FR/NFR/DIFF"]
+    T["T-nnnn<br/>commit/PR message carries T-nnnn and US-nnnn"]
+    TC["TC-nnnn<br/>test references the US/FR/NFR it verifies"]
+    BUG["BUG-nnnn<br/>references the TC that caught it"]
+
+    S -->|satisfied by| FR
+    S -->|satisfied by| NFR
+    FR -->|decided in| ADR
+    NFR -->|decided in| ADR
+    ADR -->|grouped under| EPIC
+    EPIC -->|broken into| US
+    US -->|implemented by| T
+    T -->|verified by| TC
+    TC -->|failure raises| BUG
 ```
 
 ### 0.5.3 Authoring rules (MANDATORY for all downstream work)
@@ -476,24 +474,20 @@ See §3.3 Anti-Goals.
 
 ### 6.1 Layered model
 
-```
-Layer 4 — Cognitive Infrastructure Services
-          (vector stores, graph memory, event bus, tool registries,
-           evaluation systems, tracing systems)
+```mermaid
+flowchart TB
+    L4["Layer 4: Cognitive Infrastructure Services<br/>vector stores, graph memory, event bus, tool registries,<br/>evaluation systems, tracing systems"]
+    L3["Layer 3: Cognitive Runtime Plane<br/>executes agents, assembles context, invokes tools,<br/>accesses memory, runs workflows, inter-agent messaging"]
+    L2["Layer 2: Cognitive Control Plane (this project's core)<br/>declarative resources, reconciliation, scheduling,<br/>governance, policy, lifecycle"]
+    L1["Layer 1: Kubernetes<br/>pods, networking, storage, secrets, autoscaling, RBAC"]
+    L0["Layer 0: Infrastructure<br/>cloud, VMs, GPUs, networking"]
 
-Layer 3 — Cognitive Runtime Plane
-          (executes agents, assembles context, invokes tools,
-           accesses memory, runs workflows, inter-agent messaging)
+    L4 --- L3
+    L3 -->|builds on| L2
+    L2 -->|builds on| L1
+    L1 -->|builds on| L0
 
-Layer 2 — Cognitive Control Plane                  ← this project's core
-          (declarative resources, reconciliation, scheduling,
-           governance, policy, lifecycle)
-
-Layer 1 — Kubernetes
-          (pods, networking, storage, secrets, autoscaling, RBAC)
-
-Layer 0 — Infrastructure
-          (cloud, VMs, GPUs, networking)
+    style L2 stroke-width:3px
 ```
 
 ### 6.2 Separation of concerns
@@ -1329,32 +1323,29 @@ status:
 
 ### 10A.4 Tool Lifecycle
 
-```
-                  ┌────────────┐
-                  │ Registered │  Tool resource created; spec validated at admission
-                  └─────┬──────┘
-                        │ reconciler picks up
-                        ▼
-                  ┌────────────┐
-                  │ Validating │  Schema compiled to MCP, digest verified,
-                  │            │  endpoint reachability checked, signature verified
-                  └─────┬──────┘
-                        │ all conditions pass
-                        ▼
-                  ┌────────────┐
-           ┌─────│   Ready    │◄────────────┐
-           │     └─────┬──────┘             │
-           │           │ health probe       │ health recovers
-           │           │ fails              │ (successThreshold met)
-           │           ▼                    │
-           │     ┌────────────┐             │
-           │     │  Degraded  │─────────────┘
-           │     └─────┬──────┘
-           │           │ stays degraded > terminationGracePeriod
-           │           ▼
-           │     ┌────────────┐
-           └────►│ Terminated │  Finalizers run: drain in-flight calls,
-                 └────────────┘  emit event, clean up sandbox resources
+```mermaid
+stateDiagram-v2
+    [*] --> Registered
+    Registered --> Validating: reconciler picks up
+    Validating --> Ready: all conditions pass
+    Ready --> Degraded: health probe fails
+    Degraded --> Ready: health recovers (successThreshold met)
+    Degraded --> Terminated: stays degraded > terminationGracePeriod
+    Ready --> Terminated: Tool deleted
+    Terminated --> [*]
+
+    note right of Registered
+        Tool resource created;
+        spec validated at admission
+    end note
+    note right of Validating
+        Schema compiled to MCP, digest verified,
+        endpoint reachability checked, signature verified
+    end note
+    note right of Terminated
+        Finalizers run: drain in-flight calls,
+        emit event, clean up sandbox resources
+    end note
 ```
 
 **Phase semantics:**
@@ -1585,31 +1576,15 @@ This section specifies the **autonomy and trust subsystem** that governs how muc
 
 Every consequential agent action passes through three sequential gates:
 
-```
-Agent Action Request
-        │
-        ▼
-┌─────────────────┐     fail
-│ Gate 1: AuthN   │────────────► DENY (no identity)
-│ (AgentIdentity) │
-└────────┬────────┘
-         │ pass
-         ▼
-┌─────────────────┐     fail
-│ Gate 2: AuthZ   │────────────► DENY (no permission)
-│ (AgentRole +    │
-│  Grant)         │
-└────────┬────────┘
-         │ pass
-         ▼
-┌─────────────────┐     requires approval
-│ Gate 3: Autonomy│────────────► HOLD (inject Approval gate)
-│ (AutonomyClass  │
-│  policy)        │     no approval needed
-└────────┬────────┘
-         │ pass
-         ▼
-      ALLOW
+```mermaid
+flowchart TD
+    Req["Agent Action Request"] --> G1{"Gate 1: AuthN<br/>AgentIdentity"}
+    G1 -->|fail| D1["DENY<br/>no identity"]
+    G1 -->|pass| G2{"Gate 2: AuthZ<br/>AgentRole + Grant"}
+    G2 -->|fail| D2["DENY<br/>no permission"]
+    G2 -->|pass| G3{"Gate 3: Autonomy<br/>AutonomyClass policy"}
+    G3 -->|requires approval| H["HOLD<br/>inject Approval gate"]
+    G3 -->|no approval needed| A["ALLOW"]
 ```
 
 Gate 3 is **dynamic**: it evaluates the agent's `TrustProfile.status.currentClass` at request time and applies the `AutonomyClass.spec.approvalPolicy` for that tier. As the agent's trust score changes, the gate's behavior changes — without any manual reconfiguration.
@@ -1782,28 +1757,14 @@ status:
 
 **Lifecycle:**
 
-```
-TrustProfile controller detects promotion eligibility
-        │
-        ▼
-  Create AutonomyReview (decision: Pending)
-        │
-        ▼
-  ┌─────────────────────────────┐
-  │ Human/system reviews        │
-  │ evidence + approves/denies  │
-  └─────────┬───────────────────┘
-            │
-     ┌──────┴──────┐
-     ▼             ▼
-  Approved       Denied
-     │             │
-     ▼             ▼
-  TrustProfile   TrustProfile
-  .status.       remains at
-  currentClass   currentClass
-  updated        (cooldown
-                  before retry)
+```mermaid
+flowchart TD
+    Detect["TrustProfile controller detects<br/>promotion eligibility"] --> Create["Create AutonomyReview<br/>decision: Pending"]
+    Create --> Review["Human/system reviews evidence<br/>and approves or denies"]
+    Review --> Approved["Approved"]
+    Review --> Denied["Denied"]
+    Approved --> Updated["TrustProfile .status.currentClass<br/>updated"]
+    Denied --> Remains["TrustProfile remains at currentClass<br/>cooldown before retry"]
 ```
 
 If `expiresAt` passes without a decision, the review transitions to `Denied` with `reason: "TTL expired"`.
@@ -1987,10 +1948,15 @@ status:
 
 ### 10C.4 Lifecycle state machine
 
-```
-Pending --> Provisioning --> Ready --> Degraded --> Ready
-                                  \              /
-                                   --> Unavailable
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Provisioning
+    Provisioning --> Ready
+    Ready --> Degraded
+    Degraded --> Ready
+    Degraded --> Unavailable
+    Ready --> Unavailable
 ```
 
 - **Pending**: Model created, waiting for ModelClass provisioner.
@@ -2266,15 +2232,17 @@ status:
 
 **Step lifecycle with retry:**
 
-```
-Pending → Running → Failed (attempt 1)
-                 → backoff wait
-                 → Running → Failed (attempt 2)
-                 → backoff wait
-                 → Running → Succeeded ✓
-                 
-         OR after maxRetries exhausted:
-                 → Running → Failed (final) → triggers fallback edge
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Running
+    Running --> Failed: attempt fails
+    Failed --> BackoffWait: retries remain
+    BackoffWait --> Running: next attempt
+    Running --> Succeeded: attempt succeeds
+    Failed --> FallbackEdge: maxRetries exhausted
+    Succeeded --> [*]
+    FallbackEdge --> [*]
 ```
 
 **Traces:** FR-0103 | NFR-0007, NFR-0008 | US-0009

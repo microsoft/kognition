@@ -25,17 +25,23 @@ group.
 
 The relationship at a glance:
 
-```text
-KnowledgeBaseClass          (provisioner)
-        ▲
-        │  spec.knowledgeBaseClassName
-        │
-   KnowledgeBase   ◀── KnowledgeBaseIndexSchedule
-        ▲                       │
-        │                       ▼
-        │              KnowledgeBaseIndexRun ── owns ──▶ Job (kognition-kb-ingester)
-        │
-KnowledgeBaseClaim ◀── referenced by ──  Agent.spec.knowledgeBaseClaims[]
+```mermaid
+flowchart BT
+    KBC["KnowledgeBaseClass<br/>provisioner"]
+    KB["KnowledgeBase"]
+    Sched["KnowledgeBaseIndexSchedule"]
+    Run["KnowledgeBaseIndexRun"]
+    Job["Job<br/>kognition-kb-ingester"]
+    Claim["KnowledgeBaseClaim"]
+    Agent["Agent<br/>spec.knowledgeBaseClaims[]"]
+
+    KB -->|spec.knowledgeBaseClassName| KBC
+    Sched -->|creates| Run
+    Run -->|owns| Job
+    Run -->|reindexes| KB
+    Sched -->|targets| KB
+    Claim -->|binds to| KB
+    Agent -->|references| Claim
 ```
 
 ## Picking a class

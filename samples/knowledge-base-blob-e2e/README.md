@@ -33,10 +33,11 @@ it declares no recurring schedule or additional IndexRun.
 This sample chains every piece of the KB pipeline into a single
 `kubectl apply` recipe:
 
-```
-Azure Blob container ─► KB ingester Job ─► pgvector store ─► agent runtime
-                                                 ▲                  │
-                                                 └── knowledge_search tool
+```mermaid
+flowchart LR
+    Blob["Azure Blob container"] -->|ingested by| Job["KB ingester Job"]
+    Job -->|writes to| Store["pgvector store"]
+    Runtime["agent runtime"] -->|knowledge_search tool| Store
 ```
 
 You will end up with:
