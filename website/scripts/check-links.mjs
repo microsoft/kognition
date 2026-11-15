@@ -33,10 +33,13 @@ export function checkSite(directory, configuration = site, { allowMissingTutoria
     const relative = path.relative(root, filename).split(path.sep).join('/').replace(/index\.html$/, '');
     const sourceURL = new URL(`${configuration.base}${relative}`, configuration.origin);
     const $ = document(filename);
-    for (const element of $('a[href], link[href], script[src], img[src], video[src], video[poster], source[src], track[src]').toArray()) {
-      if (element.tagName === 'link' && $(element).attr('rel') === 'canonical') continue;
-      const href = $(element).attr('href') ?? $(element).attr('src') ?? $(element).attr('poster');
-      if (!href || /^(mailto:|tel:|data:)/i.test(href)) continue;
+    const references = $('a[href], link[href], script[src], img[src], video[src], video[poster], source[src], track[src]')
+      .toArray().flatMap((element) => {
+        if (element.tagName === 'link' && $(element).attr('rel') === 'canonical') return [];
+        return ['href', 'src', 'poster'].map((attribute) => $(element).attr(attribute)).filter(Boolean);
+      });
+    for (const href of references) {
+      if (/^(mailto:|tel:|data:)/i.test(href)) continue;
       const targetURL = new URL(href, sourceURL);
       if (targetURL.origin !== configuration.origin) continue;
       checked++;

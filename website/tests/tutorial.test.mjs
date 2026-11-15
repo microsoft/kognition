@@ -132,6 +132,18 @@ test('rendered media validation checks video, poster and tracks; preview excepti
   assert.throws(() => checkSite(root, getSiteConfig({}), { allowMissingTutorialMedia: true }), /unlisted/);
 });
 
+test('a video poster is validated independently of the video src on the same element', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'kognition-poster-links-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, 'movie.mp4'), 'video');
+  await writeFile(path.join(root, 'index.html'), '<video src="/kognition/movie.mp4" poster="/kognition/missing.webp"></video>');
+  assert.throws(() => checkSite(root, getSiteConfig({})), /missing target: \/kognition\/missing\.webp/);
+  await writeFile(path.join(root, 'index.html'), '<video src="/kognition/movie.mp4" poster="https://example.test/outside.webp"></video>');
+  assert.equal(checkSite(root, getSiteConfig({})).links, 1);
+  await writeFile(path.join(root, 'index.html'), '<video src="/kognition/movie.mp4" poster="/outside/poster.webp"></video>');
+  assert.throws(() => checkSite(root, getSiteConfig({})), /escapes site base/);
+});
+
 test('the canonical transcript contains the narration for every chapter and no production-local paths', async () => {
   const markdown = await readFile(new URL('../../docs/guides/video-tutorial.md', import.meta.url), 'utf8');
   for (const chapter of tutorial.chapters) assert.ok(markdown.includes(`### ${formatTime(chapter.startSeconds)} ${chapter.title}`));
