@@ -70,7 +70,7 @@ npm --prefix website ci
 npm --prefix website test
 npm --prefix website run check
 npm --prefix website run build
-npm --prefix website run check-links
+npm --prefix website run check-links -- --without-tutorial-media
 ```
 
 Keep the README focused on entry paths. Preserve existing source links and
@@ -90,8 +90,86 @@ a private repository does not automatically produce a private Pages site.
 
 The default site is `https://microsoft.github.io/kognition/`. Set `DOCS_SITE_URL`
 to an HTTPS origin and `DOCS_BASE_PATH` to an absolute path for another approved
-target. The workflow retains dependency legal texts with `npm run notices`
-before uploading a deployment artifact. Missing attribution blocks publication.
+target. The workflow retains published dependency legal texts with `npm run notices`
+before uploading a deployment artifact. Missing attribution for a published
+dependency blocks publication.
+
+The application job is named **Build application binaries**. The separate
+Documentation workflow uses **Validate documentation and notices** and
+**Deploy documentation to Pages**. Their existing YAML job IDs remain stable.
+If branch protection requires checks by display name, an administrator must
+update the required names when adopting these labels.
+
+The documentation job writes a final GitHub job summary even when validation
+fails. It lists actual passed, failed, skipped or cancelled steps, includes the
+exact unresolved components from the notice inventory and distinguishes
+disabled publishing from validation failures. A successful website build does
+not imply successful notices or deployment. The summary never bypasses a
+failed check or changes the publication opt-in.
+
+Some upstream npm packages omit standalone license files. The website retains
+their original legal texts with exact package versions, immutable upstream
+commit URLs and SHA256 hashes in `website/notices/manifest.json`. Notice
+collection uses these texts only when the installed package has no packaged
+legal text and its declared license matches. It rejects altered files, moving
+source URLs and unknown versions; it does not infer legal clearance from an
+SPDX identifier. Review and update this inventory when the lockfile changes.
+
+#### Static publication notice scope
+
+Pages distributes the static `website/dist` artifact, not `node_modules`, the
+Node.js build environment or native image-processing libraries.
+`npm run notices` performs two distinct operations:
+
+- Retain the complete installed npm build-tool notice inventory in
+  `.astro/build-tool-notices`. Missing upstream texts remain explicitly
+  unresolved there. This diagnostic inventory is not uploaded to Pages and
+  does not claim legal clearance for the build environment.
+- Strictly verify notices for npm source packages attributed to emitted site
+  files. A build integration generates `.astro/published-files.json` from the
+  client module graph, renderer styles, injected bundler helpers, Expressive Code
+  assets and Pagefind's generated runtime. It binds the evidence to the exact
+  package manifest, lockfile, emitted file hashes and package paths.
+
+The strict gate fails for unlisted or changed output, missing source packages,
+copied scripts without provenance, unexpected generated code, native binaries,
+changed lockfiles, or missing legal texts for a published dependency.
+Pinned tutorial media is checked against its approved Release hashes.
+If a previously build-only dependency enters the client graph, it becomes
+subject to the publication gate automatically.
+
+Use the full inventory when distributing a build image, server installation or
+dependency tree; the static-site scope does not authorize those distributions.
+An unresolved build-tool license is still unresolved, even when that component
+is absent from the Pages artifact.
+The workflow retains both inventories, original notices and the published-file
+evidence in a private Actions artifact for fourteen days. Only those explicitly
+named files are uploaded; other hidden build state is excluded.
+
+#### Updating the video tutorial
+
+The [tutorial page](docs/guides/video-tutorial.md) is the canonical written source
+and transcript. Its player is added by the website, so repository readers can
+still read the same document without a second maintained copy.
+
+- Store approved MP4, SRT, WebVTT caption/chapter tracks and poster images as
+  versioned Release assets in this repository. Do not commit the MP4.
+- Pin the release tag, asset byte lengths, SHA256 hashes, duration and chapter
+  offsets in `website/tutorial.json`. Generate caption tracks and transcript
+  from the approved SRT without changing words or timing.
+- Run `npm --prefix website run tutorial:fetch` while authenticated with `gh`
+  to download and verify all five assets into an ignored directory. Then run
+  the build and `npm --prefix website run check-links` without the preview flag.
+- Pull-request and other non-publishing builds do not download private media.
+  Their explicit `--without-tutorial-media` validation only permits the five
+  pinned media targets to be absent; it does not validate media integrity.
+- Dependency-notice validation also runs on pull requests without network
+  downloads or deployment permissions, catching missing legal texts before merge.
+- Trusted publication downloads the pinned assets, fails on missing or changed
+  files, and checks all rendered media links before uploading Pages content.
+  Captions and video are served from the same site, not from an authenticated
+  Release redirect. Keep existing private Pages access unchanged unless a
+  separate publication decision authorizes otherwise.
 
 ## Code of Conduct
 

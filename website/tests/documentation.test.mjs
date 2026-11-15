@@ -177,10 +177,27 @@ test('PR validation has no deploy permissions and publication requires explicit 
   assert.equal(upload.if, deploymentGuard);
   assert.equal(upload.with.path, 'website/dist');
   const notices = workflow.jobs.build.steps.find((step) => step.run === 'npm run notices');
-  assert.equal(notices.if, deploymentGuard);
+  assert.equal(notices.if, undefined);
   assert.ok(workflow.jobs.build.steps.indexOf(notices) < workflow.jobs.build.steps.indexOf(upload));
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.match(manifest.scripts.notices, / --strict(?:\s|$)/);
+  const noticeCommands = manifest.scripts.notices.split(' && ');
+  assert.equal(noticeCommands.length, 2);
+  assert.match(noticeCommands[0], /--output \.astro\/build-tool-notices/);
+  assert.match(noticeCommands[1], /--output dist\/third-party --strict/);
+  assert.match(noticeCommands[1], /--distribution-root dist --distribution-manifest \.astro\/published-files\.json/);
+  const evidence = workflow.jobs.build.steps.find((step) => step.id === 'evidence');
+  assert.match(evidence.if, /^always\(\)/);
+  assert.match(evidence.uses, /^actions\/upload-artifact@[0-9a-f]{40}$/);
+  assert.equal(evidence.with['include-hidden-files'], true);
+  assert.equal(evidence.with['retention-days'], 14);
+  assert.deepEqual(evidence.with.path.trim().split('\n'), [
+    'website/.astro/published-files.json',
+    'website/.astro/build-tool-notices/inventory.json',
+    'website/.astro/build-tool-notices/NOTICE',
+    'website/dist/third-party/inventory.json',
+    'website/dist/third-party/NOTICE',
+  ]);
   for (const job of Object.values(workflow.jobs)) {
     for (const step of job.steps) {
       if (step.uses) assert.match(step.uses, /^actions\/[\w-]+@[0-9a-f]{40}$/);

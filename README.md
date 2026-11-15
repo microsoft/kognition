@@ -39,6 +39,7 @@ deployment boundaries and current limitations.
 | Explore a local control plane | [Local development](docs/getting-started/local.md). |
 | Prepare a Kubernetes installation | [Kubernetes setup](docs/getting-started/kubernetes.md). |
 | Run an agent on a prepared installation | [First agent](docs/getting-started/first-agent.md). |
+| Watch a complete Studio walkthrough | [Video tutorial](docs/guides/video-tutorial.md). |
 | Find a capability walkthrough | [Guides and samples](docs/guides/README.md). |
 | Operate or troubleshoot a deployment | [Operations](docs/operations/README.md). |
 

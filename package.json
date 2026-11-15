@@ -2,6 +2,7 @@
   "name": "kognition-dashboard-tests",
   "private": true,
   "scripts": {
+    "test:docs:browser": "playwright test --config playwright.docs.config.js",
     "test:dashboard:browser": "playwright test",
     "test:studio:browser": "playwright test --config playwright.studio.config.js",
     "test:studio:tutorial": "playwright test --config playwright.tutorial.config.js"

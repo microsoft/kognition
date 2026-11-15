@@ -43,6 +43,7 @@ env:
 
 jobs:
   build:
+    name: Validate documentation and notices
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -50,41 +51,91 @@ jobs:
         working-directory: website
     steps:
       - name: Checkout
+        id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Setup Node
+        id: node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: website/package-lock.json
       - name: Install dependencies
+        id: install
         run: npm ci
       - name: Test documentation tooling and publication boundaries
+        id: tests
         run: npm test
       - name: Check types and content
+        id: types
         run: npm run check
+      - name: Fetch verified tutorial release assets
+        id: media
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DOCS_PAGES_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm run tutorial:fetch
       - name: Build site
+        id: site
         run: npm run build
       - name: Validate rendered pages, anchors and assets
-        run: npm run check-links
-      - name: Report deployment policy
-        env:
-          PUBLISH_ENABLED: ${{ vars.DOCS_PAGES_ENABLED == 'true' }}
-        run: |
-          echo "Documentation build and link validation passed." >> "$GITHUB_STEP_SUMMARY"
-          echo "Publishing enabled: ${PUBLISH_ENABLED}. Deployment requires a trusted main run and approved Pages configuration." >> "$GITHUB_STEP_SUMMARY"
-      - name: Verify distribution notices before publication
+        id: links
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DOCS_PAGES_ENABLED == 'true'
+        run: npm run check-links
+      - name: Validate non-publishing pages without private media downloads
+        id: preview_links
+        if: github.ref != 'refs/heads/main' || github.event_name == 'pull_request' || vars.DOCS_PAGES_ENABLED != 'true'
+        run: npm run check-links -- --without-tutorial-media
+      - name: Verify distribution notices
+        id: notices
         run: npm run notices
+      - name: Upload notice verification evidence
+        id: evidence
+        if: always() && steps.notices.outcome != 'skipped' && steps.notices.outcome != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: documentation-notice-evidence-${{ github.run_id }}
+          retention-days: 14
+          include-hidden-files: true
+          if-no-files-found: error
+          path: |
+            website/.astro/published-files.json
+            website/.astro/build-tool-notices/inventory.json
+            website/.astro/build-tool-notices/NOTICE
+            website/dist/third-party/inventory.json
+            website/dist/third-party/NOTICE
       - name: Upload Pages artifact
+        id: upload
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DOCS_PAGES_ENABLED == 'true'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: website/dist
+      - name: Summarize documentation outcomes
+        id: summary
+        if: always()
+        env:
+          DOCS_PUBLISH_ENABLED: ${{ vars.DOCS_PAGES_ENABLED == 'true' }}
+          DOCS_STEP_OUTCOMES: >-
+            {
+              "checkout": "${{ steps.checkout.outcome }}",
+              "node": "${{ steps.node.outcome }}",
+              "install": "${{ steps.install.outcome }}",
+              "tests": "${{ steps.tests.outcome }}",
+              "types": "${{ steps.types.outcome }}",
+              "media": "${{ steps.media.outcome }}",
+              "site": "${{ steps.site.outcome }}",
+              "links": "${{ steps.links.outcome }}",
+              "preview_links": "${{ steps.preview_links.outcome }}",
+              "notices": "${{ steps.notices.outcome }}",
+              "evidence": "${{ steps.evidence.outcome }}",
+              "upload": "${{ steps.upload.outcome }}"
+            }
+        run: node scripts/report-documentation.mjs
 
   deploy:
+    name: Deploy documentation to Pages
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DOCS_PAGES_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10

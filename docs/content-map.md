@@ -17,6 +17,7 @@ repository documents until individually integrated.
 | [Get started](getting-started/README.md) | Developers and operators | Local, Kubernetes and AKS installation paths, followed by a first-agent walkthrough. |
 | [Resource model](concepts/resource-model.md) | Agent authors and integrators | Configuration, execution, authorization and observed state. |
 | [Guides](guides/README.md) | Capability users | Curated links to maintained subsystem guides and samples. |
+| [Video tutorial](guides/video-tutorial.md) | Agent authors | Dated Studio walkthrough with captions, chapter navigation and a searchable transcript. Current operational contracts remain authoritative. |
 | [Operations](operations/README.md) | Operators | Index of current installation, activation, recovery and diagnostic contracts. |
 | [Reference](reference/README.md) | Implementers | CLI behavior and exact API/configuration sources. |
 | [Contribution policy](../CONTRIBUTING.md#documentation) | Contributors | Authoring and content validation. |
@@ -44,3 +45,6 @@ somewhere in the repository does not publish it.
 - Preserve existing paths when adding navigation. Split a long document only
   with reviewed links or compatibility pointers.
 - Do not add analytics, external search services or embedded tracking by default.
+- Tutorial media comes from checksum-pinned Release assets during trusted
+  publication builds. It is served by the same Pages site, with the site's
+  existing access controls; the MP4 is not stored in Git history.

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { load } from 'cheerio';
 import { site } from '../site.mjs';
+import { tutorialPaths } from '../tutorial.mjs';
 
 function htmlFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -15,7 +16,7 @@ function htmlFiles(directory) {
   });
 }
 
-export function checkSite(directory, configuration = site) {
+export function checkSite(directory, configuration = site, { allowMissingTutorialMedia = false } = {}) {
   const root = path.resolve(directory);
   const files = htmlFiles(root);
   if (files.length === 0) throw new Error(`No rendered HTML found in ${root}`);
@@ -26,14 +27,19 @@ export function checkSite(directory, configuration = site) {
   };
   const errors = [];
   let checked = 0;
+  const missingTutorialMedia = new Set();
+  const tutorialMedia = new Set(Object.values(tutorialPaths(configuration.base)));
   for (const filename of files) {
     const relative = path.relative(root, filename).split(path.sep).join('/').replace(/index\.html$/, '');
     const sourceURL = new URL(`${configuration.base}${relative}`, configuration.origin);
     const $ = document(filename);
-    for (const element of $('a[href], link[href], script[src], img[src]').toArray()) {
-      if (element.tagName === 'link' && $(element).attr('rel') === 'canonical') continue;
-      const href = $(element).attr('href') ?? $(element).attr('src');
-      if (!href || /^(mailto:|tel:|data:)/i.test(href)) continue;
+    const references = $('a[href], link[href], script[src], img[src], video[src], video[poster], source[src], track[src]')
+      .toArray().flatMap((element) => {
+        if (element.tagName === 'link' && $(element).attr('rel') === 'canonical') return [];
+        return ['href', 'src', 'poster'].map((attribute) => $(element).attr(attribute)).filter(Boolean);
+      });
+    for (const href of references) {
+      if (/^(mailto:|tel:|data:)/i.test(href)) continue;
       const targetURL = new URL(href, sourceURL);
       if (targetURL.origin !== configuration.origin) continue;
       checked++;
@@ -52,6 +58,10 @@ export function checkSite(directory, configuration = site) {
       }
       if (existsSync(target) && statSync(target).isDirectory()) target = path.join(target, 'index.html');
       if (!existsSync(target)) {
+        if (allowMissingTutorialMedia && tutorialMedia.has(pathname)) {
+          missingTutorialMedia.add(pathname);
+          continue;
+        }
         errors.push(`${relative}: missing target: ${href}`);
         continue;
       }
@@ -66,10 +76,14 @@ export function checkSite(directory, configuration = site) {
     }
   }
   if (errors.length) throw new Error(`Documentation link validation failed:\n${errors.join('\n')}`);
-  return { pages: files.length, links: checked };
+  return { pages: files.length, links: checked, missingTutorialMedia: missingTutorialMedia.size };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  const result = checkSite(fileURLToPath(new URL('../dist/', import.meta.url)));
+  const args = process.argv.slice(2);
+  if (args.some((arg) => arg !== '--without-tutorial-media')) throw new Error('Unsupported link-check option.');
+  const result = checkSite(fileURLToPath(new URL('../dist/', import.meta.url)), site,
+    { allowMissingTutorialMedia: args.includes('--without-tutorial-media') });
   console.log(`Validated ${result.pages} HTML pages and ${result.links} internal links/assets.`);
+  if (args.length) console.log(`Non-publishing validation: ${result.missingTutorialMedia} pinned tutorial media targets not installed. Publication requires media verification.`);
 }

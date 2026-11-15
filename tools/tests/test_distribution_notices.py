@@ -88,6 +88,15 @@ def test_npm_fails_explicitly_for_incomplete_installed_components(tmp_path: Path
     assert result.stderr
 
 
+def test_strict_notice_failure_identifies_the_exact_unresolved_components(tmp_path: Path) -> None:
+    npm_fixture(tmp_path, legal=False)
+    result = invoke("npm", "--root", str(tmp_path), "--output", str(tmp_path / "output"), "--strict")
+    assert result.returncode == 1
+    assert "Unresolved: example@1.0.0" in result.stderr
+    assert "declared license: MIT" in result.stderr
+    assert "missing legal text" in result.stderr
+
+
 def test_absent_optional_package_is_explicit_not_a_claim_of_legal_clearance(tmp_path: Path) -> None:
     npm_fixture(tmp_path)
     lock_path = tmp_path / "package-lock.json"
@@ -102,6 +111,169 @@ def test_absent_optional_package_is_explicit_not_a_claim_of_legal_clearance(tmp_
     inventory = json.loads((output / "inventory.json").read_text(encoding="utf-8"))
     assert inventory["completeDistributionClearance"] is False
     assert "Not installed" in inventory["components"][1]["status"]
+
+def supplemental_fixture(root: Path) -> Path:
+    directory = root / "notices"
+    licenses = directory / "licenses"
+    licenses.mkdir(parents=True)
+    content = b"Original upstream fixture legal text\n"
+    (licenses / "example.txt").write_bytes(content)
+    manifest = directory / "manifest.json"
+    manifest.write_text(json.dumps({
+        "schemaVersion": 1,
+        "components": [{
+            "name": "example", "version": "1.0.0", "license": "MIT",
+            "file": "licenses/example.txt", "sha256": hashlib.sha256(content).hexdigest(),
+            "source": "https://raw.githubusercontent.com/example/project/" + "a" * 40 + "/LICENSE",
+        }],
+    }), encoding="utf-8")
+    return manifest
+
+
+def test_npm_retains_checksum_pinned_supplemental_text_and_provenance(tmp_path: Path) -> None:
+    npm_fixture(tmp_path, legal=False)
+    manifest = supplemental_fixture(tmp_path)
+    output = tmp_path / "output"
+    result = invoke("npm", "--root", str(tmp_path), "--output", str(output),
+                    "--supplemental-notices", str(manifest), "--strict")
+    assert result.returncode == 0, result.stderr
+    inventory = json.loads((output / "inventory.json").read_text(encoding="utf-8"))
+    assert inventory["unresolved"] == 0
+    assert inventory["completeDistributionClearance"] is False
+    record = inventory["components"][0]["texts"][0]
+    entry = json.loads(manifest.read_text(encoding="utf-8"))["components"][0]
+    assert record["source"] == entry["source"]
+    assert record["sha256"] == entry["sha256"]
+    assert inventory["sourceManifests"]["manifest.json"] == hashlib.sha256(manifest.read_bytes()).hexdigest()
+    assert b"Original upstream fixture legal text" in (output / "NOTICE").read_bytes()
+    assert invoke("npm", "--root", str(tmp_path), "--output", str(output), "--strict").returncode != 0
+
+
+@pytest.mark.parametrize("failure", [
+    "checksum", "version", "license", "traversal", "missing", "moving-source", "duplicate",
+])
+def test_npm_supplements_do_not_relax_exact_component_or_source_checks(tmp_path: Path, failure: str) -> None:
+    npm_fixture(tmp_path, legal=False)
+    manifest = supplemental_fixture(tmp_path)
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    entry = data["components"][0]
+    if failure == "checksum":
+        entry["sha256"] = "0" * 64
+    elif failure == "version":
+        entry["version"] = "2.0.0"
+    elif failure == "license":
+        entry["license"] = "ISC"
+    elif failure == "traversal":
+        entry["file"] = "../../LICENSE"
+    elif failure == "missing":
+        (manifest.parent / entry["file"]).unlink()
+    elif failure == "moving-source":
+        entry["source"] = "https://raw.githubusercontent.com/example/project/main/LICENSE"
+    elif failure == "duplicate":
+        data["components"].append(dict(entry))
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    result = invoke("npm", "--root", str(tmp_path), "--output", str(tmp_path / "output"),
+                    "--supplemental-notices", str(manifest), "--strict")
+    assert result.returncode != 0
+    assert result.stderr
+
+
+def test_npm_supplements_never_replace_packaged_original_legal_texts(tmp_path: Path) -> None:
+    npm_fixture(tmp_path)
+    manifest = supplemental_fixture(tmp_path)
+    output = tmp_path / "output"
+    result = invoke("npm", "--root", str(tmp_path), "--output", str(output),
+                    "--supplemental-notices", str(manifest), "--strict")
+    assert result.returncode == 0, result.stderr
+    notice = (output / "NOTICE").read_bytes()
+    assert b"Fixture legal text" in notice
+    assert b"Original upstream fixture legal text" not in notice
+
+
+def static_distribution_fixture(root: Path, *, shipped_legal: bool = True) -> tuple[Path, Path]:
+    npm_fixture(root, legal=shipped_legal)
+    build_only = root / "node_modules" / "build-only"
+    build_only.mkdir()
+    (build_only / "package.json").write_text(
+        '{"name":"build-only","version":"2.0.0","license":"MIT"}', encoding="utf-8",
+    )
+    lockfile = root / "package-lock.json"
+    lock = json.loads(lockfile.read_text(encoding="utf-8"))
+    lock["packages"]["node_modules/build-only"] = {"version": "2.0.0", "license": "MIT"}
+    lockfile.write_text(json.dumps(lock), encoding="utf-8")
+    site = root / "dist"
+    site.mkdir()
+    (site / "index.html").write_text('<script src="app.js"></script>', encoding="utf-8")
+    (site / "app.js").write_text('console.log("fixture");', encoding="utf-8")
+    manifest = root / "published-files.json"
+    manifest.write_text(json.dumps({
+        "schemaVersion": 1, "kind": "kognition-static-pages-npm",
+        "lockfileSHA256": hashlib.sha256(lockfile.read_bytes()).hexdigest(),
+        "packageJsonSHA256": hashlib.sha256((root / "package.json").read_bytes()).hexdigest(),
+        "packages": ["node_modules/example"],
+        "files": [{
+            "path": name, "sha256": hashlib.sha256((site / name).read_bytes()).hexdigest(),
+            "packages": ["node_modules/example"], "origin": "vite-client",
+        } for name in ("app.js", "index.html")],
+    }), encoding="utf-8")
+    return site, manifest
+
+
+def test_static_publication_notices_cover_shipped_packages_without_claiming_build_tool_clearance(tmp_path: Path) -> None:
+    site, manifest = static_distribution_fixture(tmp_path)
+    result = invoke("npm", "--root", str(tmp_path), "--output", str(site / "third-party"),
+                    "--distribution-root", str(site), "--distribution-manifest", str(manifest), "--strict")
+    assert result.returncode == 0, result.stderr
+    inventory = json.loads((site / "third-party" / "inventory.json").read_text(encoding="utf-8"))
+    assert inventory["scope"].startswith("Published static-site npm dependencies")
+    assert [entry["component"] for entry in inventory["components"]] == ["example"]
+    assert inventory["unresolved"] == 0
+    assert inventory["completeDistributionClearance"] is False
+    assert inventory["publicationEvidence"]["filesVerified"] == 2
+    assert inventory["publicationEvidence"]["manifestSHA256"] == hashlib.sha256(manifest.read_bytes()).hexdigest()
+    assert invoke("npm", "--root", str(tmp_path), "--output", str(tmp_path / "build-inventory"),
+                  "--strict").returncode == 1, "The complete build-tool gate must retain its original strict behavior"
+
+
+@pytest.mark.parametrize("failure", [
+    "changed-file", "unlisted-file", "missing-file", "unknown-package", "package-omission",
+    "lockfile-drift", "path-traversal", "native-code", "unshipped-package-in-list",
+])
+def test_static_publication_rejects_stale_incomplete_or_unaccounted_evidence(tmp_path: Path, failure: str) -> None:
+    site, manifest = static_distribution_fixture(tmp_path)
+    evidence = json.loads(manifest.read_text(encoding="utf-8"))
+    if failure == "changed-file":
+        (site / "app.js").write_text("changed", encoding="utf-8")
+    elif failure == "unlisted-file":
+        (site / "hidden.js").write_text("unaccounted", encoding="utf-8")
+    elif failure == "missing-file":
+        (site / "app.js").unlink()
+    elif failure == "unknown-package":
+        evidence["packages"] = ["node_modules/unknown"]
+    elif failure == "package-omission":
+        evidence["packages"] = []
+    elif failure == "lockfile-drift":
+        (tmp_path / "package-lock.json").write_text("{}", encoding="utf-8")
+    elif failure == "path-traversal":
+        evidence["files"][0]["path"] = "../package.json"
+    elif failure == "native-code":
+        (site / "app.js").write_bytes(b"\x7fELF" + b"\0" * 8)
+        evidence["files"][0]["sha256"] = hashlib.sha256((site / "app.js").read_bytes()).hexdigest()
+    elif failure == "unshipped-package-in-list":
+        evidence["packages"].append("node_modules/build-only")
+    manifest.write_text(json.dumps(evidence), encoding="utf-8")
+    result = invoke("npm", "--root", str(tmp_path), "--output", str(site / "third-party"),
+                    "--distribution-root", str(site), "--distribution-manifest", str(manifest), "--strict")
+    assert result.returncode != 0
+    assert result.stderr
+
+
+def test_static_publication_still_blocks_missing_legal_text_for_a_shipped_package(tmp_path: Path) -> None:
+    site, manifest = static_distribution_fixture(tmp_path, shipped_legal=False)
+    result = invoke("npm", "--root", str(tmp_path), "--output", str(site / "third-party"),
+                    "--distribution-root", str(site), "--distribution-manifest", str(manifest), "--strict")
+    assert result.returncode == 1
+    assert "Unresolved: example@1.0.0" in result.stderr
 
 
 def test_python_uses_recorded_legal_files_and_reports_missing_texts(tmp_path: Path) -> None:
