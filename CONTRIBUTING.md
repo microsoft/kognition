@@ -89,6 +89,19 @@ to an HTTPS origin and `DOCS_BASE_PATH` to an absolute path for another approved
 target. The workflow retains dependency legal texts with `npm run notices`
 before uploading a deployment artifact. Missing attribution blocks publication.
 
+The application job is named **Build application binaries**. The separate
+Documentation workflow uses **Validate documentation and notices** and
+**Deploy documentation to Pages**. Their existing YAML job IDs remain stable.
+If branch protection requires checks by display name, an administrator must
+update the required names when adopting these labels.
+
+The documentation job writes a final GitHub job summary even when validation
+fails. It lists actual passed, failed, skipped or cancelled steps, includes the
+exact unresolved components from the notice inventory and distinguishes
+disabled publishing from validation failures. A successful website build does
+not imply successful notices or deployment. The summary never bypasses a
+failed check or changes the publication opt-in.
+
 Some upstream npm packages omit standalone license files. The website retains
 their original legal texts with exact package versions, immutable upstream
 commit URLs and SHA256 hashes in `website/notices/manifest.json`. Notice
