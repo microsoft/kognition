@@ -15,7 +15,10 @@ import (
 
 	"github.com/kognition-ai/kognition/internal/k8s/activation"
 	"github.com/kognition-ai/kognition/internal/k8s/installation"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -42,6 +45,40 @@ func runFreshRecovery(arguments []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+const activationTransactionAnnotation = "kognition.dev/activation-transaction"
+
+// verifyFreshNeverActivated proves the controller is stopped and holds no activation grants
+// when no activation journal exists to certify that state.
+func verifyFreshNeverActivated(ctx context.Context, admin client.Client, manifest activation.Manifest) error {
+	deployment := &appsv1.Deployment{}
+	if err := admin.Get(ctx, client.ObjectKey{Namespace: manifest.Namespace, Name: manifest.Deployment}, deployment); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+	} else if (deployment.Spec.Replicas != nil && *deployment.Spec.Replicas != 0) || deployment.Status.Replicas != 0 {
+		return errors.New("fresh recovery found a running controller without an activation transaction; scale it down and use the existing-release recovery workflow")
+	}
+	roles := &rbacv1.RoleBindingList{}
+	if err := admin.List(ctx, roles); err != nil {
+		return err
+	}
+	for _, binding := range roles.Items {
+		if _, found := binding.Annotations[activationTransactionAnnotation]; found {
+			return fmt.Errorf("fresh recovery found controller grant RoleBinding %s/%s without an activation transaction", binding.Namespace, binding.Name)
+		}
+	}
+	clusters := &rbacv1.ClusterRoleBindingList{}
+	if err := admin.List(ctx, clusters); err != nil {
+		return err
+	}
+	for _, binding := range clusters.Items {
+		if _, found := binding.Annotations[activationTransactionAnnotation]; found {
+			return fmt.Errorf("fresh recovery found controller grant ClusterRoleBinding %s without an activation transaction", binding.Name)
+		}
+	}
+	return nil
 }
 
 func recoverFresh(ctx context.Context, operations *installation.Kubernetes, config *rest.Config, originalPath, planDigest, authorization string, stdout, stderr io.Writer) error {
@@ -73,7 +110,18 @@ func recoverFresh(ctx context.Context, operations *installation.Kubernetes, conf
 		return errors.New("fresh recovery requires a first-install authorization record")
 	}
 	transaction := &corev1.ConfigMap{}
-	if err := operations.Admin.Get(ctx, activation.TransactionKey(record.Namespace, authorizationRecord.Target), transaction); err != nil {
+	if err := operations.Admin.Get(ctx, activation.TransactionKey(record.Namespace, authorizationRecord.Target), transaction); apierrors.IsNotFound(err) {
+		// Activation mutates the cluster only after it creates the transaction journal, so a
+		// missing journal means the controller was never activated (or recovery already completed).
+		if err := verifyFreshNeverActivated(ctx, operations.Admin, operations.Manifest); err != nil {
+			return err
+		}
+		if err := operations.FreshWorkloadsEmpty(ctx, expected, nil, "", false); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintln(stderr, "No activation transaction exists; retiring the installation claim without reactivating the controller.")
+		return execute("recover", originalPath, proof.ClaimUID, "", "", stdout, stderr)
+	} else if err != nil {
 		return err
 	}
 	var persisted activation.Audit
