@@ -69,7 +69,7 @@ func runLocalUIServer(ctx context.Context, opts localUIServerOptions) error {
 
 	if opts.openBrowser {
 		if err := browser.OpenURL(url); err != nil {
-			fmt.Fprintf(errOut, "warning: could not open browser: %v\n", err)
+			_, _ = fmt.Fprintf(errOut, "warning: could not open browser: %v\n", err)
 		}
 	}
 
