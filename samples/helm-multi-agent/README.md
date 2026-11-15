@@ -4,10 +4,11 @@ A Helm chart that deploys a **multi-agent content-creation pipeline** on Kogniti
 
 ## Architecture
 
-```
-researcher ──→ writer ──→ reviewer
-                 ↑            │
-                 └────────────┘  (conditional: revision needed)
+```mermaid
+flowchart LR
+    researcher --> writer
+    writer --> reviewer
+    reviewer -->|conditional: revision needed| writer
 ```
 
 - **Researcher** — gathers information on a topic
