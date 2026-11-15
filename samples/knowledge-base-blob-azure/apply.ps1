@@ -31,13 +31,13 @@ $serviceNs = "samples-azure-blob-services"
 $pgSecret  = "kognition-kb-pgvector"
 $sourceSecret = if ($env:KOGNITION_PLATFORM_RELEASE) { "$env:KOGNITION_PLATFORM_RELEASE-kb-pgvector" } else { $pgSecret }
 
-# Azurite well-known dev account. The key is PUBLIC (shipped with Azurite) and
-# is not a secret.
-$azAccount = "devstoreaccount1"
-$azKey     = "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
-$inClusterConn = "DefaultEndpointsProtocol=http;AccountName=$azAccount;AccountKey=$azKey;BlobEndpoint=http://azurite.$serviceNs.svc.cluster.local:10000/$azAccount;"
+# Azurite account: the name is fixed, the key is a per-installation random value
+# kept in the `azurite-account` Secret (never committed).
+$azKey          = Initialize-AzuriteAccount -Namespace $serviceNs
+$inClusterConn  = New-AzuriteConnectionString -AccountKey $azKey -BlobEndpoint "http://azurite.$serviceNs.svc.cluster.local:10000"
 $localPort = 10001
-$localConn = "DefaultEndpointsProtocol=http;AccountName=$azAccount;AccountKey=$azKey;BlobEndpoint=http://127.0.0.1:$localPort/$azAccount;"
+$localConn      = New-AzuriteConnectionString -AccountKey $azKey -BlobEndpoint "http://127.0.0.1:$localPort"
+$azAccount      = $script:AzuriteAccountName
 
 # --- 0. Best-effort: ensure the Azurite image is in the kind cluster ---------
 if ((Get-Command kind -ErrorAction SilentlyContinue) -and (Get-Command docker -ErrorAction SilentlyContinue)) {

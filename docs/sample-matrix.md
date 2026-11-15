@@ -267,7 +267,7 @@ previously created named runs or alter their historical outcomes.
 
 | Component | Reviewed source and process contract |
 | --- | --- |
-| `azuriteImage` | Mirror the reviewed Azurite image. Args: `azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --location /data --skipApiVersionCheck --disableProductStyleUrl`. Service `azurite:10000`; public emulator account `devstoreaccount1`. |
+| `azuriteImage` | Mirror the reviewed Azurite image. Args: `azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --location /data --skipApiVersionCheck --disableProductStyleUrl`. Service `azurite:10000`; account `devstoreaccount1` with a per-installation random key from Secret `azurite-account` (`AZURITE_ACCOUNTS`). |
 | `s3Image` | Build [the checksummed SeaweedFS 4.49 recipe](../samples/knowledge-base-blob-s3/Dockerfile). Entrypoint `/weed`; args `mini -dir=/data -admin.ui=false -s3.port.iceberg=0 -s3.port.lance=0 -master.volumeSizeLimitMB=16 -volume.max=4`. `AWS_ACCESS_KEY_ID=minioadmin`, `AWS_SECRET_ACCESS_KEY=minioadmin`, `S3_BUCKET=product-docs`; public sample credentials, authenticated S3. Pod port 8333, compatibility Service `minio:9000`. No obsolete MinIO or unverified upstream image fallback. |
 | `docsImage` | Shared reviewed Python 3.12 image for both docs and Tool HTTP servers. `python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1` is compatible by source/command inspection; neither fixture uses Alpine-specific packages or commands. Docs: `python -m http.server 8080 --directory /docs`, ConfigMap at `/docs`, Service `kognition-docs:80`. Tool sandbox: `python /app/server.py`, ConfigMap at `/app`, Service `tool-sandbox:8080`. Both run as UID 65532 and use only the standard library. |
 

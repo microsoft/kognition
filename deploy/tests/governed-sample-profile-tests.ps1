@@ -317,7 +317,7 @@ AZURE_CLIENT_SECRET=fake-test-only
 
     # Native tool boundary doubles preserve the public orchestration and renderer.
     function Invoke-AzureSampleFixtureUpload {
-        param($Provider, $Namespace, $Python)
+        param($Provider, $Namespace, $Python, $AccountKey)
         $global:SampleProfileTestEvents.Add(@{ command = "verified-upload $Provider $Namespace"; documents = @() })
         if ($global:SampleProfileTestFailure -eq 'upload') { throw 'Verified upload failed.' }
     }
@@ -338,7 +338,7 @@ AZURE_CLIENT_SECRET=fake-test-only
             $credentialEvent = @($events | Where-Object { @($_.documents | Where-Object { $_.kind -eq 'SecretRef' }).Count -gt 0 })[0]
             Assert-True ([array]::IndexOf($events, $uploadEvent) -lt [array]::IndexOf($events, $credentialEvent) -and [array]::IndexOf($events, $credentialEvent) -lt [array]::IndexOf($events, $firstKB)) "$source verified corpus and credentials precede KB creation."
         }
-        Assert-True (@($events | ForEach-Object { $_.documents } | Where-Object { $_.kind -eq 'Secret' -or ($_.kind -eq 'SecretRef' -and $_.metadata.name -eq 'kognition-kb-pgvector') }).Count -eq 0) 'Governed paths never copy a raw/admin database credential.'
+        Assert-True (@($events | ForEach-Object { $_.documents } | Where-Object { ($_.kind -eq 'Secret' -and $_.metadata.name -ne 'azurite-account') -or ($_.kind -eq 'SecretRef' -and $_.metadata.name -eq 'kognition-kb-pgvector') }).Count -eq 0) 'Governed paths never copy a raw/admin database credential.'
     }
     foreach ($failure in @('rollout', 'upload', 'credentials')) {
         $global:SampleProfileTestEvents.Clear()

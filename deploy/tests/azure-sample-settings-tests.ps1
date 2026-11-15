@@ -120,7 +120,7 @@ try {
                 foreach ($uploadExit in @(0, 7)) {
                     $failure = $null
                     try {
-                        Invoke-AzureSampleFixtureUpload -Provider $provider -Namespace 'selected-fixture-namespace' -Python 'Invoke-UploadFixture'
+                        Invoke-AzureSampleFixtureUpload -Provider $provider -Namespace 'selected-fixture-namespace' -Python 'Invoke-UploadFixture' -AccountKey ([Convert]::ToBase64String([byte[]](1..64)))
                     } catch { $failure = $_.Exception.Message }
                     Assert-Equal ([bool]$failure) ($uploadExit -ne 0) "$provider uploads propagate interpreter failures"
                     if ($uploadExit -ne 0) { Assert-Equal ($failure -like '*no KnowledgeBase was applied*') $true 'Failed uploads retain the installation safety gate' }

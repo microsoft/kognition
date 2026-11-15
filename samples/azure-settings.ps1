@@ -266,8 +266,53 @@ function Assert-AzureSampleBackendPrerequisites {
     }
 }
 
+$script:AzuriteAccountName = 'devstoreaccount1'
+$script:AzuriteAccountSecret = 'azurite-account'
+
+# Azurite is configured with a per-installation random account key held in a Secret,
+# so no storage key is ever committed or shared between installations.
+function Initialize-AzuriteAccount {
+    param([Parameter(Mandatory)][string]$Namespace)
+
+    & kubectl get namespace $Namespace *> $null
+    if ($LASTEXITCODE -ne 0) {
+        & kubectl create namespace $Namespace | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Could not create the Azurite fixture namespace $Namespace." }
+    }
+    $existing = (& kubectl get secret $script:AzuriteAccountSecret -n $Namespace -o json --ignore-not-found | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "Could not inspect the Azurite account Secret in $Namespace." }
+    if ($existing) {
+        $secret = $existing | ConvertFrom-Json
+        $data = $secret.PSObject.Properties['data']
+        $stored = if ($data -and $data.Value.PSObject.Properties['accountKey']) { $data.Value.accountKey } else { $null }
+        if ($stored) { return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($stored)) }
+    }
+    $bytes = New-Object byte[] 64
+    $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $generator.GetBytes($bytes) } finally { $generator.Dispose() }
+    $key = [Convert]::ToBase64String($bytes)
+    ConvertTo-AzureSampleYaml -Data @{
+        apiVersion = 'v1'; kind = 'Secret'; type = 'Opaque'
+        metadata = @{ name = $script:AzuriteAccountSecret; namespace = $Namespace
+            labels = @{ 'app.kubernetes.io/name' = 'azurite' } }
+        stringData = @{ accounts = "$($script:AzuriteAccountName):$key"; accountKey = $key }
+    } | & kubectl apply -f - | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not store the Azurite account Secret in $Namespace." }
+    return $key
+}
+
+function New-AzuriteConnectionString {
+    param([Parameter(Mandatory)][string]$AccountKey, [Parameter(Mandatory)][string]$BlobEndpoint)
+
+    return "DefaultEndpointsProtocol=http;AccountName=$($script:AzuriteAccountName);AccountKey=$AccountKey;BlobEndpoint=$BlobEndpoint/$($script:AzuriteAccountName);"
+}
+
 function Invoke-AzureSampleFixtureUpload {
-    param([ValidateSet('azure', 's3')][string]$Provider, [string]$Namespace, [string]$Python)
+    param([ValidateSet('azure', 's3')][string]$Provider, [string]$Namespace, [string]$Python, [string]$AccountKey)
+
+    if ($Provider -eq 'azure' -and [string]::IsNullOrWhiteSpace($AccountKey)) {
+        throw 'The Azure fixture upload requires the installation-specific Azurite account key.'
+    }
 
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     try { $listener.Start(); $port = $listener.LocalEndpoint.Port } finally { $listener.Stop() }
@@ -281,7 +326,7 @@ function Invoke-AzureSampleFixtureUpload {
     $service = if ($Provider -eq 'azure') { 'azurite' } else { 'minio' }
     $remotePort = if ($Provider -eq 'azure') { 10000 } else { 9000 }
     if ($Provider -eq 'azure') {
-        $values['KOGNITION_BLOB_CONNECTION_STRING'] = "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:$port/devstoreaccount1;"
+        $values['KOGNITION_BLOB_CONNECTION_STRING'] = New-AzuriteConnectionString -AccountKey $AccountKey -BlobEndpoint "http://127.0.0.1:$port"
     } else {
         $values['KOGNITION_S3_ENDPOINT'] = "http://127.0.0.1:$port"
         $values['KOGNITION_S3_ACCESS_KEY'] = 'minioadmin'
@@ -345,13 +390,14 @@ function Invoke-AzureSampleKnowledgeInstall {
         & $python -c "import $dependency"
         if ($LASTEXITCODE -ne 0) { throw "Install the $dependency upload SDK in the selected Python environment before sample installation." }
     }
+    $azuriteKey = if ($Source -eq 'azure') { Initialize-AzuriteAccount -Namespace $serviceNamespace } else { $null }
     Invoke-AzureSampleApply -Path (Join-Path $SampleDirectory $fixture.file)
     & kubectl rollout status "deployment/$($fixture.deployment)" -n $serviceNamespace --timeout=300s
     if ($LASTEXITCODE -ne 0) { throw "$Source fixture did not become ready; no KnowledgeBase was applied." }
     if ($Source -ne 'docs') {
-        Invoke-AzureSampleFixtureUpload -Provider $Source -Namespace $serviceNamespace -Python $python
+        Invoke-AzureSampleFixtureUpload -Provider $Source -Namespace $serviceNamespace -Python $python -AccountKey $azuriteKey
         $payload = if ($Source -eq 'azure') {
-            @{ connectionString = "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite.$serviceNamespace.svc.cluster.local:10000/devstoreaccount1;" }
+            @{ connectionString = New-AzuriteConnectionString -AccountKey $azuriteKey -BlobEndpoint "http://azurite.$serviceNamespace.svc.cluster.local:10000" }
         } else { @{ accessKeyId = 'minioadmin'; secretAccessKey = 'minioadmin' } }
         $name = if ($Source -eq 'azure') { 'azurite-blob-creds' } else { 's3-blob-creds' }
         $key = if ($Source -eq 'azure') { 'connectionString' } else { 'accessKeyId' }

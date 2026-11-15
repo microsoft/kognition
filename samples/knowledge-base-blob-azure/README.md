@@ -30,6 +30,9 @@ Only the storage portion avoids an external Azure service.
 1. `azurite.yaml` — deploys Azurite (Deployment + Service) with
    `--disableProductStyleUrl` so the in-cluster Service DNS name resolves the
    account from the URL path (otherwise Azurite 404s domain-host requests).
+   The installer first creates the `azurite-account` Secret with a random
+   per-installation account key, and Azurite reads it through
+   `AZURITE_ACCOUNTS`; no storage key is committed to the repository.
 2. `apply.ps1` port-forwards Azurite and uploads
    [`samples/docs/*.md`](../docs/README.md) into the `product-docs` container
    under `mark7/`, then creates the `azurite-blob-creds` SecretRef (a
