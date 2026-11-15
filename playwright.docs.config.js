@@ -3,7 +3,9 @@
 
 const { defineConfig } = require("@playwright/test");
 const path = require("node:path");
-const base = process.env.DOCS_BASE_PATH || "/kognition/";
+const configuredBase = process.env.DOCS_BASE_PATH || "/kognition/";
+// website/site.mjs normalizes DOCS_BASE_PATH to end with a slash; do the same here.
+const base = configuredBase.endsWith("/") ? configuredBase : `${configuredBase}/`;
 
 module.exports = defineConfig({
   testDir: "./website/browser",

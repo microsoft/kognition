@@ -2,7 +2,8 @@
 // Licensed under the MIT License.
 
 const { test, expect } = require("@playwright/test");
-const base = process.env.DOCS_BASE_PATH || "/kognition/";
+const configuredBase = process.env.DOCS_BASE_PATH || "/kognition/";
+const base = configuredBase.endsWith("/") ? configuredBase : `${configuredBase}/`;
 const route = `${base}guides/video-tutorial/`;
 
 test("the tutorial has an accessible same-origin player, transcript, downloads and no autoplay", async ({ page }) => {

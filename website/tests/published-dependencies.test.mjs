@@ -106,7 +106,7 @@ test('inline executable scripts need chunk or renderer-package evidence and are 
   });
   writeFileSync(path.join(directory, 'index.html'), [
     '<script src="/_astro/app.js"></script>',
-    '<script>window.theme   =  () => 1;</script>',
+    '<script>window.theme = () => 1;</script>',
     `<script type="module">${chunkCode}\n</script>`,
     '<script type="application/ld+json">{"@type":"WebSite"}</script>',
   ].join(''));
@@ -114,9 +114,75 @@ test('inline executable scripts need chunk or renderer-package evidence and are 
   const page = evidence.files.find((file) => file.path === 'index.html');
   assert(page.packages.includes('node_modules/@astrojs/starlight'));
   assert(page.packages.includes('node_modules/am-i-vibing'), 'Inline chunk source packages are attributed to the page.');
-  for (const body of ['fetch("https://example.test/x")', 'window.theme = () => 2;']) {
+  for (const body of [
+    'fetch("https://example.test/x")', 'window.theme = () => 2;',
+    'window.theme   =  () => 1;', 'window.theme = () =>\n1;',
+  ]) {
     writeFileSync(path.join(directory, 'index.html'), `<script>${body}</script>`);
     assert.throws(() => createPublishedManifest(inputs), /Inline executable script has no source-package evidence/, body);
+  }
+});
+
+test('inline code that differs from provider code only inside a string literal is not attributed to the provider', (t) => {
+  const { root, directory, inputs } = fixture(t);
+  const authored = path.join(root, 'node_modules', '@astrojs', 'starlight', 'components');
+  mkdirSync(authored, { recursive: true });
+  writeFileSync(path.join(authored, 'Beacon.astro'), '<script is:inline>\nsend("a b", `x  y`); // note one\n</script>');
+  writeFileSync(path.join(directory, 'index.html'), '<script>send("a b", `x  y`); // note one</script>');
+  createPublishedManifest(inputs);
+  for (const body of ['send("a  b", `x  y`); // note one', 'send("a b", `x y`); // note one', 'send("a b", `x  y`); // note  one']) {
+    writeFileSync(path.join(directory, 'index.html'), `<script>${body}</script>`);
+    assert.throws(() => createPublishedManifest(inputs), /no source-package evidence/, body);
+  }
+});
+
+test('executable HTML attributes are rejected because they have no source-package evidence', (t) => {
+  const { directory, inputs } = fixture(t);
+  const base = '<script src="/_astro/app.js"></script>';
+  for (const html of [
+    '<img src="/x.png" onerror="fetch(1)">', '<button ONCLICK="go()">x</button>',
+    '<a href="javascript:go()">x</a>', '<a href="  javascript:go()">x</a>',
+  ]) {
+    writeFileSync(path.join(directory, 'index.html'), base + html);
+    assert.throws(() => createPublishedManifest(inputs), /Executable HTML attribute/, html);
+  }
+  writeFileSync(path.join(directory, 'index.html'), `${base}<a href="/guide/" class="once" data-online="1">ok</a>`);
+  createPublishedManifest(inputs);
+});
+
+test('external stylesheet imports and url() targets are rejected in emitted CSS and inline styles', (t) => {
+  const { directory, inputs } = fixture(t);
+  const css = path.join(directory, '_astro', 'common.css');
+  for (const body of [
+    '@import "https://cdn.example.test/unaccounted.css";',
+    "@import 'https://cdn.example.test/unaccounted.css';",
+    '@import url(https://cdn.example.test/unaccounted.css);',
+    '@import url( "//cdn.example.test/unaccounted.css" ) screen;',
+    '@IMPORT "\\68ttps://cdn.example.test/unaccounted.css";',
+    '/* note */ body{color:red} @import "https://cdn.example.test/a.css";',
+    'a{background:url(https://cdn.example.test/a.png)}',
+    'a{background:url("//cdn.example.test/a.png")}',
+    '@media print{@import "https://cdn.example.test/a.css";}',
+  ]) {
+    writeFileSync(css, body);
+    assert.throws(() => createPublishedManifest(inputs), /External stylesheet content/, body);
+  }
+  for (const body of [
+    '/* @import "https://cdn.example.test/a.css"; */ body{color:red}',
+    'a::after{content:"@import url(https://cdn.example.test/a.css)"}',
+    '@import "./local.css"; a{background:url(/img/a.png)}',
+    'a{background:url(data:image/svg+xml;base64,AAAA)}',
+  ]) {
+    writeFileSync(css, body);
+    createPublishedManifest(inputs);
+  }
+  writeFileSync(css, 'body{color:black}');
+  for (const html of [
+    '<style>@import "https://cdn.example.test/a.css";</style>',
+    '<div style="background:url(https://cdn.example.test/a.png)"></div>',
+  ]) {
+    writeFileSync(path.join(directory, 'index.html'), `<script src="/_astro/app.js"></script>${html}`);
+    assert.throws(() => createPublishedManifest(inputs), /External stylesheet content/, html);
   }
 });
 

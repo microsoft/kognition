@@ -18,13 +18,89 @@ const searchCode = new Set([
 ]);
 const generatedNotices = new Set(['third-party/NOTICE', 'third-party/inventory.json']);
 const dataScriptTypes = new Set(['application/json', 'application/ld+json', 'importmap', 'speculationrules']);
-const normalizeText = (value) => value.replace(/\s+/g, ' ').trim();
+// Script bodies are compared byte for byte; only line endings and the outer whitespace may differ.
+const scriptBody = (value) => value.replace(/\r\n?/g, '\n').trim();
 // Browsers strip surrounding whitespace and embedded tabs/newlines, and treat
 // backslashes as slashes in http(s) URLs, so normalize before looking for a scheme or network path.
 const isExternalReference = (value) => {
   const url = value.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '').replace(/[\t\n\r]/g, '').replaceAll('\\', '/');
   return /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(url);
 };
+
+const unescapeCSS = (value) => value
+  .replace(/\\([0-9a-f]{1,6})[ \t\n\r\f]?/gi, (_, hex) => {
+    const code = Number.parseInt(hex, 16);
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '\ufffd';
+  })
+  .replace(/\\(.)/gs, '$1');
+
+// Returns the first external target of an @import or url() in a stylesheet, skipping comments and strings.
+export function externalCSSReference(css) {
+  const ident = /[a-z0-9_-]|\\(?:[0-9a-f]{1,6}[ \t\n\r\f]?|[^\n])|[^\u0000-\u007f]/iy;
+  const quoted = (start) => {
+    const quote = css[start];
+    let end = start + 1;
+    while (end < css.length && css[end] !== quote) end += css[end] === '\\' ? 2 : 1;
+    return { value: unescapeCSS(css.slice(start + 1, end)), end: end + 1 };
+  };
+  const external = (target) => {
+    const url = target.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '').replace(/[\t\n\r]/g, '');
+    return isExternalReference(url) ? url : undefined;
+  };
+  let importing = false;
+  for (let i = 0; i < css.length;) {
+    const char = css[i];
+    if (css.startsWith('/*', i)) {
+      const end = css.indexOf('*/', i + 2);
+      i = end < 0 ? css.length : end + 2;
+    } else if (char === '"' || char === "'") {
+      const { value, end } = quoted(i);
+      if (importing && external(value)) return value;
+      importing = false;
+      i = end;
+    } else if (char === '@') {
+      let end = i + 1;
+      for (;;) {
+        ident.lastIndex = end;
+        const match = ident.exec(css);
+        if (!match) break;
+        end = ident.lastIndex;
+      }
+      importing = unescapeCSS(css.slice(i + 1, end)).toLowerCase() === 'import';
+      i = Math.max(end, i + 1);
+    } else if (/[a-z\\]/i.test(char) || char === '-') {
+      let end = i;
+      for (;;) {
+        ident.lastIndex = end;
+        if (!ident.exec(css)) break;
+        end = ident.lastIndex;
+      }
+      end = Math.max(end, i + 1);
+      if (css[end] === '(' && unescapeCSS(css.slice(i, end)).toLowerCase() === 'url') {
+        let start = end + 1;
+        while (/\s/.test(css[start] ?? '')) start++;
+        let value;
+        if (css[start] === '"' || css[start] === "'") {
+          ({ value, end } = quoted(start));
+          const close = css.indexOf(')', end);
+          end = close < 0 ? css.length : close + 1;
+        } else {
+          const close = css.indexOf(')', start);
+          value = unescapeCSS(css.slice(start, close < 0 ? css.length : close));
+          end = close < 0 ? css.length : close + 1;
+        }
+        const target = external(value);
+        if (target && (importing || !/^data:/i.test(target))) return target;
+        importing = false;
+      }
+      i = end;
+    } else {
+      if (char === ';' || char === '{') importing = false;
+      i++;
+    }
+  }
+  return undefined;
+}
 
 function astroFiles(directory) {
   if (!existsSync(directory)) return [];
@@ -41,7 +117,7 @@ function packageScriptBodies(directory) {
   const bodies = new Set();
   for (const file of astroFiles(directory)) {
     for (const match of readFileSync(file, 'utf8').matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
-      bodies.add(normalizeText(match[1]));
+      bodies.add(scriptBody(match[1]));
     }
   }
   return bodies;
@@ -119,15 +195,14 @@ export function createPublishedManifest({ projectRoot, directory, outputs, clien
   let providerScripts;
   // An inline executable block must be a bundled chunk or a script authored by a renderer package.
   const inlineScriptSources = (body, relative) => {
-    const trimmed = body.trim();
-    const chunk = chunkModules.get(hash(trimmed));
+    const exact = scriptBody(body);
+    const chunk = chunkModules.get(hash(body.trim()));
     if (chunk) return sourcePackages(chunk, projectRoot, lock);
     providerScripts ??= [...renderer, ...expressive].map((source) =>
       ({ source, bodies: packageScriptBodies(path.join(projectRoot, source)) }));
-    const normalized = normalizeText(trimmed);
-    const sources = providerScripts.filter((provider) => provider.bodies.has(normalized)).map((provider) => provider.source);
+    const sources = providerScripts.filter((provider) => provider.bodies.has(exact)).map((provider) => provider.source);
     if (!sources.length) {
-      throw new Error(`Inline executable script has no source-package evidence: ${relative}: ${normalized.slice(0, 80)}`);
+      throw new Error(`Inline executable script has no source-package evidence: ${relative}: ${exact.slice(0, 80)}`);
     }
     return sources;
   };
@@ -137,6 +212,9 @@ export function createPublishedManifest({ projectRoot, directory, outputs, clien
     const content = readFileSync(file);
     if (/\.svg$/i.test(relative) && /<script\b|\bon[a-z]+\s*=|javascript:/i.test(content.toString('utf8'))) {
       throw new Error(`Active SVG content has no executable source provenance: ${relative}`);
+    }
+    if (/\.css$/i.test(relative) && externalCSSReference(content.toString('utf8'))) {
+      throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
     }
     let origin, sources;
     const output = outputs.get(relative);
@@ -156,6 +234,18 @@ export function createPublishedManifest({ projectRoot, directory, outputs, clien
         if (target && isExternalReference(target)) {
           throw new Error(`External executable content is outside static publication evidence: ${relative}`);
         }
+      }
+      for (const element of $('*').toArray()) {
+        for (const [name, value] of Object.entries(element.attribs ?? {})) {
+          if (/^on/i.test(name) || /^[\u0000-\u0020]*javascript:/i.test(value.replace(/[\t\n\r]/g, ''))) {
+            throw new Error(`Executable HTML attribute has no source-package evidence: ${relative}: <${element.name} ${name}>`);
+          }
+        }
+      }
+      const inlineStyles = [...$('style').toArray().map((element) => $(element).text()),
+        ...$('[style]').toArray().map((element) => $(element).attr('style'))];
+      if (inlineStyles.some((css) => externalCSSReference(css))) {
+        throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
       }
     } else if (output?.kind === 'chunk') {
       origin = 'vite-client';
