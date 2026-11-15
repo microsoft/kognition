@@ -17,6 +17,29 @@ const searchCode = new Set([
   'pagefind-component-ui.js', 'pagefind-component-ui.css',
 ]);
 const generatedNotices = new Set(['third-party/NOTICE', 'third-party/inventory.json']);
+const dataScriptTypes = new Set(['application/json', 'application/ld+json', 'importmap', 'speculationrules']);
+const normalizeText = (value) => value.replace(/\s+/g, ' ').trim();
+
+function astroFiles(directory) {
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const file = path.join(directory, entry.name);
+    if (entry.isSymbolicLink() || entry.name === 'node_modules') return [];
+    if (entry.isDirectory()) return astroFiles(file);
+    return entry.name.endsWith('.astro') ? [file] : [];
+  });
+}
+
+// Bodies of <script> blocks authored in a package's .astro sources.
+function packageScriptBodies(directory) {
+  const bodies = new Set();
+  for (const file of astroFiles(directory)) {
+    for (const match of readFileSync(file, 'utf8').matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
+      bodies.add(normalizeText(match[1]));
+    }
+  }
+  return bodies;
+}
 
 function filesIn(directory) {
   if (!existsSync(directory)) return [];
@@ -39,6 +62,9 @@ export function sourcePackages(moduleIDs, projectRoot, lock) {
     const relative = moduleID.slice(index + root.length).split('?')[0];
     const source = paths.find((candidate) => relative === candidate || relative.startsWith(`${candidate}/`));
     if (!source) throw new Error(`Bundled module has no exact lockfile entry: ${relative}`);
+    if (relative.slice(source.length + 1).includes('node_modules/')) {
+      throw new Error(`Bundled module crosses an unlisted node_modules boundary: ${relative}`);
+    }
     selected.add(source);
   }
   return [...selected].sort();
@@ -80,6 +106,25 @@ export function createPublishedManifest({ projectRoot, directory, outputs, clien
   }
   const packages = new Set();
   const files = [];
+  const chunkModules = new Map();
+  for (const output of outputs.values()) {
+    if (output.kind === 'chunk' && output.codeSHA256) chunkModules.set(output.codeSHA256, output.modules);
+  }
+  let providerScripts;
+  // An inline executable block must be a bundled chunk or a script authored by a renderer package.
+  const inlineScriptSources = (body, relative) => {
+    const trimmed = body.trim();
+    const chunk = chunkModules.get(hash(trimmed));
+    if (chunk) return sourcePackages(chunk, projectRoot, lock);
+    providerScripts ??= [...renderer, ...expressive].map((source) =>
+      ({ source, bodies: packageScriptBodies(path.join(projectRoot, source)) }));
+    const normalized = normalizeText(trimmed);
+    const sources = providerScripts.filter((provider) => provider.bodies.has(normalized)).map((provider) => provider.source);
+    if (!sources.length) {
+      throw new Error(`Inline executable script has no source-package evidence: ${relative}: ${normalized.slice(0, 80)}`);
+    }
+    return sources;
+  };
   for (const file of filesIn(directory).sort()) {
     const relative = slash(path.relative(directory, file));
     if (generatedNotices.has(relative)) continue;
@@ -94,6 +139,12 @@ export function createPublishedManifest({ projectRoot, directory, outputs, clien
       origin = 'rendered-page';
       sources = [...renderer, ...expressive];
       const $ = load(content.toString('utf8'));
+      for (const element of $('script:not([src])').toArray()) {
+        const type = ($(element).attr('type') ?? '').trim().toLowerCase();
+        if (dataScriptTypes.has(type)) continue;
+        const body = $(element).text();
+        if (body.trim()) sources.push(...inlineScriptSources(body, relative));
+      }
       for (const element of $('script[src], link[rel=stylesheet][href]').toArray()) {
         const target = $(element).attr('src') ?? $(element).attr('href');
         if (target && /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(target)) {
@@ -181,7 +232,8 @@ export default function publishedDependencies() {
             for (const output of Object.values(bundle)) {
               if (!client && !/\.css$/i.test(output.fileName)) continue;
               outputs.set(output.fileName, { kind: output.type,
-                modules: output.type === 'chunk' ? Object.keys(output.modules) : [] });
+                modules: output.type === 'chunk' ? Object.keys(output.modules) : [],
+                codeSHA256: output.type === 'chunk' ? hash(output.code.trim()) : undefined });
             }
           },
         }] });

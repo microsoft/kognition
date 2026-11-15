@@ -84,6 +84,42 @@ test('nested and query-bearing bundled modules resolve to their exact lockfile p
   assert.throws(() => sourcePackages(['/outside/node_modules/unknown/index.js'], root, lock), /outside/);
 });
 
+test('a bundled module under an unlisted nested node_modules directory is rejected, not attributed to its parent', (t) => {
+  const { root, lock } = fixture(t);
+  lock.packages['node_modules/outer'] = { version: '1.0.0' };
+  const nested = path.join(root, 'node_modules', 'outer', 'node_modules', 'inner', 'index.js');
+  assert.throws(() => sourcePackages([nested], root, lock), /unlisted node_modules boundary/);
+  assert.deepEqual(sourcePackages([path.join(root, 'node_modules', 'outer', 'lib', 'index.js')], root, lock), ['node_modules/outer']);
+  lock.packages['node_modules/outer/node_modules/inner'] = { version: '2.0.0' };
+  assert.deepEqual(sourcePackages([nested], root, lock), ['node_modules/outer/node_modules/inner']);
+});
+
+test('inline executable scripts need chunk or renderer-package evidence and are attributed to their source', (t) => {
+  const { root, directory, inputs } = fixture(t);
+  const authored = path.join(root, 'node_modules', '@astrojs', 'starlight', 'components');
+  mkdirSync(authored, { recursive: true });
+  writeFileSync(path.join(authored, 'Theme.astro'), '---\n---\n<script is:inline>\n  window.theme = () => 1;\n</script>');
+  const chunkCode = 'var a=1;console.log(a);';
+  inputs.outputs.set('_astro/inline.js', {
+    kind: 'chunk', modules: [path.join(root, 'node_modules', 'am-i-vibing', 'index.js')],
+    codeSHA256: createHash('sha256').update(chunkCode).digest('hex'),
+  });
+  writeFileSync(path.join(directory, 'index.html'), [
+    '<script src="/_astro/app.js"></script>',
+    '<script>window.theme   =  () => 1;</script>',
+    `<script type="module">${chunkCode}\n</script>`,
+    '<script type="application/ld+json">{"@type":"WebSite"}</script>',
+  ].join(''));
+  const evidence = createPublishedManifest(inputs);
+  const page = evidence.files.find((file) => file.path === 'index.html');
+  assert(page.packages.includes('node_modules/@astrojs/starlight'));
+  assert(page.packages.includes('node_modules/am-i-vibing'), 'Inline chunk source packages are attributed to the page.');
+  for (const body of ['fetch("https://example.test/x")', 'window.theme = () => 2;']) {
+    writeFileSync(path.join(directory, 'index.html'), `<script>${body}</script>`);
+    assert.throws(() => createPublishedManifest(inputs), /Inline executable script has no source-package evidence/, body);
+  }
+});
+
 test('copied scripts, unaccounted executable output and unknown generated search code block the build', (t) => {
   for (const mode of ['public-script', 'unaccounted-code', 'search-code', 'native', 'active-svg', 'external-code']) {
     const { root, directory, inputs } = fixture(t);
