@@ -45,6 +45,11 @@ vendor/
 /tools/recording/README.md
 /samples/trustworthiness/storyboard-v1.md
 
+# Legacy locations of the preparation documents above. Existing clones may still
+# hold private files at these paths, so keep them ignored after the rename.
+/.hackaton2026/
+/samples/hackathon-trustworthiness/storyboard-v1.md
+
 # OS
 .DS_Store
 Thumbs.db
