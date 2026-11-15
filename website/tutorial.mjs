@@ -93,6 +93,8 @@ export function chaptersVTT(chapters, durationSeconds) {
     `${chapter.title}\n`).join('\n');
 }
 
+const escapeMarkdown = (text) => text.replace(/[\\`*_[\]<>&|~]/g, '\\$&');
+
 export function transcriptMarkdown(captions, chapters, durationSeconds) {
   return chapters.map((chapter, index) => {
     const end = chapters[index + 1]?.startSeconds ?? durationSeconds;
@@ -101,13 +103,13 @@ export function transcriptMarkdown(captions, chapters, durationSeconds) {
     let words = [], start = 0;
     for (const cue of cues) {
       if (!words.length) start = cue.startSeconds;
-      words.push(cue.text.replace(/\s+/g, ' ').trim());
+      words.push(escapeMarkdown(cue.text.replace(/\s+/g, ' ').trim()));
       if (words.join(' ').length >= 450 && /[.!?]$/.test(cue.text.trim())) {
         paragraphs.push(`**${formatTime(start)}** ${words.join(' ')}`);
         words = [];
       }
     }
     if (words.length) paragraphs.push(`**${formatTime(start)}** ${words.join(' ')}`);
-    return `### ${formatTime(chapter.startSeconds)} ${chapter.title}\n\n${paragraphs.join('\n\n')}`;
+    return `### ${formatTime(chapter.startSeconds)} ${escapeMarkdown(chapter.title)}\n\n${paragraphs.join('\n\n')}`;
   }).join('\n\n') + '\n';
 }

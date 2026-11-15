@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { parse } from 'yaml';
+import { load } from 'cheerio';
 import { tutorial, validateTutorial, tutorialPaths, parseSubtitles, captionsVTT, chaptersVTT,
   transcriptMarkdown, formatTime } from '../tutorial.mjs';
 import { fetchTutorialAssets, verifyTutorialAssets } from '../scripts/fetch-tutorial.mjs';
@@ -44,7 +45,7 @@ test('media identity rejects moving releases, unsafe names, missing checksums an
   ]) assert.throws(() => validateTutorial({ ...tutorial, ...change }));
 });
 
-test('WebVTT captions and the searchable transcript preserve every spoken word and timestamp', () => {
+test('WebVTT captions and the searchable transcript preserve every spoken word and timestamp', async () => {
   const cues = parseSubtitles(srt, 6);
   assert.equal(cues.length, 2);
   assert.deepEqual(cues[0], { startSeconds: .25, endSeconds: 1.75, text: 'Welcome to\nKognition.' });
@@ -53,7 +54,15 @@ test('WebVTT captions and the searchable transcript preserve every spoken word a
   assert.match(chaptersVTT(chapters, 6), /00:00:03\.000 --> 00:00:06\.000\nConfigure/);
   const transcript = transcriptMarkdown(cues, chapters, 6);
   assert.match(transcript, /### 00:00 Welcome\n\n\*\*00:00\*\* Welcome to Kognition\./);
-  assert.match(transcript, /### 00:03 Configure\n\n\*\*00:04\*\* Use <read> & write\./);
+  assert.match(transcript, /### 00:03 Configure\n\n\*\*00:04\*\* Use \\<read\\> \\& write\./);
+  const { createMarkdownProcessor } = await import('@astrojs/markdown-remark');
+  const hostile = [{ startSeconds: 0, endSeconds: 5, text: 'Run <read> & *write* `code` [link](x) a_b | ~c~' }];
+  const rendered = await (await createMarkdownProcessor()).render(
+    transcriptMarkdown(hostile, [{ title: 'A <b> & *c*', startSeconds: 0 }], 5));
+  const page = load(rendered.code);
+  assert.equal(page('p').text().replace(/^\d\d:\d\d /, ''), 'Run <read> & *write* `code` [link](x) a_b | ~c~');
+  assert.equal(page('h3').text(), '00:00 A <b> & *c*');
+  assert.equal(page('read, b, em, code, a, del').length, 0);
   assert.equal(formatTime(tutorial.durationSeconds), '23:50');
   for (const invalid of [
     srt.replace('1\n', '2\n'), srt.replace('00:00:04,000', '00:00:01,000'),
