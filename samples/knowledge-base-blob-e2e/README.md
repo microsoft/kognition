@@ -197,10 +197,14 @@ kubectl -n samples-azure-blob describe knowledgebase azure-docs-kb
 
 ## Ask the agent something
 
+The profile installs `azure-docs-agent` in the `samples-azure-blob` namespace,
+so select that namespace explicitly. Otherwise the command defaults to
+`default`, where the Agent does not exist.
+
 ```powershell
 .\bin\kognitionctl.exe chat azure-docs-agent `
   "Summarise the Mark 7 launch checklist. Cite the source blobs." `
-  --mode kubernetes
+  --mode kubernetes -n samples-azure-blob
 ```
 
 **Bash (Linux/macOS):**
@@ -208,28 +212,31 @@ kubectl -n samples-azure-blob describe knowledgebase azure-docs-kb
 ```bash
 ./bin/kognitionctl chat azure-docs-agent \
   "Summarise the Mark 7 launch checklist. Cite the source blobs." \
-  --mode kubernetes
+  --mode kubernetes -n samples-azure-blob
 ```
 
 The runtime logs each tool call. The `knowledge_search` invocation
 appears with the query it sent to pgvector:
 
 ```powershell
-kubectl -n default logs deployment/agent-azure-docs-agent --tail=80 |
+kubectl -n samples-azure-blob logs deployment/agent-azure-docs-agent --tail=80 |
   Select-String "knowledge_search"
 ```
 
 **Bash (Linux/macOS):**
 
 ```bash
-kubectl -n default logs deployment/agent-azure-docs-agent --tail=80 |
+kubectl -n samples-azure-blob logs deployment/agent-azure-docs-agent --tail=80 |
   grep -F 'knowledge_search'
 ```
 
-You can also confirm rows landed in pgvector directly:
+You can also confirm rows landed in pgvector directly. The legacy database
+Secret lives in the platform namespace (`kognition-system` unless you
+installed the platform elsewhere), not in the workload namespace; replace the
+namespace below if yours differs:
 
 ```powershell
-$dsn = kubectl -n default get secret kognition-kb-pgvector `
+$dsn = kubectl -n kognition-system get secret kognition-kb-pgvector `
   -o jsonpath='{.data.connectionString}' | ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) }
 psql "$dsn" -c "SELECT kb_namespace, kb_name, source_uri, chunk_idx FROM kognition_kb_chunks WHERE kb_name = 'azure-docs-kb' LIMIT 20;"
 ```
@@ -238,7 +245,7 @@ psql "$dsn" -c "SELECT kb_namespace, kb_name, source_uri, chunk_idx FROM kogniti
 
 ```bash
 set -o pipefail
-dsn="$(kubectl -n default get secret kognition-kb-pgvector \
+dsn="$(kubectl -n kognition-system get secret kognition-kb-pgvector \
   -o jsonpath='{.data.connectionString}' |
   python3 -c 'import base64,sys; print(base64.b64decode(sys.stdin.read()).decode())')" || exit 1
 psql "$dsn" -c "SELECT kb_namespace, kb_name, source_uri, chunk_idx FROM kognition_kb_chunks WHERE kb_name = 'azure-docs-kb' LIMIT 20;"
@@ -279,8 +286,8 @@ Watch progress with:
 Use either shell:
 
 ```sh
-kubectl get kbrun -n default -w
-kubectl get kbsched -n default
+kubectl get kbrun -n samples-azure-blob -w
+kubectl get kbsched -n samples-azure-blob
 ```
 
 ## Provider mapping
