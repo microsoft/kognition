@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -24,9 +25,20 @@ type localUIServerOptions struct {
 	onListening    func(string)
 	contextLabel   string
 	requestTimeout time.Duration
+	// out and errOut are bound by the caller so a long-lived server never
+	// re-reads the process-wide os.Stdout/os.Stderr after the caller has moved on.
+	out    io.Writer
+	errOut io.Writer
 }
 
 func runLocalUIServer(ctx context.Context, opts localUIServerOptions) error {
+	out, errOut := opts.out, opts.errOut
+	if out == nil {
+		out = os.Stdout
+	}
+	if errOut == nil {
+		errOut = os.Stderr
+	}
 	addr := fmt.Sprintf("%s:%d", opts.bind, opts.port)
 	var listenConfig net.ListenConfig
 	ln, err := listenConfig.Listen(ctx, "tcp", addr)
@@ -44,20 +56,20 @@ func runLocalUIServer(ctx context.Context, opts localUIServerOptions) error {
 		ReadTimeout: opts.requestTimeout, WriteTimeout: opts.requestTimeout, IdleTimeout: 2 * opts.requestTimeout,
 	}
 
-	_, _ = fmt.Fprintf(os.Stdout, "Kognition %s listening on %s\n", opts.name, url)
+	_, _ = fmt.Fprintf(out, "Kognition %s listening on %s\n", opts.name, url)
 	if opts.contextLabel != "" {
-		_, _ = fmt.Fprintln(os.Stdout, opts.contextLabel)
+		_, _ = fmt.Fprintln(out, opts.contextLabel)
 	} else {
-		_, _ = fmt.Fprintf(os.Stdout, "Mode: %s   Namespace: %s\n", currentModeLabel(), namespace)
+		_, _ = fmt.Fprintf(out, "Mode: %s   Namespace: %s\n", currentModeLabel(), namespace)
 	}
-	_, _ = fmt.Fprintln(os.Stdout, "Press Ctrl+C to stop.")
+	_, _ = fmt.Fprintln(out, "Press Ctrl+C to stop.")
 	if opts.onListening != nil {
 		opts.onListening(url)
 	}
 
 	if opts.openBrowser {
 		if err := browser.OpenURL(url); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not open browser: %v\n", err)
+			fmt.Fprintf(errOut, "warning: could not open browser: %v\n", err)
 		}
 	}
 
@@ -72,7 +84,7 @@ func runLocalUIServer(ctx context.Context, opts localUIServerOptions) error {
 	var serveErr error
 	select {
 	case <-ctx.Done():
-		_, _ = fmt.Fprintf(os.Stdout, "\nShutting down %s...\n", opts.name)
+		_, _ = fmt.Fprintf(out, "\nShutting down %s...\n", opts.name)
 	case serveErr = <-errCh:
 	}
 

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -70,13 +71,15 @@ func (p *studioPractice) start() (string, error) {
 	done := make(chan error, 1)
 	p.done = done
 	childCtx, cancel := context.WithCancel(p.ctx)
+	stdout, stderr := os.Stdout, os.Stderr
 	go func() {
 		defer cancel()
 		done <- runLocalUIServer(childCtx, localUIServerOptions{
 			name: "Studio Practice", bind: "127.0.0.1", handler: handler,
 			contextLabel:   "Practice only: synthetic resources; no live backend or provider calls.",
 			requestTimeout: 30 * time.Second,
-			onListening:    func(address string) { ready <- address },
+			out:            stdout, errOut: stderr,
+			onListening: func(address string) { ready <- address },
 		})
 	}()
 	select {
