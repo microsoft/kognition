@@ -20,6 +20,25 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$sampleDir = $PSScriptRoot
+. (Join-Path $sampleDir '..\azure-settings.ps1')
+if (Get-AzureSampleProfile) {
+    # The governed installer calls kubectl without --kubeconfig, so scope KUBECONFIG
+    # to the explicitly selected file for the duration of the call.
+    $previousKubeconfig = $env:KUBECONFIG
+    try {
+        if ($PSBoundParameters.ContainsKey('Kubeconfig')) {
+            if (-not $Kubeconfig -or -not (Test-Path -LiteralPath $Kubeconfig -PathType Leaf)) {
+                throw "Kubeconfig file not found: $Kubeconfig"
+            }
+            $env:KUBECONFIG = (Resolve-Path -LiteralPath $Kubeconfig).Path
+        }
+        Invoke-AzureSampleKnowledgeInstall -Source s3 -SampleDirectory $sampleDir
+    } finally {
+        $env:KUBECONFIG = $previousKubeconfig
+    }
+    return
+}
 if (-not $Kubeconfig -or -not (Test-Path -LiteralPath $Kubeconfig -PathType Leaf)) {
     throw 'Pass an explicit existing -Kubeconfig, or set KUBECONFIG to the approved target file.'
 }
@@ -94,8 +113,7 @@ if ($LASTEXITCODE -ne 0) { throw "S3 fixture did not become ready" }
 
 # --- 2. Upload docs via a temporary port-forward ----------------------------
 Write-Host "== Uploading sample docs into S3 (product-docs bucket)"
-$py = if ($env:VIRTUAL_ENV) { Join-Path $env:VIRTUAL_ENV 'Scripts/python.exe' } else { 'python' }
-if (-not (Test-Path $py)) { $py = 'python' }
+$py = Resolve-AzureSamplePython
 # boto3 is required for the upload; install it into the active env if missing.
 & $py -c "import boto3" 2>$null
 if ($LASTEXITCODE -ne 0) {
@@ -116,7 +134,8 @@ foreach ($name in @('KOGNITION_S3_ENDPOINT','KOGNITION_S3_ACCESS_KEY','KOGNITION
 $pf = $null
 try {
     $forwardArguments = @('--kubeconfig', ('"{0}"' -f $kubeArguments[1]), 'port-forward', '--address=127.0.0.1', '-n', $serviceNs, 'svc/minio', "${localPort}:9000")
-    $pf = Start-Process kubectl -ArgumentList $forwardArguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $forwardOutput -RedirectStandardError $forwardError
+    $processOptions = Get-AzureSampleProcessOptions
+    $pf = Start-Process kubectl -ArgumentList $forwardArguments -PassThru @processOptions -RedirectStandardOutput $forwardOutput -RedirectStandardError $forwardError
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     while ((Get-Content -LiteralPath $forwardOutput -Raw) -notmatch "Forwarding from 127\.0\.0\.1:$localPort") {
         if ($pf.HasExited) { throw 'The owned S3 upload port-forward exited before binding.' }

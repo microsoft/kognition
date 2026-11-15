@@ -217,11 +217,15 @@ undeploy-standalone:
 # Deployment – Kubernetes mode (CRD-based, webhooks)
 # ---------------------------------------------------------------------------
 
-## deploy-kubernetes: Checked inactive bootstrap (INSTALL_PLAN required)
+## deploy-kubernetes: Install a fresh release, or use INSTALL_PLAN for an existing release
 deploy-kubernetes:
+ifneq ($(strip $(INSTALL_PLAN)),)
 	@test -n "$(INSTALL_PLAN)" || { echo "INSTALL_PLAN is required for inactive Kubernetes bootstrap."; exit 1; }
 	@test "$(INSTALL_WRITERS_FROZEN)" = "true" || { echo "INSTALL_WRITERS_FROZEN=true is required after controlled drain preparation."; exit 1; }
 	$(GOCMD) run ./tools/kognition-install bootstrap --plan "$(INSTALL_PLAN)" --writers-frozen
+else
+	@$(MAKE) quickstart
+endif
 
 ## cert-manager: Install cert-manager webhook TLS prerequisites when absent
 cert-manager:
@@ -325,65 +329,16 @@ else
 	@echo "Invalid MODE '$(MODE)'. Use MODE=standalone (default) or MODE=kubernetes."; exit 1
 endif
 
-## quickstart: One-command bootstrap — build images, install (k8s mode), and all samples
+## quickstart: Install a new Kubernetes release and start its controller after checks
 quickstart:
-	@echo "Automatic bootstrap and producer resumption are blocked during SG-05; use deploy-kubernetes with INSTALL_PLAN."; exit 1
-	@$(MAKE) docker
-	@$(MAKE) install MODE=kubernetes
-	@$(MAKE) samples-install
-	@echo ""
-	@echo "Bootstrap complete. Try:  make studio   (or)   kubectl get agents -A"
+	@test -n "$(KUBECONFIG)" -a -n "$(CHART_PACKAGE)" -a -n "$(INSTALL_VALUES)" -a -n "$(WORKLOAD_NAMESPACES)" || { echo "Set KUBECONFIG, CHART_PACKAGE, INSTALL_VALUES and WORKLOAD_NAMESPACES; see docs/getting-started/kubernetes.md."; exit 1; }
+	@test "$(INSTALL_EXCLUSIVE)" = "true" || { echo "INSTALL_EXCLUSIVE=true confirms exclusive writes to the installation namespaces."; exit 1; }
+	$(GOCMD) run ./tools/kognition-install fresh --kubeconfig "$(KUBECONFIG)" --context "$(KUBE_CONTEXT)" --chart "$(CHART_PACKAGE)" --values "$(INSTALL_VALUES)" --namespace "$(NAMESPACE)" --release "$(RELEASE)" --workload-namespaces "$(WORKLOAD_NAMESPACES)" --authority-namespace "$(if $(INSTALL_AUTHORITY_NAMESPACE),$(INSTALL_AUTHORITY_NAMESPACE),kognition-installation-authority)" --state-dir "$(if $(INSTALL_STATE),$(INSTALL_STATE),.local/kognition-install)" --replicas "$(if $(INSTALL_REPLICAS),$(INSTALL_REPLICAS),1)" --exclusive
 
-## fresh-kubernetes-demo: Reset, rebuild, install Kubernetes mode, Jaeger, samples, and a Jaeger UI port-forward
-fresh-kubernetes-demo: FRESH_IMAGE_TAG := fresh-$(shell date -u +%Y%m%d%H%M%S)
+## fresh-kubernetes-demo: Legacy alias for quickstart; never resets a cluster
 fresh-kubernetes-demo:
-	@echo "Automatic reset is blocked during SG-05; preserve the release and use deploy-kubernetes with INSTALL_PLAN after controlled drain."; exit 1
-	@echo "==> Fresh Kubernetes demo image tag: $(FRESH_IMAGE_TAG)"
-	@docker build -t kognition-k8s-controller:latest -t kognition-k8s-controller:$(APP_VERSION) -t kognition-k8s-controller:$(FRESH_IMAGE_TAG) --target k8s-controller .
-	@docker build -t kognition-memory-service:latest -t kognition-memory-service:$(APP_VERSION) -t kognition-memory-service:$(FRESH_IMAGE_TAG) --target memory-service .
-	@docker build -t kognition-memory-policy-gateway:latest -t kognition-memory-policy-gateway:$(APP_VERSION) -t kognition-memory-policy-gateway:$(FRESH_IMAGE_TAG) --target memory-policy-gateway .
-	@docker build -t kognition-tool-gateway:latest -t kognition-tool-gateway:$(APP_VERSION) -t kognition-tool-gateway:$(FRESH_IMAGE_TAG) --target tool-gateway .
-	@docker build -t kognition-model-gateway:latest -t kognition-model-gateway:$(APP_VERSION) -t kognition-model-gateway:$(FRESH_IMAGE_TAG) --target model-gateway .
-	@docker build -t kognition-agent-communication-gateway:latest -t kognition-agent-communication-gateway:$(APP_VERSION) -t kognition-agent-communication-gateway:$(FRESH_IMAGE_TAG) --target agent-communication-gateway .
-	@docker build -t kognition-intent-gateway:latest -t kognition-intent-gateway:$(APP_VERSION) -t kognition-intent-gateway:$(FRESH_IMAGE_TAG) --target intent-gateway .
-	@docker build -f runtime/agent/Dockerfile -t kognition-agent-runtime:latest -t kognition-agent-runtime:$(APP_VERSION) -t kognition-agent-runtime:$(FRESH_IMAGE_TAG) . || { \
-		if docker image inspect kognition-agent-runtime:$(APP_VERSION) >/dev/null 2>&1; then fallback=kognition-agent-runtime:$(APP_VERSION); \
-		elif docker image inspect kognition-agent-runtime:latest >/dev/null 2>&1; then fallback=kognition-agent-runtime:latest; \
-		else exit 1; fi; \
-		docker tag $$fallback kognition-agent-runtime:$(FRESH_IMAGE_TAG); \
-		echo "WARN: runtime image rebuild failed; retagged $$fallback as kognition-agent-runtime:$(FRESH_IMAGE_TAG)."; \
-	}
-	@docker build -f runtime/ingester/Dockerfile -t kognition-kb-ingester:latest -t kognition-kb-ingester:$(APP_VERSION) -t kognition-kb-ingester:$(FRESH_IMAGE_TAG) . || { \
-		if docker image inspect kognition-kb-ingester:$(APP_VERSION) >/dev/null 2>&1; then fallback=kognition-kb-ingester:$(APP_VERSION); \
-		elif docker image inspect kognition-kb-ingester:latest >/dev/null 2>&1; then fallback=kognition-kb-ingester:latest; \
-		else exit 1; fi; \
-		docker tag $$fallback kognition-kb-ingester:$(FRESH_IMAGE_TAG); \
-		echo "WARN: KB ingester image rebuild failed; retagged $$fallback as kognition-kb-ingester:$(FRESH_IMAGE_TAG)."; \
-	}
-	-@if [ -f .kognition-jaeger-port-forward.pid ]; then \
-		pid=$$(cat .kognition-jaeger-port-forward.pid 2>/dev/null); \
-		[ -n "$$pid" ] && kill $$pid 2>/dev/null || true; \
-		rm -f .kognition-jaeger-port-forward.pid; \
-	fi
-	-@$(MAKE) jaeger-uninstall
-	@$(MAKE) uninstall
-	@echo "==> Waiting for Kognition CRDs and namespace to finish deleting..."
-	@deadline=$$(( $$(date +%s) + 180 )); \
-	while :; do \
-		crds=$$(kubectl get crd -o name 2>/dev/null | grep '\.kognition\.dev$$' || true); \
-		ns=$$(kubectl get namespace $(NAMESPACE) -o name 2>/dev/null || true); \
-		[ -z "$$crds" ] && [ -z "$$ns" ] && break; \
-		[ $$(date +%s) -ge $$deadline ] && echo "Timed out waiting for Kognition removal" && exit 1; \
-		sleep 5; \
-	done
-	@$(MAKE) install MODE=kubernetes FRESH_IMAGE_TAG=$(FRESH_IMAGE_TAG)
-	@$(MAKE) jaeger-install
-	@$(MAKE) samples-install
-	@mkdir -p .tmp
-	@kubectl port-forward -n $(OBSERVABILITY_NAMESPACE) svc/jaeger-collector 16686:16686 > .tmp/jaeger-port-forward.out.log 2> .tmp/jaeger-port-forward.err.log & echo $$! > .kognition-jaeger-port-forward.pid
-	@$(MAKE) status
-	@echo ""
-	@echo "Fresh Kubernetes demo environment is ready. Jaeger UI: http://localhost:16686"
+	@echo "Legacy alias: installs a new release only; never resets a cluster or installs samples."
+	@$(MAKE) quickstart
 
 ## uninstall: Uninstall EVERYTHING (Helm release, CRDs, and namespace)
 uninstall:

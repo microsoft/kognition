@@ -39,14 +39,14 @@ deployment boundaries and current limitations.
 | Explore a local control plane | [Local development](docs/getting-started/local.md). |
 | Prepare a Kubernetes installation | [Kubernetes setup](docs/getting-started/kubernetes.md). |
 | Run an agent on a prepared installation | [First agent](docs/getting-started/first-agent.md). |
+| Watch a complete Studio walkthrough | [Video tutorial](docs/guides/video-tutorial.md). |
 | Find a capability walkthrough | [Guides and samples](docs/guides/README.md). |
 | Operate or troubleshoot a deployment | [Operations](docs/operations/README.md). |
 
-Kubernetes installation ends at verified inactive admission. Starting the
-controller requires separately approved activation with the documented acceptance
-evidence; production activation remains blocked by its outstanding gates. Follow
-[Kubernetes setup](docs/getting-started/kubernetes.md) or
-[AKS setup](docs/getting-started/aks.md) before configuring providers and samples.
+The Kubernetes installer checks the target, installs admission and database
+components, verifies their readiness, then starts the controller. It refuses to
+overwrite an existing installation. Follow [Kubernetes setup](docs/getting-started/kubernetes.md)
+or [AKS setup](docs/getting-started/aks.md); configure providers and samples afterward.
 
 ## Documentation
 
@@ -85,10 +85,14 @@ Shared resource concepts do not establish complete parity between deployment mod
 Use the Go version declared in [go.mod](go.mod). Building the CLI does not start
 the platform or invoke a provider:
 
+**PowerShell (Windows):**
+
 ```powershell
 go build -o .\bin\kognitionctl.exe .\cmd\kognitionctl
 .\bin\kognitionctl.exe --help
 ```
+
+**Bash (Linux/macOS):**
 
 ```bash
 go build -o ./bin/kognitionctl ./cmd/kognitionctl
@@ -96,7 +100,8 @@ go build -o ./bin/kognitionctl ./cmd/kognitionctl
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the CLA, build/test workflow and commit
-policy, and [testing](docs/testing.md) for required validation.
+policy, [command shells](docs/README.md#command-shells) for shared helper
+prerequisites, and [testing](docs/testing.md) for required validation.
 
 The official repository is [microsoft/kognition](https://github.com/microsoft/kognition).
 Use [SUPPORT.md](SUPPORT.md) for support boundaries and [SECURITY.md](SECURITY.md)

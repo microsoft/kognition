@@ -9,6 +9,10 @@ Use the [reference index](docs/reference/README.md) for the API definitions ship
 with your revision. The installation and operations guides take precedence over
 older sample configuration.
 
+Shell-specific examples include PowerShell for Windows and Bash for Linux/macOS.
+Choose one block per operation. See [command shells](docs/README.md#command-shells)
+for native binary names and PowerShell 7 requirements for shared `.ps1` helpers.
+
 ---
 
 ## Table of Contents
@@ -335,7 +339,9 @@ spec:
     input: "What is the capital of France?"
 ```
 
-```bash
+The following commands work in Bash and PowerShell:
+
+```sh
 # Apply and watch
 kubectl apply -f samples/agentinstance/manifests.yaml
 kubectl get agentinstances.kognition.dev hello-run-1 -w
@@ -562,12 +568,38 @@ kubectl -n default wait --for=jsonpath='{.status.phase}'=Ready `
 .\bin\kognitionctl.exe chat memory-explorer "What do you know? List the procedure, the dog name, issue #871, the working note, and the shared policy." --mode kubernetes
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+kubectl apply -f samples/memory-all-types/manifests.yaml
+kubectl -n default wait '--for=jsonpath={.status.phase}=Bound' \
+  memoryclaim/explorer-episodic memoryclaim/explorer-semantic \
+  memoryclaim/explorer-working memoryclaim/explorer-procedural \
+  memoryclaim/explorer-shared --timeout=60s
+kubectl -n default wait '--for=jsonpath={.status.phase}=Ready' \
+  agent/memory-explorer --timeout=120s
+./bin/kognitionctl chat memory-explorer "Remember as a working note: intermediate sum = 42." --mode kubernetes
+./bin/kognitionctl chat memory-explorer "Record this episodic event: on 2024-03-12 the user reported issue #871." --mode kubernetes
+./bin/kognitionctl chat memory-explorer "Remember this semantic fact: the user's dog is named Pepper." --mode kubernetes
+./bin/kognitionctl chat memory-explorer "Remember this procedure: to deploy, run 'make build' then 'kubectl apply -f manifests.yaml'." --mode kubernetes
+./bin/kognitionctl chat memory-explorer "Remember this shared team policy: every release must include an SBOM." --mode kubernetes
+./bin/kognitionctl chat memory-explorer "What do you know? List the procedure, the dog name, issue #871, the working note, and the shared policy." --mode kubernetes
+```
+
 This sample deliberately uses the generic sandbox tools, so verify its tagged
 records through the sandbox endpoint:
 
-```powershell
-kubectl -n default port-forward service/tool-sandbox 18080:8080
+In one terminal (Bash or PowerShell):
 
+```sh
+kubectl -n default port-forward service/tool-sandbox 18080:8080
+```
+
+Run the request loop in a second terminal.
+
+**PowerShell (Windows):**
+
+```powershell
 foreach ($t in "working","episodic","semantic","procedural","shared") {
     Write-Host "`n=== $t ===" -ForegroundColor Cyan
     Invoke-RestMethod -Uri http://127.0.0.1:18080/memory-recall `
@@ -575,6 +607,17 @@ foreach ($t in "working","episodic","semantic","procedural","shared") {
       -Body (@{ query = ""; tag = $t; top_k = 10 } | ConvertTo-Json) `
       | ConvertTo-Json -Depth 5
 }
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+for t in working episodic semantic procedural shared; do
+  printf '\n=== %s ===\n' "$t"
+  curl --fail --silent --show-error http://127.0.0.1:18080/memory-recall \
+    -H 'Content-Type: application/json' \
+    --data "{\"query\":\"\",\"tag\":\"$t\",\"top_k\":10}" | python3 -m json.tool
+done
 ```
 
 See [`samples/memory-all-types/README.md`](samples/memory-all-types/README.md)
@@ -727,6 +770,14 @@ Run the grounded chat:
 ```powershell
 kognitionctl chat orbital-docs-agent `
   "When does Orbital Mark 7 ship to general availability and what regions are supported at launch?" `
+  --mode kubernetes
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+kognitionctl chat orbital-docs-agent \
+  "When does Orbital Mark 7 ship to general availability and what regions are supported at launch?" \
   --mode kubernetes
 ```
 
@@ -1021,7 +1072,7 @@ spec:
 
 ```bash
 # Single-approver gate (legacy/anonymous path).
-kognitionctl approve <approval-id> --decision approve --reason "ship it"
+kognitionctl approve '<approval-id>' --decision approve --reason "ship it"
 
 # Direct REST call to the run-scoped subresource (supports quorum).
 curl -X POST \
@@ -1033,6 +1084,16 @@ curl -X POST \
         "approver": "alice@example.com",
         "comment": "LGTM"
       }'
+```
+
+**PowerShell (Windows):**
+
+```powershell
+kognitionctl approve '<approval-id>' --decision approve --reason "ship it"
+Invoke-RestMethod -Method Post `
+  -Uri 'https://APISERVER/apis/kognition.dev/v1alpha1/namespaces/default/workflowruns/pipeline-run-001/approval' `
+  -ContentType application/json `
+  -Body '{"step":"publish","decision":"approve","approver":"alice@example.com","comment":"LGTM"}'
 ```
 
 When `requiredApprovers > 1`, the `approver` field is **required** and must be unique per submission — only distinct identities count toward the quorum. To reject, send `"decision": "reject"`; rejection is immediate and does not require quorum.
@@ -1103,7 +1164,9 @@ Workflow observability includes:
 - **Prometheus retained projections** — `kognition_workflow_active_runs`, `kognition_workflow_retained_runs`, `kognition_workflow_retained_step_duration_seconds_sum`, and `kognition_workflow_retained_step_duration_observations`. The controller reconstructs these gauges from retained WorkflowRuns and their owned AgentJobs after restart. Values can decrease when `historyLimit` removes records, and missing duration evidence emits no series.
 - **CLI step timeline:**
 
-  ```bash
+  This command works in either shell:
+
+  ```sh
   kognitionctl workflow logs pipeline-run-001
   ```
 
@@ -1134,6 +1197,24 @@ spec:
   input: "the rise of agentic AI in enterprise software"
 EOF
 
+kognitionctl workflow logs pipeline-run-001
+```
+
+**PowerShell (Windows):**
+
+```powershell
+kubectl apply -f samples/multi-agent-workflow/manifests.yaml
+@'
+apiVersion: kognition.dev/v1alpha1
+kind: WorkflowRun
+metadata:
+  name: pipeline-run-001
+  namespace: default
+spec:
+  workflowRef:
+    name: content-pipeline
+  input: "the rise of agentic AI in enterprise software"
+'@ | kubectl apply -f -
 kognitionctl workflow logs pipeline-run-001
 ```
 
@@ -1267,6 +1348,15 @@ uses `hello-agent-judge` as an LLM judge.
 ./make.ps1 samples-install SAMPLE=simple-agent
 ./make.ps1 samples-install SAMPLE=evaluation
 
+kubectl get evaluationruns.kognition.dev -n default
+kubectl get evaluationrun hello-agent-quality-g2 -n default -o yaml
+```
+
+**Bash (Linux/macOS), with PowerShell 7 installed for the sample helpers:**
+
+```bash
+pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=simple-agent
+pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=evaluation
 kubectl get evaluationruns.kognition.dev -n default
 kubectl get evaluationrun hello-agent-quality-g2 -n default -o yaml
 ```
@@ -1421,7 +1511,9 @@ spec:
 Kognition records normalized model and tool operation costs in micro-USD. Use
 the `cost` command to aggregate a Workspace by attribution dimension:
 
-```powershell
+These commands work in Bash and PowerShell when `kognitionctl` is on `PATH`:
+
+```sh
 kognitionctl --mode standalone --server http://localhost:8080 -n production cost --group-by agent,model
 kognitionctl --mode kubernetes -n production --kube-namespace kognition-system cost --group-by solution,operation_type
 ```
@@ -1759,7 +1851,9 @@ spec:
 
 Best for development and single-agent deployments.
 
-```bash
+Run in either shell:
+
+```sh
 kubectl apply -f samples/simple-agent/manifests.yaml
 ```
 
@@ -1767,7 +1861,9 @@ kubectl apply -f samples/simple-agent/manifests.yaml
 
 Use Kustomize for environment-specific configuration:
 
-```bash
+Run in either shell:
+
+```sh
 kubectl apply -k deploy/overlays/production/
 ```
 
@@ -1803,6 +1899,24 @@ helm upgrade my-pipeline samples/helm-multi-agent \
 # Rollback if needed
 helm rollback my-pipeline 1
 ```
+
+**PowerShell (Windows):**
+
+```powershell
+helm install my-pipeline samples/helm-multi-agent `
+  --set credentials.azure.tenantId=YOUR_TENANT_ID `
+  --set credentials.azure.clientId=YOUR_CLIENT_ID `
+  --set credentials.azure.clientSecret=YOUR_CLIENT_SECRET `
+  --set model.endpoint=https://your-endpoint.services.ai.azure.com `
+  --set model.apiVersion="2024-10-21"
+kubectl get agents,workflows
+helm upgrade my-pipeline samples/helm-multi-agent `
+  --set agents.reviewer.runtime.timeout=90s
+helm rollback my-pipeline 1
+```
+
+These are placeholder credential fields; load actual credentials through an
+access-controlled values file or existing SecretRef, not command history.
 
 #### Chart Structure
 
@@ -1904,21 +2018,20 @@ dependencies:
 
 This is a packaging illustration, not a supported Kubernetes installation path.
 The [umbrella sample](samples/helm-umbrella/README.md) combines platform and producer
-resources and cannot bypass the bootstrap writer freeze. Prepare the core platform through
+resources. Install a new core platform through
 [Kubernetes setup](docs/getting-started/kubernetes.md) or
 [AKS setup](docs/getting-started/aks.md), then configure governance and pipeline
-workloads only after separately approved activation. Existing releases use the
+workloads separately. Existing releases use the
 [upgrade/recovery workflow](docs/features/knowledge-provider-execution/installation-recovery-contract.md).
-Do not refresh bundled archives during recovery. Missing security gates block
-activation even for local examples.
+Do not refresh bundled archives during recovery.
 
 ---
 
 ## Securing the Platform
 
 Standalone API authentication and TLS are configurable. Baseline pod/container
-hardening is enabled by default. Kubernetes installation ends at verified inactive
-admission; separately approved activation requires its acceptance evidence. Review
+hardening is enabled by default, and the fresh Kubernetes installer requires its
+admission and Cilium enforcement profile before starting the controller. Review
 the [security guide](docs/security.md) for production configuration and the
 [ADRs](docs/adr/) for design rationale.
 

@@ -25,17 +25,23 @@ group.
 
 The relationship at a glance:
 
-```text
-KnowledgeBaseClass          (provisioner)
-        ▲
-        │  spec.knowledgeBaseClassName
-        │
-   KnowledgeBase   ◀── KnowledgeBaseIndexSchedule
-        ▲                       │
-        │                       ▼
-        │              KnowledgeBaseIndexRun ── owns ──▶ Job (kognition-kb-ingester)
-        │
-KnowledgeBaseClaim ◀── referenced by ──  Agent.spec.knowledgeBaseClaims[]
+```mermaid
+flowchart BT
+    KBC["KnowledgeBaseClass<br/>provisioner"]
+    KB["KnowledgeBase"]
+    Sched["KnowledgeBaseIndexSchedule"]
+    Run["KnowledgeBaseIndexRun"]
+    Job["Job<br/>kognition-kb-ingester"]
+    Claim["KnowledgeBaseClaim"]
+    Agent["Agent<br/>spec.knowledgeBaseClaims[]"]
+
+    KB -->|spec.knowledgeBaseClassName| KBC
+    Sched -->|creates| Run
+    Run -->|owns| Job
+    Run -->|reindexes| KB
+    Sched -->|targets| KB
+    Claim -->|binds to| KB
+    Agent -->|references| Claim
 ```
 
 ## Picking a class
@@ -74,21 +80,32 @@ carry the annotation — a second is rejected. See ADR-0002 for the full rules.
 
 The chart ships an opt-in pgvector StatefulSet plus the Python ingester image
 that the index-run reconciler launches. Both are off by default; enable them
-together:
+together by adding these settings to the private values file reviewed for the
+installation:
 
-```powershell
-helm upgrade --install kognition ./deploy/helm/kognition -n kognition-system `
-  --set kbPgvector.enabled=true `
-  --set kbIngester.enabled=true
+```yaml
+kbPgvector:
+  enabled: true
+kbIngester:
+  enabled: true
 ```
+
+Apply the change through the guarded installer, not a direct `helm upgrade`.
+A direct upgrade bypasses the controller drain, controller stop and admission
+verification that the installer enforces. For a new release, add the settings
+to the values file and follow the
+[Kubernetes setup](getting-started/kubernetes.md). For an existing release, use
+the [installation and recovery procedure](features/knowledge-provider-execution/installation-recovery-contract.md).
 
 The ingester image is built by both `make docker` (POSIX) and
 `.\make.ps1 docker` (Windows). If you push to a registry, point the chart at
-it:
+it in the same values file:
 
-```powershell
---set kbIngester.image.repository=<your-registry>/kognition-kb-ingester
---set kbIngester.image.tag=<version>
+```yaml
+kbIngester:
+  image:
+    repository: <your-registry>/kognition-kb-ingester
+    tag: <version>
 ```
 
 Leaving `kbIngester.enabled=false` disables external ingestion. The

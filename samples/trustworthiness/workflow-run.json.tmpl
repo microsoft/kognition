@@ -1,0 +1,19 @@
+{
+  "apiVersion": "kognition.dev/v1alpha1",
+  "kind": "WorkflowRun",
+  "metadata": {
+    "name": "trust-demo-run",
+    "namespace": "${NAMESPACE}",
+    "labels": {
+      "app.kubernetes.io/part-of": "trustworthiness",
+      "kognition.dev/demo-run": "${DEMO_RUN_ID}"
+    },
+    "annotations": {
+      "kognition.dev/idempotency-key": "${WORKFLOW_KEY}"
+    }
+  },
+  "spec": {
+    "workflowRef": { "name": "trust-demo-approval" },
+    "input": "Exercise governed access and protect customer-advisory publication with an explicit human approval boundary."
+  }
+}

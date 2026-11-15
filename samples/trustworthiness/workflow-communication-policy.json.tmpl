@@ -1,0 +1,21 @@
+{
+  "apiVersion": "kognition.dev/v1alpha1",
+  "kind": "AgentCommunicationPolicy",
+  "metadata": {
+    "name": "trust-demo-workflow",
+    "namespace": "${NAMESPACE}",
+    "labels": {
+      "app.kubernetes.io/part-of": "trustworthiness",
+      "kognition.dev/demo-run": "${DEMO_RUN_ID}"
+    }
+  },
+  "spec": {
+    "defaultDeny": true,
+    "allowFrom": [
+      { "name": "synthetic-preparation" }
+    ],
+    "allowTo": [
+      { "name": "approval-protected-publisher" }
+    ]
+  }
+}

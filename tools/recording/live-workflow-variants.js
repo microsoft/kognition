@@ -537,7 +537,7 @@ async function runWorkflowVariants(input) {
     catch (error) { report.processCleanupFailure = error.message; failure ||= error; }
     if (!failure && report.recording) {
       try {
-        const mediaRoot = path.resolve(__dirname, "..", "..", ".hackaton2026", "video-production", "node_modules");
+        const mediaRoot = path.resolve(__dirname, "..", "..", ".demo-preparation", "video-production", "node_modules");
         const probe = path.join(mediaRoot, "ffprobe-static", "bin", "win32", "x64", "ffprobe.exe");
         const ffmpeg = path.join(mediaRoot, "ffmpeg-static", "ffmpeg.exe");
         const metadata = JSON.parse(execFileSync(probe,

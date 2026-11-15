@@ -1,10 +1,18 @@
 # Installation And Recovery Contract
 
-- Status: implemented local SG-05 workflow; production activation remains blocked.
-- Updated: 2026-10-21.
+For a new release, use [Kubernetes setup](../../getting-started/kubernetes.md).
+The fresh installer completes admission checks, migrations and controller startup
+as one operation under [ADR-0028](../../adr/0028-first-installation-lifecycle.md).
+The reviewed-plan and cleanup procedures below remain the existing-release,
+upgrade and partial-installation recovery reference.
+
+- Status: reviewed-plan workflow implemented for local review; production
+  qualification remains separate from installation readiness.
+- Implementation evidence date: 2026-10-21; documentation scope updated 2026-11-13.
 - Implementation: [installer](../../../tools/kognition-install/main.go), [plan](../../../internal/k8s/installation/plan.go), [workflow](../../../internal/k8s/installation/workflow.go).
 
-The installer ends at verified inactive admission. Keep writers frozen until the
+The `bootstrap --plan` operation ends with the controller stopped and admission
+verified. Keep writers frozen until the
 separate [activation transaction](activation-transaction-contract.md) succeeds
 with genuine SG-03/07/08/09 evidence. Neither Helm success nor this document
 authorizes production activation.
@@ -142,6 +150,12 @@ configuration and run:
 
 ```powershell
 go test .\internal\store\postgres -run '^TestPgvector(PerVolumeDimensions|OpaqueVolumeHandleIsolation)$' -count=1 -timeout 3m
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+go test ./internal/store/postgres -run '^TestPgvector(PerVolumeDimensions|OpaqueVolumeHandleIsolation)$' -count=1 -timeout 3m
 ```
 
 These regressions verify legacy/default and local dimensions, case-sensitive
@@ -311,6 +325,13 @@ go build -o ./bin/kognition-install.exe ./tools/kognition-install
 ./bin/kognition-install.exe bootstrap --plan ./reviewed/install.json --writers-frozen
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+go build -o ./bin/kognition-install ./tools/kognition-install
+./bin/kognition-install bootstrap --plan ./reviewed/install.json --writers-frozen
+```
+
 The common ordered stages are preflight, workload drain, controller stop, observed
 stop, grant revocation, drain verification, exact legacy policy deletion, completed migration retirement, admission
 bootstrap and bootstrap verification. A held Invocation or finalizer blocks before
@@ -373,6 +394,12 @@ Do not acknowledge these conditions until operational evidence supports them.
 
 ```powershell
 ./bin/kognition-install.exe recover --plan ./reviewed/install.json --writers-frozen --executors-stopped --requests-settled --claim-uid EXACT_REVIEWED_UID
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+./bin/kognition-install recover --plan ./reviewed/install.json --writers-frozen --executors-stopped --requests-settled --claim-uid EXACT_REVIEWED_UID
 ```
 
 Use the original plan and printed claim UID. The claim pins target and exact plan

@@ -9,6 +9,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   change-plan:
     runs-on: ubuntu-latest
@@ -263,7 +266,6 @@ jobs:
     needs: proto
     permissions:
       contents: read
-      security-events: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -304,6 +306,7 @@ jobs:
           python -m pytest -q
 
   build:
+    name: Build application binaries
     runs-on: ubuntu-latest
     needs: [traceability, lint, test, integration-test, python-tests, autogen-tests, test-watchdog, security, proto]
     steps:

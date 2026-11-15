@@ -2,6 +2,9 @@
 # Licensed under the MIT License.
 
 {{- define "kognition.ciliumProbeIngress" -}}
+enableDefaultDeny:
+  ingress: false
+  egress: false
 ingress:
   - fromEntities:
       - host
@@ -12,8 +15,17 @@ ingress:
           - port: {{ .port | quote }}
             protocol: TCP
 {{- end }}
+{{- define "kognition.ciliumProbeOwnership" -}}
+labels:
+  {{- include "kognition.labels" . | nindent 2 }}
+  app.kubernetes.io/instance: {{ .Release.Name | quote }}
+annotations:
+  meta.helm.sh/release-name: {{ .Release.Name | quote }}
+  meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+{{- end }}
 {{- if and .Values.networkPolicy.enabled .Values.networkPolicy.ciliumHostProbeIngress }}
 {{- $instance := .Release.Name }}
+{{- $runtimeNamespaces := without (include "kognition.controllerNamespaces" . | fromJsonArray) .Release.Namespace }}
 {{- if .Values.postgres.enabled }}
 ---
 apiVersion: cilium.io/v2
@@ -21,6 +33,7 @@ kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "kognition.fullname" . }}-postgres-probes
   namespace: {{ .Release.Namespace }}
+  {{- include "kognition.ciliumProbeOwnership" . | nindent 2 }}
 spec:
   endpointSelector:
     matchLabels:
@@ -35,6 +48,7 @@ kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "kognition.fullname" . }}-kb-pgvector-probes
   namespace: {{ .Release.Namespace }}
+  {{- include "kognition.ciliumProbeOwnership" . | nindent 2 }}
 spec:
   endpointSelector:
     matchLabels:
@@ -49,6 +63,7 @@ kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "kognition.fullname" . }}-memory-service-probes
   namespace: {{ .Release.Namespace }}
+  {{- include "kognition.ciliumProbeOwnership" . | nindent 2 }}
 spec:
   endpointSelector:
     matchLabels:
@@ -63,6 +78,7 @@ kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "kognition.fullname" . }}-memory-policy-gateway-probes
   namespace: {{ .Release.Namespace }}
+  {{- include "kognition.ciliumProbeOwnership" . | nindent 2 }}
 spec:
   endpointSelector:
     matchLabels:
@@ -77,6 +93,7 @@ kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "kognition.fullname" . }}-tool-gateway-probes
   namespace: {{ .Release.Namespace }}
+  {{- include "kognition.ciliumProbeOwnership" . | nindent 2 }}
 spec:
   endpointSelector:
     matchLabels:
@@ -91,6 +108,7 @@ kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "kognition.fullname" . }}-agent-communication-gateway-probes
   namespace: {{ .Release.Namespace }}
+  {{- include "kognition.ciliumProbeOwnership" . | nindent 2 }}
 spec:
   endpointSelector:
     matchLabels:
@@ -105,6 +123,7 @@ kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "kognition.fullname" . }}-model-gateway-probes
   namespace: {{ .Release.Namespace }}
+  {{- include "kognition.ciliumProbeOwnership" . | nindent 2 }}
 spec:
   endpointSelector:
     matchLabels:
@@ -119,6 +138,7 @@ kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "kognition.fullname" . }}-knowledge-gateway-probes
   namespace: {{ .Release.Namespace }}
+  {{- include "kognition.ciliumProbeOwnership" . | nindent 2 }}
 spec:
   endpointSelector:
     matchLabels:
@@ -133,6 +153,7 @@ kind: CiliumNetworkPolicy
 metadata:
   name: {{ include "kognition.fullname" . }}-k8s-controller-probes
   namespace: {{ .Release.Namespace }}
+  {{- include "kognition.ciliumProbeOwnership" . | nindent 2 }}
 spec:
   endpointSelector:
     matchLabels:
@@ -140,16 +161,24 @@ spec:
       k8s:app.kubernetes.io/instance: {{ $instance }}
   {{- include "kognition.ciliumProbeIngress" (dict "port" 8081) | nindent 2 }}
 {{- end }}
+{{- if gt (len $runtimeNamespaces) 0 }}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumClusterwideNetworkPolicy
 metadata:
   name: {{ include "kognition.fullname" . }}-runtime-probes
+  {{- include "kognition.ciliumProbeOwnership" . | nindent 2 }}
 spec:
   endpointSelector:
     matchLabels:
       k8s:app.kubernetes.io/managed-by: kognition
+    matchExpressions:
+      - key: k8s:io.kubernetes.pod.namespace
+        operator: In
+        values: {{ $runtimeNamespaces | toJson }}
   {{- include "kognition.ciliumProbeIngress" (dict "port" 8080) | nindent 2 }}
+{{- end }}
+{{- if not .Values.networkPolicy.ciliumApiServerEgress }}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -179,5 +208,6 @@ spec:
   egress:
     - toEntities:
         - kube-apiserver
+{{- end }}
 {{- end }}
 {{- end }}

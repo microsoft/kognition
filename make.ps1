@@ -19,7 +19,7 @@
         up down migrate
         deploy-standalone deploy-kubernetes
         undeploy-standalone undeploy-kubernetes
-        install uninstall fresh-kubernetes-demo
+        install uninstall quickstart fresh-kubernetes-demo
         observability observability-install observability-uninstall jaeger jaeger-install jaeger-ui jaeger-uninstall grafana-ui
         foundry-creds
         samples-list samples-install samples-uninstall
@@ -28,7 +28,7 @@
 
     Examples:
         .\make.ps1 build
-        .\make.ps1 deploy-kubernetes
+        .\make.ps1 quickstart KUBECONFIG=target.kubeconfig CHART_PACKAGE=kognition.tgz INSTALL_VALUES=values.yaml WORKLOAD_NAMESPACES=team-a INSTALL_EXCLUSIVE=true
         .\make.ps1 samples-install SAMPLE=simple-agent
         .\make.ps1 status
         .\make.ps1 services ACTION=start SERVICE=postgres
@@ -171,8 +171,7 @@ function Target-Tidy { Invoke-Native 'go' @('mod', 'tidy') }
 
 function Invoke-BoundedTest {
     param([string[]]$Arguments)
-    $python = Join-Path $RepoRoot '.venv/Scripts/python.exe'
-    if (-not (Test-Path $python)) { $python = Resolve-Tool 'python' }
+    $python = Resolve-AzureSamplePython -RepositoryRoot $RepoRoot
     Invoke-Native $python (@((Join-Path $RepoRoot 'tools/run_bounded.py'), '--timeout', '1800', '--', 'go') + $Arguments)
 }
 
@@ -646,9 +645,33 @@ function Target-UndeployStandalone {
 # ---------------------------------------------------------------------------
 
 function Target-DeployKubernetes {
-    if (-not $parsed.Vars['INSTALL_PLAN']) { throw 'INSTALL_PLAN is required for inactive Kubernetes bootstrap.' }
+    if (-not $parsed.Vars['INSTALL_PLAN']) {
+        Target-FreshKubernetes
+        return
+    }
     if ($parsed.Vars['INSTALL_WRITERS_FROZEN'] -ne 'true') { throw 'INSTALL_WRITERS_FROZEN=true is required after controlled drain preparation.' }
     Invoke-Native 'go' @('run', './tools/kognition-install', 'bootstrap', '--plan', $parsed.Vars['INSTALL_PLAN'], '--writers-frozen')
+}
+
+function Target-FreshKubernetes {
+    foreach ($name in @('KUBECONFIG', 'CHART_PACKAGE', 'INSTALL_VALUES', 'WORKLOAD_NAMESPACES')) {
+        if (-not $parsed.Vars[$name]) { throw "$name is required for a fresh Kubernetes installation. See docs/getting-started/kubernetes.md." }
+    }
+    if ($parsed.Vars['INSTALL_EXCLUSIVE'] -ne 'true') { throw 'INSTALL_EXCLUSIVE=true confirms exclusive writes to the selected installation namespaces.' }
+    $parameters = @{
+        Kubeconfig = $parsed.Vars['KUBECONFIG']
+        Chart = $parsed.Vars['CHART_PACKAGE']
+        Values = $parsed.Vars['INSTALL_VALUES']
+        WorkloadNamespace = @($parsed.Vars['WORKLOAD_NAMESPACES'] -split ',')
+        Namespace = $Namespace
+        Release = $Release
+        Exclusive = $true
+    }
+    if ($parsed.Vars['KUBE_CONTEXT']) { $parameters.Context = $parsed.Vars['KUBE_CONTEXT'] }
+    if ($parsed.Vars['INSTALL_STATE']) { $parameters.StateDirectory = $parsed.Vars['INSTALL_STATE'] }
+    if ($parsed.Vars['INSTALL_AUTHORITY_NAMESPACE']) { $parameters.AuthorityNamespace = $parsed.Vars['INSTALL_AUTHORITY_NAMESPACE'] }
+    if ($parsed.Vars['INSTALL_REPLICAS']) { $parameters.Replicas = [int]$parsed.Vars['INSTALL_REPLICAS'] }
+    & (Join-Path $RepoRoot 'bootstrap.ps1') @parameters
 }
 
 function Target-UndeployKubernetes {
@@ -705,6 +728,7 @@ function Target-FoundryCreds {
     # multiple (PowerShell turns an unquoted comma list into a space list).
     $namespaces = @($AgentNamespace -split '[,\s]+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if (-not $namespaces) { $namespaces = @('default') }
+    $namespaces = @($namespaces | ForEach-Object { Get-AzureSampleNamespace -Namespace $_ } | Select-Object -Unique)
 
     $secretData = [ordered]@{
         clientId       = $clientId
@@ -883,7 +907,8 @@ function Start-ManagedJaegerPortForward {
     $stdout = Join-Path $logDir 'jaeger-port-forward.out.log'
     $stderr = Join-Path $logDir 'jaeger-port-forward.err.log'
     $args = @('port-forward', '-n', $ObservabilityNamespace, 'svc/jaeger-collector', '16686:16686')
-    $proc = Start-Process -FilePath $kubectl -ArgumentList $args -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $processOptions = Get-AzureSampleProcessOptions
+    $proc = Start-Process -FilePath $kubectl -ArgumentList $args -PassThru @processOptions -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     Set-Content -Path $pidFile -Value $proc.Id -Encoding ascii
     Write-Host "==> Started Jaeger port-forward (PID $($proc.Id)). Logs: $stdout, $stderr"
     Write-Host '==> Jaeger UI: http://localhost:16686'
@@ -928,23 +953,8 @@ function Ensure-CertManagerForKubernetes {
 }
 
 function Target-FreshKubernetesDemo {
-    throw 'Automatic reset is blocked during SG-05: preserve the existing release and use deploy-kubernetes with INSTALL_PLAN after controlled drain.'
-    Write-Host '==> Fresh Kubernetes demo reset starting...'
-    $script:FreshKubernetesDemoImageTag = 'fresh-' + (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')
-    Write-Host "==> Fresh Kubernetes demo image tag: $FreshKubernetesDemoImageTag"
-    Invoke-TargetWithRetry -Name 'Kubernetes image build' -Attempts 2 -Script { Target-DockerK8sForFreshDemo -Tag $FreshKubernetesDemoImageTag }
-    Stop-ManagedJaegerPortForward
-    Target-ObservabilityUninstall
-    Target-Uninstall
-    Wait-KognitionUninstalled
-    Target-Install -Vars @{ MODE = 'kubernetes' }
-    Target-ObservabilityInstall
-    Target-SamplesInstall -Vars @{}
-    Start-ManagedJaegerPortForward
-    Target-Status
-    Write-Host ''
-    Write-Host 'Fresh Kubernetes demo environment is ready.'
-    Write-Host 'Jaeger UI: http://localhost:16686'
+    Write-Host 'Legacy alias: installs a new release only; never resets a cluster or installs samples.'
+    Target-FreshKubernetes
 }
 
 # ---------------------------------------------------------------------------
@@ -1236,11 +1246,17 @@ function Assert-SampleControllerNamespaces {
     $deployments = @(($deploymentJSON | ConvertFrom-Json).items | Where-Object {
         $_.spec.template.metadata.labels.'app.kubernetes.io/instance' -ceq $Release
     })
-    if ($deployments.Count -eq 0) { return }
+    if ($deployments.Count -eq 0) {
+        if (Get-AzureSampleProfile) { throw 'Governed samples require an installed controller with explicit namespace enrollment.' }
+        return
+    }
     if ($deployments.Count -ne 1) { throw 'Unable to inspect controller namespace enrollment: expected one controller Deployment.' }
     $deployment = $deployments[0]
     $enrollment = @($deployment.spec.template.spec.containers.env | Where-Object { $_.name -eq 'KOGNITION_MANAGED_NAMESPACES' })
-    if ($enrollment.Count -eq 0) { return }
+    if ($enrollment.Count -eq 0) {
+        if (Get-AzureSampleProfile) { throw 'Governed samples require explicit KOGNITION_MANAGED_NAMESPACES enrollment.' }
+        return
+    }
     $managed = @($enrollment | ForEach-Object { $_.value -split ',' })
     $missing = @($RequiredNamespaces | Where-Object { $managed -cnotcontains $_ })
     if ($missing.Count -gt 0) {
@@ -1250,6 +1266,46 @@ function Assert-SampleControllerNamespaces {
 
 function Target-SamplesInstall {
     param([hashtable]$Vars)
+    $previousProfile = $env:KOGNITION_SAMPLE_PROFILE_PATH
+    $previousKubeconfig = $env:KUBECONFIG
+    try {
+        if ($Vars.ContainsKey('SAMPLE_PROFILE')) {
+            if (-not $Vars['SAMPLE_PROFILE']) { throw 'SAMPLE_PROFILE cannot be empty.' }
+            $null = Get-AzureSampleProfile -Path $Vars['SAMPLE_PROFILE']
+            $env:KOGNITION_SAMPLE_PROFILE_PATH = (Resolve-Path -LiteralPath $Vars['SAMPLE_PROFILE']).Path
+        }
+        $profile = Get-AzureSampleProfile
+        if ($profile -and $Vars.ContainsKey('KUBECONFIG')) {
+            if (-not (Test-Path -LiteralPath $Vars['KUBECONFIG'] -PathType Leaf)) { throw 'KUBECONFIG must identify an existing approved target file.' }
+            $env:KUBECONFIG = (Resolve-Path -LiteralPath $Vars['KUBECONFIG']).Path
+        }
+        $AgentNamespace = Get-AzureSampleNamespace -Namespace $AgentNamespace -Profile $profile
+        if ($profile) {
+            $settings = Get-AzureSampleSettings
+            if (-not $settings['MS_FOUNDRY_PROJECT_ENDPOINT'] -or -not $settings['MS_FOUNDRY_INVOCATION_CONTRACT'] -or
+                -not $settings['AZURE_TENANT_ID'] -or -not $settings['AZURE_CLIENT_ID'] -or
+                (-not $settings['AZURE_CREDENTIAL_TYPE'] -or $settings['AZURE_CREDENTIAL_TYPE'] -eq 'client-secret') -and -not $settings['AZURE_CLIENT_SECRET']) {
+                throw 'Governed samples require complete Foundry model settings and Azure credentials in .env before installation.'
+            }
+            $null = Get-AzureSampleChatModelName -Settings $settings
+            $required = if ($Vars['SAMPLE']) { @($AgentNamespace) } else {
+                @('default', 'kognition-demo', 'samples-governance', 'samples-multi-agent', 'samples-azure-blob', 'production', 'development') |
+                    ForEach-Object { Get-AzureSampleNamespace -Namespace $_ -Profile $profile }
+            }
+            Assert-SampleControllerNamespaces -RequiredNamespaces $required
+            Assert-AzureSampleBackendPrerequisites -Namespaces @((Get-AzureSampleNamespace -Profile $profile)) -Profile $profile
+            if ($Vars['SAMPLE']) { Target-FoundryCreds }
+        }
+        Target-SamplesInstallCore -Vars $Vars
+    } finally {
+        [Environment]::SetEnvironmentVariable('KOGNITION_SAMPLE_PROFILE_PATH', $previousProfile, 'Process')
+        [Environment]::SetEnvironmentVariable('KUBECONFIG', $previousKubeconfig, 'Process')
+    }
+}
+
+function Target-SamplesInstallCore {
+    param([hashtable]$Vars)
+    $profile = Get-AzureSampleProfile
     $sample = if ($Vars.ContainsKey('SAMPLE')) { $Vars['SAMPLE'] } else { '' }
     $samplesDir = Join-Path $RepoRoot 'samples'
 
@@ -1277,6 +1333,9 @@ function Target-SamplesInstall {
                 }
                 $helmArguments += @(Get-AzureSampleHelmArguments)
             }
+            if ($sample -eq 'helm-governance' -and (Get-AzureSampleProfile)) {
+                $helmArguments += @('--set-string', "namespace=$AgentNamespace") + @(Get-AzureSampleQuotaHelmArguments)
+            }
             Invoke-Native 'helm' $helmArguments
         } elseif (Test-Path $applyScript) {
             Write-Host "Running sample installer: $applyScript"
@@ -1302,7 +1361,8 @@ function Target-SamplesInstall {
         $failed = @()
         $bundleLabelKey = 'kognition.dev/sample-bundle'
         $bundleLabelValue = 'compatible'
-        $sampleNamespaces = @('default', 'kognition-demo', 'samples-governance', 'samples-multi-agent', 'samples-azure-blob', 'production', 'development')
+        $sampleNamespaces = @('default', 'kognition-demo', 'samples-governance', 'samples-multi-agent', 'samples-azure-blob', 'production', 'development') |
+            ForEach-Object { Get-AzureSampleNamespace -Namespace $_ }
 
         Assert-SampleControllerNamespaces -RequiredNamespaces $sampleNamespaces
 
@@ -1411,7 +1471,7 @@ function Target-SamplesInstall {
             else {
                 $manifests = @(Get-ChildItem -Path $dir.FullName -Filter '*.yaml' -File |
                     Where-Object { $_.Name -notlike '*.template.yaml' -and (Select-String -Path $_.FullName -Pattern '^\s*kind\s*:' -Quiet) } |
-                    Sort-Object Name)
+                    Sort-Object @{ Expression = { if ($profile -and $_.Name -eq 'tool-sandbox.yaml') { 0 } else { 1 } } }, Name)
                 foreach ($manifest in $manifests) {
                     Write-Host "  kubectl apply -f $($manifest.FullName)"
                     Read-AzureSampleManifest -Path $manifest.FullName | & kubectl apply -f -
@@ -1419,6 +1479,7 @@ function Target-SamplesInstall {
                         Write-Warning "  manifest '$($manifest.Name)' did not apply cleanly; continuing."
                         $failed += "$($dir.Name)/$($manifest.Name)"
                     } else {
+                        Wait-AzureSampleToolFixture -Path $manifest.FullName
                         Read-AzureSampleManifest -Path $manifest.FullName | & kubectl label -f - "$bundleLabelKey=$bundleLabelValue" --overwrite 2>$null
                         if ($LASTEXITCODE -ne 0) { $failed += "$($dir.Name)/$($manifest.Name):label" }
                     }
@@ -1457,8 +1518,10 @@ function Target-SamplesInstall {
             throw 'Full sample bundle requires Foundry credentials in .env so provider-backed Agents and KnowledgeBases are functional.'
         }
 
-        Invoke-Native 'helm' @('upgrade', '--install', 'sample-governance', (Join-Path $samplesDir 'helm-governance'), '--namespace', 'samples-governance', '--create-namespace', '--set', 'namespace=samples-governance', '--set', "sampleBundleLabel=$bundleLabelValue")
-        Invoke-Native 'helm' (@('upgrade', '--install', 'sample-multi-agent', (Join-Path $samplesDir 'helm-multi-agent'), '--namespace', 'samples-multi-agent', '--create-namespace', '--set', 'namespace=samples-multi-agent', '--set', 'credentials.create=false', '--set', 'modelClass.create=false', '--set', "sampleBundleLabel=$bundleLabelValue") + @(Get-AzureSampleHelmArguments))
+        $governanceNamespace = Get-AzureSampleNamespace -Namespace 'samples-governance'
+        $multiAgentNamespace = Get-AzureSampleNamespace -Namespace 'samples-multi-agent'
+        Invoke-Native 'helm' (@('upgrade', '--install', 'sample-governance', (Join-Path $samplesDir 'helm-governance'), '--namespace', $governanceNamespace, '--create-namespace', '--set', "namespace=$governanceNamespace", '--set', "sampleBundleLabel=$bundleLabelValue") + @(Get-AzureSampleQuotaHelmArguments))
+        Invoke-Native 'helm' (@('upgrade', '--install', 'sample-multi-agent', (Join-Path $samplesDir 'helm-multi-agent'), '--namespace', $multiAgentNamespace, '--create-namespace', '--set', "namespace=$multiAgentNamespace", '--set', 'credentials.create=false', '--set', 'modelClass.create=false', '--set', "sampleBundleLabel=$bundleLabelValue") + @(Get-AzureSampleHelmArguments))
         Invoke-AzureSampleApply -Path (Join-Path $samplesDir 'model-grants.yaml')
         Read-AzureSampleManifest -Path (Join-Path $samplesDir 'model-grants.yaml') | & kubectl label -f - "$bundleLabelKey=$bundleLabelValue" --overwrite 2>$null
         if ($LASTEXITCODE -ne 0) { $failed += 'model-grants.yaml:label' }
@@ -1473,23 +1536,30 @@ function Target-SamplesInstall {
             agentjobs                 = @('Running', 'Ready')
             models                    = @('Ready')
             knowledgebases            = @('Ready')
+            knowledgebaseclaims       = @('Bound')
             knowledgebaseindexruns    = @('Succeeded')
             memoryclaims              = @('Bound')
             memoryvolumes             = @('Ready')
             agentidentities           = @('Ready')
             workflowruns              = @('Running', 'Ready')
         }
-        $deadline = [DateTime]::UtcNow.AddMinutes(5)
+        $readinessTimeoutSeconds = Get-AzureSampleReadinessTimeoutSeconds
+        $deadline = [DateTime]::UtcNow.AddSeconds($readinessTimeoutSeconds)
         do {
             $notReady = @()
-            foreach ($kind in @('agents', 'agentinstances', 'agentjobs', 'models', 'knowledgebases', 'knowledgebaseindexruns', 'memoryclaims', 'memoryvolumes', 'workflows', 'workflowruns', 'agentidentities')) {
-                $resources = ((& kubectl get $kind -A -l "$bundleLabelKey=$bundleLabelValue" -o json 2>$null | Out-String) | ConvertFrom-Json).items
+            foreach ($kind in @('agents', 'agentinstances', 'agentjobs', 'models', 'knowledgebases', 'knowledgebaseclaims', 'knowledgebaseindexruns', 'memoryclaims', 'memoryvolumes', 'workflows', 'workflowruns', 'agentidentities')) {
+                $resourceJSON = (& kubectl get $kind -A -l "$bundleLabelKey=$bundleLabelValue" -o json 2>$null | Out-String)
+                if ($LASTEXITCODE -ne 0) { throw "Cannot inspect sample bundle readiness for $kind." }
+                $resources = @((($resourceJSON | ConvertFrom-Json).items) | Where-Object { $_.metadata.namespace -in $sampleNamespaces })
                 $failedResources = @($resources | Where-Object { $_.status.phase -in @('Failed', 'Error') })
                 if ($failedResources.Count -gt 0) {
                     $names = $failedResources | ForEach-Object { "$($_.metadata.namespace)/$($_.metadata.name)=$($_.status.phase)" }
                     throw "Sample bundle has unhealthy $kind resources: $($names -join ', ')"
                 }
                 if ($readiness.ContainsKey($kind)) {
+                    if ((Get-AzureSampleProfile) -and $kind -in @('agents', 'models', 'knowledgebases', 'knowledgebaseclaims', 'knowledgebaseindexruns') -and $resources.Count -eq 0) {
+                        throw "Governed sample bundle is missing required $kind resources."
+                    }
                     $pending = @($resources | Where-Object { $_.status.phase -notin $readiness[$kind] })
                     $notReady += @($pending | ForEach-Object { "$kind/$($_.metadata.namespace)/$($_.metadata.name)=$($_.status.phase)" })
                 }
@@ -1497,7 +1567,7 @@ function Target-SamplesInstall {
             if ($notReady.Count -eq 0) { break }
             [Threading.Tasks.Task]::Delay(1000).GetAwaiter().GetResult()
         } while ([DateTime]::UtcNow -lt $deadline)
-        if ($notReady.Count -gt 0) { throw "Sample bundle resources did not become ready: $($notReady -join ', ')" }
+        if ($notReady.Count -gt 0) { throw "Sample bundle resources did not become ready within ${readinessTimeoutSeconds}s: $($notReady -join ', ')" }
         Write-Host 'Full compatible sample bundle is installed and has no terminal failed resources.' -ForegroundColor Green
     }
 }
@@ -1848,12 +1918,12 @@ function Target-Help {
                 '  up                   docker compose up -d',
                 '  down                 docker compose down',
                 '  deploy-standalone    Deploy standalone mode via Helm',
-                '  deploy-kubernetes    Deploy Kubernetes mode via Helm',
+                '  deploy-kubernetes    Checked fresh install; INSTALL_PLAN selects the existing-release workflow',
                 '  undeploy-standalone  Remove standalone Helm release',
                 '  undeploy-kubernetes  Remove Kubernetes mode Helm release',
                 '  install              Install the platform (MODE=standalone|kubernetes)',
                 '  uninstall            Uninstall everything (release, CRDs, namespace)',
-                '  fresh-kubernetes-demo  Uninstall, rebuild, install Kubernetes mode, observability, samples, and Jaeger port-forward',
+                '  fresh-kubernetes-demo  Legacy alias for a checked new Kubernetes installation; no reset',
                 '  observability         Alias for observability-install',
                 '  observability-install Install Jaeger, Prometheus, Grafana, and Kognition monitoring integrations',
                 '  observability-uninstall Remove the development observability bundle and disable integrations',
@@ -1862,7 +1932,7 @@ function Target-Help {
                 '  jaeger-ui            Port-forward Jaeger UI to localhost:16686',
                 '  grafana-ui           Port-forward Grafana UI to localhost:3000',
                 '  jaeger-uninstall     Backward-compatible alias for observability-uninstall',
-                '  quickstart           One-command bootstrap: build + install + samples (runs bootstrap.ps1)',
+                '  quickstart           Install a new Kubernetes release and start its controller after checks',
                 '  foundry-creds        Regenerate foundry-creds.yaml from .env and apply it (AGENT_NAMESPACE=ns1,ns2)',
                 '  samples-list         List available samples',
                 '  samples-install      Install samples (SAMPLE=<name> for one)',
@@ -1901,6 +1971,7 @@ function Target-Help {
                 '  FRESH_IMAGE_TAG=<tag>      Use prebuilt, uniquely tagged Kubernetes images',
                 '  MODE=<mode>               install mode: standalone|kubernetes (default: standalone)',
                 '  SAMPLE=<name>             Sample to install/uninstall',
+                '  SAMPLE_PROFILE=<file>     Private governed sample JSON profile (samples-install/full-install)',
                 '  COMPONENT=<name>          Component to filter logs',
                 '  ACTION=<action>           Used by ''services'' target',
                 '  SERVICE=<name>            Used by ''services'' target'
@@ -1966,14 +2037,18 @@ switch ($parsed.Target) {
     'foundry-creds'        { Target-FoundryCreds -WriteOnly:($parsed.Vars['APPLY'] -eq 'false') }
     'samples-list'         { Target-SamplesList }
     'samples-install'      { Target-SamplesInstall -Vars $parsed.Vars }
-    'samples-full-install' { Target-SamplesInstall -Vars @{} }
+    'samples-full-install' {
+        $fullVars = $parsed.Vars.Clone()
+        $fullVars.Remove('SAMPLE')
+        Target-SamplesInstall -Vars $fullVars
+    }
     'samples-provision-azure' { Target-SamplesProvisionAzure }
     'samples-uninstall'    { Target-SamplesUninstall -Vars $parsed.Vars }
     'status'               { Target-Status }
     'logs'                 { Target-Logs -Vars $parsed.Vars }
     'port-forward'         { Target-PortForward }
     'studio'               { Target-Studio -Vars $parsed.Vars }
-    'quickstart'           { throw 'Automatic bootstrap and producer resumption are blocked during SG-05; use deploy-kubernetes with INSTALL_PLAN.' }
+    'quickstart'           { Target-FreshKubernetes }
     'e2e'                  { Target-E2E }
     'e2e-kubernetes-memory' { Target-E2EKubernetesMemory }
     'e2e-kubernetes-audit'  { Target-E2EKubernetesAudit }

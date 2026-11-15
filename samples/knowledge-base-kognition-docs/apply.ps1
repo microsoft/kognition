@@ -16,6 +16,10 @@ $ErrorActionPreference = "Stop"
 $repoRoot   = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $sampleDir  = $PSScriptRoot
 . (Join-Path $sampleDir '..\azure-settings.ps1')
+if (Get-AzureSampleProfile) {
+    Invoke-AzureSampleKnowledgeInstall -Source docs -SampleDirectory $sampleDir
+    return
+}
 $sourceNs   = if ($env:KOGNITION_PLATFORM_NAMESPACE) { $env:KOGNITION_PLATFORM_NAMESPACE } else { "kognition-system" }
 $targetNs   = "default"
 $serviceNs  = "samples-kognition-docs-services"

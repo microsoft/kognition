@@ -12,6 +12,7 @@ Design rationale for the larger decisions lives in the ADRs:
 - [ADR-0004 — Multi-replica watch fan-out via PostgreSQL NOTIFY](adr/0004-watch-fanout-pg-notify.md)
 - [ADR-0005 — Secretless outbound provider auth](adr/0005-secretless-provider-auth.md)
 - [ADR-0007 — Agent Gateway Fabric](adr/0007-agent-gateway-fabric.md)
+- [ADR-0028: First installation lifecycle](adr/0028-first-installation-lifecycle.md)
 
 ## Deployment modes and the security baseline
 
@@ -27,7 +28,12 @@ Network, pod-hardening, PDB, and provider-auth controls apply to both.
 
 ### Guarded Kubernetes Installation
 
-Kubernetes installation, enrollment changes and recovery must follow the
+For a new release, the [fresh installer](getting-started/kubernetes.md) verifies
+admission, migrations and service readiness before granting permissions and
+starting the controller. It issues a distinct first-install record and does not
+fabricate release-qualification reports.
+
+Existing-installation upgrades, enrollment changes and recovery follow the
 [installation and recovery contract](features/knowledge-provider-execution/installation-recovery-contract.md)
 and [separate activation contract](features/knowledge-provider-execution/activation-transaction-contract.md).
 The installation security owner approves dedicated workload credential domains;
@@ -42,7 +48,7 @@ installation, or recover a compromised controller. For suspected compromise,
 follow the installation contract's containment and issuer-revocation procedure;
 routine previous-key overlap retains the compromised key's authority. Source
 Secret deletion or rotation alone does not invalidate existing copies, processes
-or sessions. Production activation remains blocked by its acceptance gates.
+or sessions. Production qualification remains separate from installation readiness.
 See the [SG-09 review](development-plans/features/knowledge-provider-execution/sg09-operator-contract-review.md)
 for current historical-finding dispositions and remaining approvals.
 
@@ -233,6 +239,34 @@ kubectl rollout restart deployment/kognition-tool-gateway -n kognition-system
 kubectl rollout status deployment/kognition-tool-gateway -n kognition-system --timeout=180s
 ```
 
+**Bash (Linux/macOS), with Python 3 available:**
+
+Run in a protected shell with tracing disabled. This builds the Secret patch
+in memory and pipes it to kubectl rather than printing key material:
+
+```bash
+set -o pipefail
+kubectl get secret kognition-tool-gateway -n kognition-system -o json |
+  python3 -c '
+import base64, json, secrets, string, sys
+data = json.load(sys.stdin)["data"]
+encode = lambda value: base64.b64encode(value.encode()).decode()
+key = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(48))
+print(json.dumps({"data": {
+    "capability-hmac-key": encode(key),
+    "capability-hmac-key-id": encode("2026-08-19-rotation-1"),
+    "capability-hmac-previous-key": data["capability-hmac-key"],
+    "capability-hmac-previous-key-id": data["capability-hmac-key-id"]
+}}))
+' | kubectl patch secret kognition-tool-gateway -n kognition-system \
+      --type merge --patch-file /dev/stdin || exit 1
+kubectl rollout restart deployment/kognition-tool-gateway -n kognition-system
+kubectl rollout status deployment/kognition-tool-gateway -n kognition-system --timeout=180s
+```
+
+Use a new reviewed key ID for each rotation in either shell. `/dev/stdin` is
+available on Linux and macOS; no GNU-specific `base64` decoding flags are needed.
+
 Apply the same procedure to `kognition-memory-policy-gateway`, then restart
 `kognition-k8s-controller` after both gateways are ready.
 
@@ -362,16 +396,60 @@ scale-down example below is insufficient by itself when those writers are
 enabled: establish verified quiescence of every writer before changing a holder.
 No timeout or Lease age proves an uncertain action was not executed.
 
+Each step must succeed before the next one runs. A successful rollout after
+scaling to zero does not prove that terminating Pods have exited, so the
+procedure also waits for every Pod selected by the controller Deployment to
+disappear and then confirms none remain. If scale-down, the wait, or the final
+Pod check fails (including API errors and timeouts), stop: do not clear the
+holder while a controller replica might still be writing.
+
 ```powershell
+$ErrorActionPreference = "Stop"
+function Invoke-Kubectl {
+    & kubectl @args
+    if ($LASTEXITCODE -ne 0) { throw "kubectl $($args -join ' ') failed with exit code $LASTEXITCODE" }
+}
+
 $namespace = "kognition-system"
 $deployment = "kognition-k8s-controller"
-$replicas = kubectl get deployment $deployment -n $namespace -o jsonpath='{.spec.replicas}'
-kubectl scale deployment $deployment -n $namespace --replicas=0
-kubectl rollout status deployment $deployment -n $namespace --timeout=180s
-kubectl patch lease kognition-runtime-approval-binding-keys -n $namespace --type merge -p '{"spec":{"holderIdentity":""}}'
-kubectl scale deployment $deployment -n $namespace --replicas=$replicas
-kubectl rollout status deployment $deployment -n $namespace --timeout=180s
+$replicas = (& kubectl get deployment $deployment -n $namespace -o jsonpath='{.spec.replicas}')
+if ($LASTEXITCODE -ne 0 -or $replicas -notmatch '^[1-9][0-9]*$') { throw "Could not read a nonzero replica count for $deployment" }
+$selector = ("$(& kubectl get deployment $deployment -n $namespace -o go-template='{{range $k,$v:=.spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}')").TrimEnd(',')
+if ($LASTEXITCODE -ne 0 -or -not $selector) { throw "Could not read the Pod selector for $deployment" }
+Invoke-Kubectl scale deployment $deployment -n $namespace --replicas=0
+Invoke-Kubectl rollout status deployment $deployment -n $namespace --timeout=180s
+& kubectl wait --for=delete pod -l $selector -n $namespace --timeout=180s
+$remaining = & kubectl get pods -l $selector -n $namespace -o name
+if ($LASTEXITCODE -ne 0) { throw "Could not list controller Pods for $deployment" }
+if ($remaining) { throw "Controller Pods are still present: $remaining" }
+Invoke-Kubectl patch lease kognition-runtime-approval-binding-keys -n $namespace --type merge -p '{"spec":{"holderIdentity":""}}'
+Invoke-Kubectl scale deployment $deployment -n $namespace --replicas=$replicas
+Invoke-Kubectl rollout status deployment $deployment -n $namespace --timeout=180s
 ```
+
+**Bash (Linux/macOS):**
+
+```bash
+set -euo pipefail
+namespace=kognition-system
+deployment=kognition-k8s-controller
+replicas="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.spec.replicas}')"
+[[ "$replicas" =~ ^[1-9][0-9]*$ ]] || { echo "Could not read a nonzero replica count for $deployment" >&2; exit 1; }
+selector="$(kubectl get deployment "$deployment" -n "$namespace" -o go-template='{{range $k,$v:=.spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}')"
+selector="${selector%,}"
+[[ -n "$selector" ]] || { echo "Could not read the Pod selector for $deployment" >&2; exit 1; }
+kubectl scale deployment "$deployment" -n "$namespace" --replicas=0
+kubectl rollout status deployment "$deployment" -n "$namespace" --timeout=180s
+kubectl wait --for=delete pod -l "$selector" -n "$namespace" --timeout=180s || true
+remaining="$(kubectl get pods -l "$selector" -n "$namespace" -o name)"
+[[ -z "$remaining" ]] || { echo "Controller Pods are still present: $remaining" >&2; exit 1; }
+kubectl patch lease kognition-runtime-approval-binding-keys -n "$namespace" --type merge -p '{"spec":{"holderIdentity":""}}'
+kubectl scale deployment "$deployment" -n "$namespace" --replicas="$replicas"
+kubectl rollout status deployment "$deployment" -n "$namespace" --timeout=180s
+```
+
+Run the Bash block in a script or subshell so `set -e` does not close your
+interactive terminal on failure.
 
 Do not delete the Lease or edit
 `kognition.dev/runtime-approval-binding-key-state`. Restore controller replicas

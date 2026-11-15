@@ -503,7 +503,7 @@ test("Trust Focus opens directly and preserves selected evidence across auto-ref
         mode: "standalone-fallback",
         passed: true,
         assertions: { total: 4, passed: 4, failed: 0 },
-        reportRef: "hackathon-report.json",
+        reportRef: "demo-report.json",
       } });
     }
     if (url.pathname === "/api/trust-decisions") {
@@ -531,7 +531,7 @@ test("Trust Focus opens directly and preserves selected evidence across auto-ref
   await expect(page.locator("#trust-run-proof")).toContainText("standalone-fallback");
   await expect(page.locator("#trust-run-proof-status")).toHaveText("Passed");
   await expect(page.locator("#trust-run-proof-assertions")).toHaveText("4/4 passed");
-  await expect(page.locator("#trust-run-proof-reference")).toHaveText("hackathon-report.json");
+  await expect(page.locator("#trust-run-proof-reference")).toHaveText("demo-report.json");
   await expect(page.locator("#trust-focus-stream [data-decision-id]")).toHaveCount(2);
   await expect(page.locator("#table-wrap")).toBeEmpty();
   await expect(page.locator("#trust-focus-evidence")).toContainText("decision-denied");

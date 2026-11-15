@@ -1,60 +1,182 @@
 ---
 title: AKS setup
-description: Review AKS prerequisites and authentication constraints before guarded Kubernetes installation.
+description: Install Kognition on an existing Azure Kubernetes Service cluster.
 ---
 
 # AKS setup
 
-AKS uses the same [inactive Kubernetes bootstrap](kubernetes.md) and separate activation
-requirements as other Kubernetes targets. This guide does not provision cloud
-resources, publish images or authorize activation.
+Use the [Kubernetes installation workflow](kubernetes.md) with an AKS kubeconfig
+and images available to the cluster. This guide uses an existing AKS cluster,
+Microsoft Entra authentication and Azure Container Registry (ACR).
 
-## Authentication compatibility
+## Prerequisites
 
-The current installer requires a separately reviewed **static kubeconfig**.
-Its exec/auth-provider credential plugins are unsupported, including the usual
-kubelogin exec configuration produced for Microsoft Entra authentication.
+- Azure CLI, kubelogin, kubectl, Helm 3 and the repository's Go toolchain.
+- Python 3.12 or newer when packaging the chart from source.
+- Permission to retrieve cluster credentials and perform the Kubernetes
+  installation operations.
+- Azure CNI powered by Cilium, including the Cilium policy APIs.
+- cert-manager installed and ready.
+- Application images and required third-party mirrors in a registry reachable
+  by the nodes, with image-pull permissions already configured.
 
-Do not pass an ordinary `az aks get-credentials` result directly to the installer
-or disable TLS verification to work around an authentication failure. Work with
-the cluster administrator to obtain an explicitly authorized target and supported
-credentials. Protect that kubeconfig as a secret and preserve the reviewed
-cluster identity throughout installation and recovery.
+Cluster provisioning is separate. The repository provides
+[Bicep infrastructure](../../infra/main.bicep) and
+[parameter tooling](../../deploy/aks/New-FoundationParameters.ps1) when a new
+foundation is needed.
 
-Operator inspection through Azure CLI or kubelogin does not establish that the
-same authentication configuration is supported by the installer.
+## 1. Select the cluster
 
-## Cluster and registry prerequisites
+Use a dedicated kubeconfig rather than changing the default one:
 
-- An approved AKS cluster, namespaces and administrator-owned authority namespace.
-- The required Kubernetes admission APIs and an approved Cilium policy profile.
-- cert-manager, CRDs and reachable application images for the reviewed chart.
-- Registry connectivity and node image-pull permissions configured through the
-  organization's normal platform process.
-- The Go version in [go.mod](../../go.mod), kubectl and Helm for the documented
-  installation tooling.
+```powershell
+New-Item -ItemType Directory -Force .\.local | Out-Null
+$ResourceGroup = '<resource-group>'
+$ClusterName = '<aks-cluster>'
+$Kubeconfig = Join-Path (Get-Location) '.local\aks.kubeconfig'
+$Context = 'kognition-aks'
 
-Review the [AKS deployment reference](../../deploy/aks/README.md) and its selected
-profile. The repository's [Bicep infrastructure](../../infra/main.bicep) and
-[parameter tooling](../../deploy/aks/New-FoundationParameters.ps1) are separate
-preparation paths, not prerequisites to run against an already prepared cluster.
+az aks get-credentials --resource-group $ResourceGroup --name $ClusterName `
+    --file $Kubeconfig --context $Context
+kubelogin convert-kubeconfig --kubeconfig $Kubeconfig -l azurecli
+kubectl --kubeconfig $Kubeconfig --context $Context get nodes
+```
 
-Do not start or stop a shared cluster, loosen registry network rules or change
-the global Kubernetes context as a documentation-validation step.
+**Bash (Linux/macOS):**
 
-## Installation and activation
+```bash
+mkdir -p .local
+ResourceGroup='<resource-group>'
+ClusterName='<aks-cluster>'
+Kubeconfig="$PWD/.local/aks.kubeconfig"
+Context='kognition-aks'
 
-Prepare the exact chart, values, inactive manifest, namespace inventory and
-reviewed plan described in [Kubernetes setup](kubernetes.md). The installer does
-not obtain Azure credentials, create namespaces or publish images.
+az aks get-credentials --resource-group "$ResourceGroup" --name "$ClusterName" \
+    --file "$Kubeconfig" --context "$Context"
+kubelogin convert-kubeconfig --kubeconfig "$Kubeconfig" -l azurecli
+kubectl --kubeconfig "$Kubeconfig" --context "$Context" get nodes
+```
 
-The [installation contract](../features/knowledge-provider-execution/installation-recovery-contract.md)
-ends at verified inactive admission. Follow the
-[activation contract](../features/knowledge-provider-execution/activation-transaction-contract.md)
-only after genuine acceptance and administrator approval for the exact target.
-Production activation remains blocked by its outstanding gates.
+Use the Azure CLI account and subscription that own the selected cluster.
+The installer supports the kubeconfig's kubelogin exec authentication.
 
-After an installation has satisfied its applicable activation and access-policy
-requirements, prepare an approved model and continue to
-[First agent](first-agent.md). A healthy control plane does not prove provider
-connectivity or authorize a paid model invocation.
+## 2. Verify networking and registry access
+
+Inspect the configured network profile:
+
+```powershell
+az aks show --resource-group $ResourceGroup --name $ClusterName `
+    --query '{plugin:networkProfile.networkPlugin,dataplane:networkProfile.networkDataplane}' `
+    --output table
+kubectl --kubeconfig $Kubeconfig --context $Context api-resources --api-group=cilium.io
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+az aks show --resource-group "$ResourceGroup" --name "$ClusterName" \
+    --query '{plugin:networkProfile.networkPlugin,dataplane:networkProfile.networkDataplane}' \
+    --output table
+kubectl --kubeconfig "$Kubeconfig" --context "$Context" api-resources --api-group=cilium.io
+```
+
+The profile must provide Cilium network and cluster-wide network policies.
+Kognition uses scoped Cilium policies for workload isolation, API access and
+node-health probes. On AKS, `ipBlock` rules cannot select node or Pod IPs.
+See [Azure CNI powered by Cilium](https://learn.microsoft.com/en-us/azure/aks/azure-cni-powered-by-cilium).
+
+Configure registry connectivity and pull permissions through the cluster's normal
+platform process. Do not change registry network access as an installation shortcut.
+For a private mirror, the [image synchronization helper](../../deploy/aks/Sync-ThirdPartyImages.ps1)
+copies the declared third-party image digests from an authorized publication runner.
+
+## 3. Prepare the chart and runtime profile
+
+Package the chart and install its CRDs using the kubeconfig and context already
+selected:
+
+```powershell
+New-Item -ItemType Directory -Force .\.local\charts | Out-Null
+python .\tools\distribution_notices.py charts
+helm package .\deploy\helm\kognition --destination .\.local\charts
+$Chart = '.\.local\charts\kognition-0.1.0.tgz'
+helm show crds $Chart | kubectl --kubeconfig $Kubeconfig --context $Context apply -f -
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+mkdir -p .local/charts
+python3 ./tools/distribution_notices.py charts
+helm package ./deploy/helm/kognition --destination ./.local/charts
+Chart='./.local/charts/kognition-0.1.0.tgz'
+helm show crds "$Chart" | kubectl --kubeconfig "$Kubeconfig" --context "$Context" apply -f -
+```
+
+Use the archive version emitted by `helm package`. See
+[Kubernetes setup](kubernetes.md#2-package-the-chart-and-install-its-crds) for
+the shared prerequisites.
+
+The AKS profile uses a single persistent PostgreSQL instance, the gateway services,
+AKS disk storage and no public application ingress. Configure separate
+availability, backup and recovery requirements before production use.
+
+Set your published image references and run the profile installer:
+
+```powershell
+$Registry = '<registry>.azurecr.io'
+$ImageTag = '<release-image-tag>'
+$ControllerDigest = 'sha256:<controller-image-digest>'
+
+.\deploy\aks\Install-RuntimeBase.ps1 `
+    -Kubeconfig $Kubeconfig -Context $Context -ChartPackage $Chart `
+    -Namespace kognition-system -WorkloadNamespace team-a `
+    -ImageRegistry $Registry -ImageTag $ImageTag `
+    -ControllerImageDigest $ControllerDigest `
+    -StateDirectory .\.local\aks-kognition-install -Exclusive
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+Registry='<registry>.azurecr.io'
+ImageTag='<release-image-tag>'
+ControllerDigest='sha256:<controller-image-digest>'
+
+pwsh -NoProfile -File ./deploy/aks/Install-RuntimeBase.ps1 \
+    -Kubeconfig "$Kubeconfig" -Context "$Context" -ChartPackage "$Chart" \
+    -Namespace kognition-system -WorkloadNamespace team-a \
+    -ImageRegistry "$Registry" -ImageTag "$ImageTag" \
+    -ControllerImageDigest "$ControllerDigest" \
+    -StateDirectory ./.local/aks-kognition-install -Exclusive
+```
+
+The AKS profile helper requires PowerShell 7 on Linux/macOS as well as Windows;
+see [command shells](../README.md#command-shells). It generates the same AKS
+values in both environments. Do not substitute a bare Helm install.
+
+This wrapper uses the same checked fresh installer. It does not provision Azure
+resources, publish images or configure inference endpoints.
+
+## 4. Verify and configure an agent
+
+```powershell
+kubectl --kubeconfig $Kubeconfig --context $Context -n kognition-system get pods
+kubectl --kubeconfig $Kubeconfig --context $Context -n kognition-system rollout status `
+    deployment/kognition-k8s-controller --timeout=120s
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+kubectl --kubeconfig "$Kubeconfig" --context "$Context" -n kognition-system get pods
+kubectl --kubeconfig "$Kubeconfig" --context "$Context" -n kognition-system rollout status \
+    deployment/kognition-k8s-controller --timeout=120s
+```
+
+Then configure an approved model and its credentials in `team-a`, preferably using
+workload identity where supported by the selected provider. Follow
+[First agent](first-agent.md) to create the Agent and ModelGrant and verify a turn.
+
+For additional profile details, see the [AKS deployment reference](../../deploy/aks/README.md)
+and [kubelogin authentication guidance](https://learn.microsoft.com/en-us/azure/aks/kubelogin-authentication).

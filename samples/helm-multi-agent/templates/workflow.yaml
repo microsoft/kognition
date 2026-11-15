@@ -14,17 +14,17 @@ spec:
     - name: researcher
       agentRef:
         name: researcher
-      input: "Research the following topic thoroughly: {{`{{.goal}}`}}"
+      input: "Research the following topic thoroughly: {{`{{.Input}}`}}"
       timeout: 90s
     - name: writer
       agentRef:
         name: writer
-      input: "Write an article based on this research:\n{{`{{.steps.researcher.output}}`}}"
+      input: "Write an article based on this research:\n{{`{{.Steps.researcher.Output}}`}}"
       timeout: 90s
     - name: reviewer
       agentRef:
         name: reviewer
-      input: "Review this article:\n{{`{{.steps.writer.output}}`}}"
+      input: "Review this article:\n{{`{{.Steps.writer.Output}}`}}"
       timeout: 60s
   edges:
     - from: researcher

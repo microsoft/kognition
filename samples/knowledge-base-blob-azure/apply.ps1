@@ -21,19 +21,23 @@ $ErrorActionPreference = "Stop"
 
 $sampleDir = $PSScriptRoot
 . (Join-Path $sampleDir '..\azure-settings.ps1')
+if (Get-AzureSampleProfile) {
+    Invoke-AzureSampleKnowledgeInstall -Source azure -SampleDirectory $sampleDir
+    return
+}
 $sourceNs  = if ($env:KOGNITION_PLATFORM_NAMESPACE) { $env:KOGNITION_PLATFORM_NAMESPACE } else { "kognition-system" }
 $targetNs  = "default"
 $serviceNs = "samples-azure-blob-services"
 $pgSecret  = "kognition-kb-pgvector"
 $sourceSecret = if ($env:KOGNITION_PLATFORM_RELEASE) { "$env:KOGNITION_PLATFORM_RELEASE-kb-pgvector" } else { $pgSecret }
 
-# Azurite well-known dev account. The key is PUBLIC (shipped with Azurite) and
-# is not a secret.
-$azAccount = "devstoreaccount1"
-$azKey     = "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
-$inClusterConn = "DefaultEndpointsProtocol=http;AccountName=$azAccount;AccountKey=$azKey;BlobEndpoint=http://azurite.$serviceNs.svc.cluster.local:10000/$azAccount;"
+# Azurite account: the name is fixed, the key is a per-installation random value
+# kept in the `azurite-account` Secret (never committed).
+$azKey          = Initialize-AzuriteAccount -Namespace $serviceNs
+$inClusterConn  = New-AzuriteConnectionString -AccountKey $azKey -BlobEndpoint "http://azurite.$serviceNs.svc.cluster.local:10000"
 $localPort = 10001
-$localConn = "DefaultEndpointsProtocol=http;AccountName=$azAccount;AccountKey=$azKey;BlobEndpoint=http://127.0.0.1:$localPort/$azAccount;"
+$localConn      = New-AzuriteConnectionString -AccountKey $azKey -BlobEndpoint "http://127.0.0.1:$localPort"
+$azAccount      = $script:AzuriteAccountName
 
 # --- 0. Best-effort: ensure the Azurite image is in the kind cluster ---------
 if ((Get-Command kind -ErrorAction SilentlyContinue) -and (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -66,11 +70,11 @@ if ($LASTEXITCODE -ne 0) { throw "azurite did not become ready" }
 
 # --- 2. Upload docs into Azurite via a temporary port-forward ----------------
 Write-Host "== Uploading sample docs into Azurite ($azAccount/product-docs)"
-$pf = Start-Process kubectl -ArgumentList @('port-forward', '-n', $serviceNs, 'svc/azurite', "${localPort}:10000") -PassThru -WindowStyle Hidden
+$processOptions = Get-AzureSampleProcessOptions
+$pf = Start-Process kubectl -ArgumentList @('port-forward', '-n', $serviceNs, 'svc/azurite', "${localPort}:10000") -PassThru @processOptions
 try {
     Start-Sleep -Seconds 3
-    $py = if ($env:VIRTUAL_ENV) { Join-Path $env:VIRTUAL_ENV 'Scripts/python.exe' } else { 'python' }
-    if (-not (Test-Path $py)) { $py = 'python' }
+    $py = Resolve-AzureSamplePython
     $env:KOGNITION_BLOB_CONNECTION_STRING = $localConn
     & $py (Join-Path $sampleDir 'upload_docs.py')
     $uploadExit = $LASTEXITCODE

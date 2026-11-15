@@ -1,8 +1,13 @@
 # Guarded GitOps Without A CI Pipeline
 
-Argo CD can deploy reviewed, manually built artifacts. A working GitHub Actions
-pipeline is not a prerequisite. Keep release-security clearance and controller
-activation separate from an inactive installation.
+This reference covers a manually controlled Argo CD deployment and its external
+activation protocol. It is separate from the
+[fresh command-line installer](../docs/getting-started/kubernetes.md).
+
+Argo CD can deploy reviewed, manually built artifacts without a GitHub Actions
+pipeline. Do not let Argo concurrently manage the same release while the fresh
+installer or a recovery transaction is running. Keep release qualification
+separate from installation readiness.
 
 ## Required Inputs
 
@@ -19,7 +24,7 @@ serve these inputs without external publication. Disable Git receive-pack and
 upload-archive, mount the served repository read-only and expose no public ports.
 Update the local bare repository only through its separately controlled owner.
 
-## Inactive Installation
+## Prepare admission before manual activation
 
 1. Build and verify the images manually. Retain exact platform digests, source,
    SBOM, provenance and unresolved scanner findings.

@@ -67,6 +67,14 @@ go run .\cmd\kognitionctl invocation-profile-digest `
   --name nonreasoning-tools-v1
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+go run ./cmd/kognitionctl invocation-profile-digest \
+  -f ./samples/model-invocation-profiles/manifests.yaml \
+  --name nonreasoning-tools-v1
+```
+
 The command validates the selected profile, excludes metadata and empty top-level
 spec objects, canonicalizes JSON using the repository's canonical JSON encoder,
 then hashes the UTF-8 domain prefix `kognition.model-invocation/v1` plus a newline
@@ -182,6 +190,12 @@ nonsecret model/profile manifests and Helm values without any cloud operation:
 .\deploy\azure-samples\Export-Models.ps1
 ```
 
+**Bash (Linux/macOS), with PowerShell 7 installed:**
+
+```bash
+pwsh -NoProfile -File ./deploy/azure-samples/Export-Models.ps1
+```
+
 Generated profiles precede their Models. The multi-agent Helm sample owns its
 own profile and Model, avoiding ownership conflicts with the model snapshot.
 The API, CLI, conversion layer, admission, CRD, controller reader and gateway
@@ -209,6 +223,14 @@ agent's LangChain dependencies and run the
 ```powershell
 .\deploy\azure-samples\Test-InvocationProfiles.ps1 `
   -PythonExecutable '<qualified-python-executable>' `
+  -ResultsPath '<new-local-results.ndjson>'
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+pwsh -NoProfile -File ./deploy/azure-samples/Test-InvocationProfiles.ps1 \
+  -PythonExecutable '<qualified-python-executable>' \
   -ResultsPath '<new-local-results.ndjson>'
 ```
 

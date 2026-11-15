@@ -447,7 +447,9 @@ A few concrete examples of the operational ergonomics this design buys:
 
 **A new engineer onboarding**
 
-```bash
+These inspection commands work in Bash and PowerShell:
+
+```sh
 kubectl get agents -A
 kubectl describe agent writer -n default
 kubectl logs -n default deploy/agent-writer
@@ -459,7 +461,9 @@ No new mental model. They already know what each verb means.
 
 **GitOps roll-forward of an agent change**
 
-```bash
+The following commands also work in either shell:
+
+```sh
 git apply prompt-tweak.yaml
 git push                           # Argo CD picks it up
 kubectl get agents writer -o yaml  # observe new generation

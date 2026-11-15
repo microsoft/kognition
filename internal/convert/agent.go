@@ -309,23 +309,39 @@ func restartLadderFromK8s(in *k8s.RestartLadder) *api.RestartLadder {
 }
 
 func agentStatusToK8s(in api.AgentStatus) k8s.AgentStatus {
-	return k8s.AgentStatus{
+	out := k8s.AgentStatus{
 		Phase:         phaseToString(in.Phase),
 		Conditions:    conditionsToK8s(in.Conditions),
 		Replicas:      in.Replicas,
 		ReadyReplicas: in.ReadyReplicas,
 		RevisionCount: in.RevisionCount,
 	}
+	if in.Runtime != nil {
+		out.Runtime = &k8s.AgentRuntimeStatus{
+			Ready: in.Runtime.Ready, DesiredReplicas: in.Runtime.DesiredReplicas,
+			Replicas: in.Runtime.Replicas, ReadyReplicas: in.Runtime.ReadyReplicas,
+			UpdatedReplicas: in.Runtime.UpdatedReplicas, AvailableReplicas: in.Runtime.AvailableReplicas,
+		}
+	}
+	return out
 }
 
 func agentStatusFromK8s(in k8s.AgentStatus) api.AgentStatus {
-	return api.AgentStatus{
+	out := api.AgentStatus{
 		Phase:         phaseFromString(in.Phase),
 		Conditions:    conditionsFromK8s(in.Conditions),
 		Replicas:      in.Replicas,
 		ReadyReplicas: in.ReadyReplicas,
 		RevisionCount: in.RevisionCount,
 	}
+	if in.Runtime != nil {
+		out.Runtime = &api.AgentRuntimeStatus{
+			Ready: in.Runtime.Ready, DesiredReplicas: in.Runtime.DesiredReplicas,
+			Replicas: in.Runtime.Replicas, ReadyReplicas: in.Runtime.ReadyReplicas,
+			UpdatedReplicas: in.Runtime.UpdatedReplicas, AvailableReplicas: in.Runtime.AvailableReplicas,
+		}
+	}
+	return out
 }
 
 func agentInstanceStatusToK8s(in api.AgentInstanceStatus) k8s.AgentInstanceStatus {

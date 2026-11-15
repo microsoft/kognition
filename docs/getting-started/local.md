@@ -11,8 +11,10 @@ not a production installation profile.
 
 ## 1. Prepare the checkout and tools
 
-Use Docker with Compose, PowerShell 7 and the Go version declared in
+Use Docker with Compose and the Go version declared in
 [go.mod](../../go.mod). Run commands from the repository root.
+Use Bash on Linux/macOS or PowerShell 7 on Windows. Some optional repository
+helpers require PowerShell 7 on all platforms; see [command shells](../README.md#command-shells).
 
 Build the CLI:
 
@@ -27,9 +29,6 @@ On Linux or macOS:
 go build -o ./bin/kognitionctl ./cmd/kognitionctl
 ./bin/kognitionctl --help
 ```
-
-The remaining commands use PowerShell and the Windows binary name. Use the
-corresponding native binary on another platform.
 
 ## 2. Prepare credentials and persistence
 
@@ -53,6 +52,15 @@ docker compose ps -a
 Invoke-RestMethod http://127.0.0.1:8080/healthz
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+docker compose config --quiet
+docker compose up -d --build --wait --wait-timeout 180
+docker compose ps -a
+curl --fail --silent --show-error http://127.0.0.1:8080/healthz
+```
+
 Expected checks:
 
 - Compose starts the configured services.
@@ -74,6 +82,14 @@ $env:KOGNITION_API_TOKEN = $env:KOGNITION_BOOTSTRAP_TOKEN
     --namespace default get agents
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+export KOGNITION_API_TOKEN="$KOGNITION_BOOTSTRAP_TOKEN"
+./bin/kognitionctl --mode standalone --server http://127.0.0.1:8080 \
+    --namespace default get agents
+```
+
 An empty collection is a valid result on a fresh installation. An authentication
 failure is not: verify the operator token and endpoint rather than disabling
 authentication. Use HTTPS for a non-loopback server.
@@ -90,7 +106,9 @@ enabling the external runtime overlay.
 
 ## Stop without deleting persistent data
 
-```powershell
+The stop command is the same in Bash and PowerShell:
+
+```sh
 docker compose stop
 ```
 

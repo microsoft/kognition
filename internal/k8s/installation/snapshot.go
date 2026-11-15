@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -15,6 +16,17 @@ import (
 )
 
 func Snapshot(plan Plan) (Plan, string, func(), error) {
+	return snapshot(plan, false)
+}
+
+func SnapshotFresh(plan Plan) (Plan, string, func(), error) {
+	if err := ValidateFreshPlan(plan); err != nil {
+		return Plan{}, "", nil, err
+	}
+	return snapshot(plan, true)
+}
+
+func snapshot(plan Plan, allowExec bool) (Plan, string, func(), error) {
 	directory, err := os.MkdirTemp("", "kognition-install-")
 	if err != nil {
 		return Plan{}, "", nil, err
@@ -57,8 +69,19 @@ func Snapshot(plan Plan) (Plan, string, func(), error) {
 		return fail(err)
 	}
 	for _, credentials := range config.AuthInfos {
-		if credentials.Exec != nil || credentials.AuthProvider != nil {
+		if credentials.AuthProvider != nil || credentials.Exec != nil && !allowExec {
 			return fail(errors.New("installation requires static administrator credentials; exec and auth-provider plugins are unsupported"))
+		}
+		if credentials.Exec != nil {
+			command := credentials.Exec.Command
+			if strings.ContainsAny(command, `/\`) && !filepath.IsAbs(command) {
+				command = filepath.Join(filepath.Dir(plan.Kubeconfig), command)
+			}
+			resolved, err := exec.LookPath(command)
+			if err != nil {
+				return fail(err)
+			}
+			credentials.Exec.Command = resolved
 		}
 		if credentials.TokenFile != "" {
 			token, err := os.ReadFile(credentials.TokenFile)

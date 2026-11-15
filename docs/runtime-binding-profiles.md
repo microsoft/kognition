@@ -138,8 +138,17 @@ with an exact source SHA-256 and explicit target workspace/Model references:
 
 ```powershell
 kognitionctl import kagent plan --file ./reviewed-agent.yaml `
-  --sha256 <exact-source-sha256> --target-namespace reviewed-workspace `
+  --sha256 '<exact-source-sha256>' --target-namespace reviewed-workspace `
   --model reviewed-model `
+  --tool-binding upstream.Provider=reviewed-tool
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+kognitionctl import kagent plan --file ./reviewed-agent.yaml \
+  --sha256 '<exact-source-sha256>' --target-namespace reviewed-workspace \
+  --model reviewed-model \
   --tool-binding upstream.Provider=reviewed-tool
 ```
 

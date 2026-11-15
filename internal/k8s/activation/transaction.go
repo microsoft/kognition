@@ -36,17 +36,31 @@ type ActivationOptions struct {
 }
 
 func (candidate Candidate) Activate(ctx context.Context, admin client.Client, config *rest.Config, options ActivationOptions) (result Audit, err error) {
+	return candidate.activate(ctx, admin, config, options, false)
+}
+
+func (candidate Candidate) activate(ctx context.Context, admin client.Client, config *rest.Config, options ActivationOptions, fresh bool) (result Audit, err error) {
+	validate := approvalValidator(ValidateApproval)
+	if fresh {
+		validate = ValidateFreshAuthorization
+	}
 	if !options.WritersFrozen || config == nil || config.Host != options.Endpoint {
 		return result, errors.New("explicit writer freeze and matching API endpoint are required")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, TransactionTimeout(len(candidate.manifest.Namespaces)))
 	defer cancel()
 	record, approval, err := readApproval(ctx, admin, options.Approval, candidate.manifest)
 	if err != nil {
 		return result, err
 	}
-	if err := validateReports(approval, record.Data); err != nil {
-		return result, err
+	var evidenceErr error
+	if fresh {
+		evidenceErr = VerifyFreshBootstrap(ctx, admin, record, approval)
+	} else {
+		evidenceErr = validateReports(approval, record.Data)
+	}
+	if evidenceErr != nil {
+		return result, evidenceErr
 	}
 	if err := candidate.checkOptions(approval.Target, options); err != nil {
 		return result, err
@@ -58,14 +72,14 @@ func (candidate Candidate) Activate(ctx context.Context, admin client.Client, co
 	if err != nil {
 		return result, err
 	}
-	if err := ValidateApproval(approval, target, time.Now().UTC()); err != nil {
+	if err := validate(approval, target, time.Now().UTC()); err != nil {
 		return result, err
 	}
 	result = Audit{ApprovalUID: string(record.UID), Approval: approval, Stage: "dry-run", Started: time.Now().UTC()}
 	if options.DryRun {
 		return result, nil
 	}
-	journal, err := claimApproval(ctx, admin, record, approval, time.Now().UTC())
+	journal, err := claimAuthorization(ctx, admin, record, approval, time.Now().UTC(), validate)
 	if err != nil {
 		return result, err
 	}
@@ -94,7 +108,7 @@ func (candidate Candidate) Activate(ctx context.Context, admin client.Client, co
 	if err != nil {
 		return result, err
 	}
-	if err = ValidateApproval(approval, current, time.Now().UTC()); err != nil {
+	if err = validate(approval, current, time.Now().UTC()); err != nil {
 		return result, err
 	}
 	currentRecord, _, err := readApproval(ctx, admin, options.Approval, candidate.manifest)
@@ -104,6 +118,11 @@ func (candidate Candidate) Activate(ctx context.Context, admin client.Client, co
 	if currentRecord.UID != record.UID || currentRecord.ResourceVersion != record.ResourceVersion {
 		return result, errors.New("approval changed after consumption")
 	}
+	if fresh {
+		if err = VerifyFreshBootstrap(ctx, admin, currentRecord, approval); err != nil {
+			return result, err
+		}
+	}
 	for _, binding := range candidate.bindings(journal.UID) {
 		if err = saveStage(ctx, admin, journal, "granting:"+binding.GetNamespace()+"/"+binding.GetName(), nil); err != nil {
 			return result, err
@@ -111,7 +130,7 @@ func (candidate Candidate) Activate(ctx context.Context, admin client.Client, co
 		if err = compareInventory(ctx, admin, target, false); err != nil {
 			return result, err
 		}
-		if err = ValidateApproval(approval, target, time.Now().UTC()); err != nil {
+		if err = validate(approval, target, time.Now().UTC()); err != nil {
 			return result, err
 		}
 		if err = createJournaledResource(ctx, admin, journal, binding, false); err != nil {
@@ -146,7 +165,7 @@ func (candidate Candidate) Activate(ctx context.Context, admin client.Client, co
 	if err = candidate.verifyBindings(ctx, admin, journal); err != nil {
 		return result, err
 	}
-	if err = ValidateApproval(approval, target, time.Now().UTC()); err != nil {
+	if err = validate(approval, target, time.Now().UTC()); err != nil {
 		return result, err
 	}
 	if err = candidate.scale(ctx, admin, target, target.Replicas); err != nil {
@@ -156,7 +175,7 @@ func (candidate Candidate) Activate(ctx context.Context, admin client.Client, co
 		return result, err
 	}
 	err = wait.PollUntilContextTimeout(ctx, time.Second, time.Minute, true, func(ctx context.Context) (bool, error) {
-		if err := ValidateApproval(approval, target, time.Now().UTC()); err != nil {
+		if err := validate(approval, target, time.Now().UTC()); err != nil {
 			return false, err
 		}
 		if err := compareInventory(ctx, admin, target, true); err != nil {

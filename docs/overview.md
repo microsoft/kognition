@@ -49,9 +49,9 @@ execution and authorization resources.
 ## Maturity and boundaries
 
 - The project is under active development; compatibility can change.
-- Kubernetes bootstrap ends at verified inactive admission. Starting the
-  controller requires separately approved activation with genuine acceptance
-  evidence; production activation remains blocked by its outstanding gates.
+- The Kubernetes installer verifies admission and database readiness before
+  starting the controller. Existing releases use the separate upgrade/recovery
+  procedure.
 - Sample manifests illustrate configuration and may contain environment-specific
   bindings. Review and adapt them before use.
 - Provider calls can incur charges and transmit inputs to the configured provider.

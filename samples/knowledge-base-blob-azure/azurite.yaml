@@ -7,8 +7,9 @@
 # account, no RBAC, and no network egress. Blob data is ephemeral (emptyDir);
 # apply.ps1 re-uploads the docs on every run.
 #
-# Azurite uses the well-known dev account `devstoreaccount1` with a fixed,
-# PUBLIC dev key — it is not a secret and is safe to commit.
+# Azurite runs with the `devstoreaccount1` account name and a per-installation
+# random key. The installer stores it in the `azurite-account` Secret (created
+# before this manifest is applied) and Azurite reads it through AZURITE_ACCOUNTS.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -63,6 +64,12 @@ spec:
             - "/data"
             - "--skipApiVersionCheck"
             - "--disableProductStyleUrl"
+          env:
+            - name: AZURITE_ACCOUNTS
+              valueFrom:
+                secretKeyRef:
+                  name: azurite-account
+                  key: accounts
           ports:
             - name: blob
               containerPort: 10000

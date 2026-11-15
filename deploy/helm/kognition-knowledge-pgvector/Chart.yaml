@@ -3,7 +3,7 @@
 
 apiVersion: v2
 name: kognition-knowledge-pgvector
-description: Typed pgvector knowledge configuration; adapter deployment is not yet included
+description: Typed pgvector knowledge configuration with an optional governed provider adapter
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

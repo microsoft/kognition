@@ -1,15 +1,21 @@
 # Activation Transaction Contract
 
-- Status: SG-04 implemented for local review; production activation remains BLOCKED.
-- Updated: 2026-10-23.
+Fresh installation now uses an automatically issued, distinct first-install
+authorization after its checks pass; see [ADR-0028](../../adr/0028-first-installation-lifecycle.md).
+The external acceptance-report approval protocol below remains applicable to the
+existing-release/manual activation workflow. It is not the first-install guide.
+
+- Status: manual activation/recovery implemented for local review; production
+  qualification remains separate.
+- Implementation evidence date: 2026-10-23; documentation scope updated 2026-11-13.
 - Code: [transaction](../../../internal/k8s/activation/transaction.go), [recovery](../../../internal/k8s/activation/recovery.go), [command](../../../tools/check-admission-activation/transaction.go).
 
 Local [SG-07](../../development-plans/features/knowledge-provider-execution/sg07-local-acceptance.md), [SG-08](../../development-plans/features/knowledge-provider-execution/sg08-local-acceptance.md) and
 [SG-09](../../development-plans/features/knowledge-provider-execution/sg09-operator-contract-review.md) evidence is recorded for its stated
 scope. It does not supply fresh, exact-target production acceptance or approval.
-Synthetic reports and Deployment readiness never satisfy those gates. SG-05 owns
-installation/upgrade wrappers. This contract does not authorize activating an
-installation; remaining candidate and deployment gates still apply.
+Synthetic reports and Deployment readiness never satisfy those gates in the
+manual protocol. Existing-release operations require their applicable evidence and
+approval; the fresh-install record is not a substitute for those reports.
 
 ## Prerequisites And Authority
 
@@ -57,6 +63,22 @@ $activationArgs = @(
 ./bin/check-admission-activation.exe prepare @activationArgs
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+go build -o ./bin/check-admission-activation ./tools/check-admission-activation
+activationArgs=(
+    --manifest ./reviewed/bootstrap.yaml
+    --chart ./reviewed/kognition.tgz
+    --kubeconfig ./reviewed/target.kubeconfig
+    --release reviewed-release
+    --authority-namespace activation-authority
+    --replicas 1
+    --writers-frozen
+)
+./bin/check-admission-activation prepare "${activationArgs[@]}"
+```
+
 Substitute administrator-reviewed artifacts and an explicitly authorized target.
 `prepare` verifies inactive/drained structural state and returns the exact target
 in JSON `result`; it does not issue approval. After genuine acceptance and approval,
@@ -74,7 +96,13 @@ read-only and separate.
 The transaction CLI sets a 15-second request timeout and a client-side budget of
 50 requests/second with burst 100. This supports repeated exact inventory checks
 across enrolled namespaces; it does not skip checks, extend approval validity or
-remove the five-minute activation deadline. A client rate-limit deadline error is
+remove the bounded activation deadline. The transaction budget is five minutes
+for one workload namespace plus one minute per additional reviewed namespace,
+capped at twenty minutes. Journaled policy verification uses two minutes plus
+one minute per additional namespace, capped at fifteen minutes. Per-request
+timeouts, individual probe limits, cleanup deadlines and approval expiry remain
+unchanged. Post-cleanup inventory verification uses the remaining policy
+verification budget rather than the cleanup deadline. A client rate-limit deadline error is
 a failed attempt, not successful rollout. Retain its diagnostics and compensation
 result before deciding whether a new attempt is appropriate.
 

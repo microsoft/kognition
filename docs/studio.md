@@ -12,6 +12,12 @@ Build the current source or run it directly:
 go run .\cmd\kognitionctl studio --mode standalone --server http://127.0.0.1:8080
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+go run ./cmd/kognitionctl studio --mode standalone --server http://127.0.0.1:8080
+```
+
 Use the printed local URL. Select Kubernetes mode only with the intended existing
 kubeconfig, context and namespace. Studio uses that caller's existing access;
 Deploy changes the selected backend and remains subject to its admission,
@@ -85,6 +91,12 @@ To learn without an API server, kubeconfig or cloud account:
 go run .\cmd\kognitionctl studio --tutorial --open
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+go run ./cmd/kognitionctl studio --tutorial --open
+```
+
 Tutorial-only startup bypasses live backend initialization, even if a live CLI
 mode was configured. It binds to `127.0.0.1`; remote/public binding is rejected.
 The first lesson uses the common/standalone resource view and the virtual
@@ -126,6 +138,17 @@ npm run test:studio:browser -- --workers=2
 npm run test:studio:tutorial
 go test -race .\internal\studiotutorial -count=1
 go build .\cmd\kognitionctl
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+go run ./tools/studio-catalog
+go test ./tools/studio-catalog ./cmd/kognitionctl/cmd -run 'Test(Catalog|Studio|Dashboard|LocalUI)' -count=1
+npm run test:studio:browser -- --workers=2
+npm run test:studio:tutorial
+go test -race ./internal/studiotutorial -count=1
+go build ./cmd/kognitionctl
 ```
 
 The generator checks registry coverage and preserves standalone/Kubernetes wire

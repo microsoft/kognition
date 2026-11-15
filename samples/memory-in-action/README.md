@@ -31,7 +31,9 @@ proves admission, binding, and lifecycle visibility.
 - Kognition installed in Kubernetes mode.
 - The shared tool sandbox:
 
-  ```powershell
+  These commands work in Bash and PowerShell:
+
+  ```sh
   kubectl apply -f samples/workflows/tool-sandbox.yaml
   kubectl -n default wait --for=condition=Available --timeout=60s deployment/tool-sandbox
   ```
@@ -55,15 +57,45 @@ kubectl -n default wait --for=jsonpath='{.status.phase}'=Ready agent/notes-agent
   --mode kubernetes
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+kubectl apply -f samples/memory-in-action/manifests.yaml
+kubectl -n default wait '--for=jsonpath={.status.phase}=Bound' memoryclaim/notes-claim --timeout=60s
+kubectl -n default wait '--for=jsonpath={.status.phase}=Ready' agent/notes-agent --timeout=120s
+./bin/kognitionctl chat notes-agent \
+  "Remember that my favorite color is blue and my dog is named Pepper. Use sandbox_memory_store for each fact." \
+  --mode kubernetes
+./bin/kognitionctl chat notes-agent \
+  "Use sandbox_memory_recall first: what is my favorite color and my dog's name?" \
+  --mode kubernetes
+```
+
 ## Verify Sandbox Storage
 
-```powershell
-kubectl -n default port-forward service/tool-sandbox 18080:8080
+In one terminal (Bash or PowerShell):
 
+```sh
+kubectl -n default port-forward service/tool-sandbox 18080:8080
+```
+
+In a second terminal, query the forwarded endpoint.
+
+**PowerShell (Windows):**
+
+```powershell
 Invoke-RestMethod -Uri http://127.0.0.1:18080/memory-recall `
   -Method POST -ContentType "application/json" `
   -Body '{"query":"color","top_k":10}' |
   ConvertTo-Json -Depth 5
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+curl --fail --silent --show-error http://127.0.0.1:18080/memory-recall \
+  --header 'Content-Type: application/json' \
+  --data '{"query":"color","top_k":10}' | python3 -m json.tool
 ```
 
 The sandbox stores records in process and resets when its pod restarts. It is

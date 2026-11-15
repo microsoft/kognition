@@ -84,7 +84,7 @@ func runTransaction(arguments []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), candidate.TransactionTimeout()+time.Minute)
 		defer cancel()
 		options := activation.ActivationOptions{Approval: client.ObjectKey{Namespace: *authority, Name: *approval}, Endpoint: config.Host, ServerVersion: version.GitVersion, ChartSHA256: chartDigest, ToolVersion: "sha256:" + toolDigest, Replicas: int32(*replicas), WritersFrozen: *frozen, DryRun: *dryRun}
 		switch mode {

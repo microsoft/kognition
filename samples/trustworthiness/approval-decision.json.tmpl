@@ -1,0 +1,23 @@
+{
+  "apiVersion": "kognition.dev/v1alpha1",
+  "kind": "ApprovalDecision",
+  "metadata": {
+    "name": "trust-demo-approval",
+    "namespace": "${NAMESPACE}",
+    "labels": {
+      "app.kubernetes.io/part-of": "trustworthiness",
+      "kognition.dev/demo-run": "${DEMO_RUN_ID}"
+    },
+    "annotations": {
+      "kognition.dev/idempotency-key": "${APPROVAL_KEY}"
+    }
+  },
+  "spec": {
+    "workflowRunRef": { "name": "trust-demo-run" },
+    "step": "publish",
+    "iteration": 0,
+    "decision": "approve",
+    "approver": "${APPROVER}",
+    "reason": "${APPROVAL_REASON}"
+  }
+}

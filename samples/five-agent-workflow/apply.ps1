@@ -2,14 +2,15 @@
 # Licensed under the MIT License.
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot '..\azure-settings.ps1')
 
 $scenario = Join-Path $PSScriptRoot "scenario.yaml"
-$namespace = "default"
+$namespace = Get-AzureSampleNamespace
 $agentSelector = "app.kubernetes.io/part-of=mvp1-five-agent-workflow"
 $runName = "mvp1-five-agent-run"
 
 Write-Host "== Applying five-agent workflow resources"
-& kubectl apply -f $scenario
+Invoke-AzureSampleApply -Path $scenario
 if ($LASTEXITCODE -ne 0) { throw "Five-agent workflow apply failed" }
 
 Write-Host "== Waiting for the five workflow Agents to become ready"

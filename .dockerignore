@@ -9,6 +9,8 @@
 **/.pytest_cache/
 **/*.pyc
 .tmp/
+.local/
+.azure/
 bin/
 cover*
 cov.txt

@@ -21,13 +21,27 @@ The planner selects checks. Exit zero means the plan was generated successfully;
 plan does not replace tests, scanner findings, risk review or activation approval.
 Source publication must not be described as current SG-11/SG-12 certification.
 
+## Workflow Token Permissions
+
+- [CI](../.github/workflows/ci.yml) defaults to `contents: read`; current jobs
+  require no write permissions. Its security job runs scanners without uploading
+  SARIF results, so it does not request `security-events: write`.
+- [Release](../.github/workflows/release.yml) defaults to `contents: read`.
+  Tag resolution has `permissions: {}`. Only the `images`, `runtime-agent-image`,
+  `runtime-ingester-image` and `helm-chart` publishing jobs receive
+  `packages: write`, alongside `contents: read`.
+- Jobs inherit the workflow baseline unless they declare their own permissions.
+  Grant additional permissions only to jobs that need them.
+
 ## Generate A Plan
 
 Select the most recent reviewed baseline for the intended assurance scope. CI uses
 the event's base commit for change detection; that commit is not automatically a
 certified baseline. Local planning can use an older recorded acceptance commit.
 
-```powershell
+The planner commands work in Bash and PowerShell:
+
+```sh
 go run ./tools/securitygate plan --base 261c5038f1c578bdc493b5bd4cb5fb7160fc0b88 --head HEAD
 go run ./tools/securitygate plan --base 261c5038f1c578bdc493b5bd4cb5fb7160fc0b88 --head HEAD --format markdown
 

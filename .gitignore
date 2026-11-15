@@ -11,6 +11,7 @@ $*
 node_modules/
 /website/.astro/
 /website/dist/
+/website/public/media/tutorial/
 
 # Binaries
 bin/
@@ -29,7 +30,7 @@ vendor/
 # IDE
 .idea/
 .memory/
-/.hackaton2026/
+/.demo-preparation/
 /.local/
 /mentoring/
 /docs/release-preparation/
@@ -40,9 +41,14 @@ vendor/
 *.swo
 *~
 
-# Hackathon preparation documents; runnable samples and tests remain versioned.
+# Demo preparation documents; runnable samples and tests remain versioned.
 /docs/development-plans/tutorials/
 /tools/recording/README.md
+/samples/trustworthiness/storyboard-v1.md
+
+# Legacy locations of the preparation documents above. Existing clones may still
+# hold private files at these paths, so keep them ignored after the rename.
+/.hackaton2026/
 /samples/hackathon-trustworthiness/storyboard-v1.md
 
 # OS
@@ -141,21 +147,21 @@ e2e/fixtures/sg08-provider/*
 !e2e/gateway-authority-acceptance.ps1
 !e2e/gateway-authority-acceptance-test.ps1
 !e2e/fixtures/Dockerfile.gateway-authority
-!e2e/hackathon-trustworthiness-parity-test.ps1
-!e2e/hackathon-trustworthiness-parity-gate-test.ps1
-!e2e/hackathon-trustworthiness-publication-test.ps1
-!e2e/hackathon-trustworthiness-session-test.ps1
-!e2e/hackathon-trust-profile-phases.ps1
-!e2e/hackathon-trustworthiness-cleanup-test.ps1
-!e2e/hackathon-trustworthiness-correlation-test.ps1
+!e2e/trustworthiness-parity-test.ps1
+!e2e/trustworthiness-parity-gate-test.ps1
+!e2e/trustworthiness-publication-test.ps1
+!e2e/trustworthiness-session-test.ps1
+!e2e/trust-profile-phases.ps1
+!e2e/trustworthiness-cleanup-test.ps1
+!e2e/trustworthiness-correlation-test.ps1
 !e2e/capability-mint.ps1
 !e2e/gateway-client-tracing.ps1
-!e2e/hackathon-trustworthiness-browser-rehearsal.js
-!e2e/hackathon-trustworthiness-demo.ps1
-!e2e/hackathon-trustworthiness-e2e.ps1
-!e2e/hackathon-trustworthiness-fallback-e2e.ps1
-!e2e/hackathon-trustworthiness-readiness-test.ps1
-!e2e/hackathon-trustworthiness-storyboard-e2e.ps1
+!e2e/trustworthiness-browser-rehearsal.js
+!e2e/trustworthiness-demo.ps1
+!e2e/trustworthiness-e2e.ps1
+!e2e/trustworthiness-fallback-e2e.ps1
+!e2e/trustworthiness-readiness-test.ps1
+!e2e/trustworthiness-storyboard-e2e.ps1
 !e2e/kb-e2e-test.ps1
 !e2e/kubernetes-audit-e2e.ps1
 !e2e/kubernetes-capability-key-rotation-e2e.ps1

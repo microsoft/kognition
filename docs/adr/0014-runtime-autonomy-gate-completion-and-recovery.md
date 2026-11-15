@@ -66,12 +66,16 @@ cannot be bypassed by later policy loosening.
 
 The execution state is:
 
-```text
-NotStarted -> Claimed -> Completed
-                      -> Failed
-                      -> Uncertain -> Completed (ReconciledCompleted)
-                                   -> Failed (ReconciledNotExecuted)
-NotStarted -> Failed (pre-dispatch disposition)
+```mermaid
+stateDiagram-v2
+    [*] --> NotStarted
+    NotStarted --> Claimed
+    NotStarted --> Failed: pre-dispatch disposition
+    Claimed --> Completed
+    Claimed --> Failed
+    Claimed --> Uncertain
+    Uncertain --> Completed: ReconciledCompleted
+    Uncertain --> Failed: ReconciledNotExecuted
 ```
 
 A `RuntimeApproval` therefore owns replay for every protected action. Tool and

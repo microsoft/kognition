@@ -137,14 +137,14 @@ func TestTrustFocusObservabilityAcceptanceContract(t *testing.T) {
 }
 
 // TC-0312: The primary trustworthiness demo enforces clean scopes, records every claim, and verifies cleanup.
-func TestHackathonTrustworthinessPrimaryPathAcceptanceContract(t *testing.T) {
+func TestTrustworthinessPrimaryPathAcceptanceContract(t *testing.T) {
 	repoRoot, err := findRepoRoot()
 	if err != nil {
 		t.Fatalf("find repo root: %v", err)
 	}
 
-	assertArtifactContains(t, repoRoot, "e2e/hackathon-trustworthiness-e2e.ps1",
-		`$namespace = "kognition-hack-$DemoRunId"`,
+	assertArtifactContains(t, repoRoot, "e2e/trustworthiness-e2e.ps1",
+		`$namespace = "kognition-demo-$DemoRunId"`,
 		`Add-Assertion -Name "control-plane-ready"`,
 		`kubernetes.io/service-name=$webhookService`,
 		`--reuse-values --wait --timeout 5m`,
@@ -169,7 +169,7 @@ func TestHackathonTrustworthinessPrimaryPathAcceptanceContract(t *testing.T) {
 		`Invoke-Kubectl @("get", ($resourceTypes -join ','), "-n", $namespace, "-o", "json")`,
 		`throw "Invalid retention record: $($record.kind)/$($record.metadata.name)"`,
 	)
-	assertArtifactContains(t, repoRoot, "samples/hackathon-trustworthiness/workflow-approval.json.tmpl",
+	assertArtifactContains(t, repoRoot, "samples/trustworthiness/workflow-approval.json.tmpl",
 		`"name": "prepared"`,
 		`"type": "tool"`,
 		`"agentRef": { "name": "tool-e2e-agent" }`,
@@ -178,13 +178,13 @@ func TestHackathonTrustworthinessPrimaryPathAcceptanceContract(t *testing.T) {
 }
 
 // TC-0313: An unavailable Kubernetes context selects the deterministic standalone fallback before mutation.
-func TestHackathonTrustworthinessFallbackAcceptanceContract(t *testing.T) {
+func TestTrustworthinessFallbackAcceptanceContract(t *testing.T) {
 	repoRoot, err := findRepoRoot()
 	if err != nil {
 		t.Fatalf("find repo root: %v", err)
 	}
 
-	assertArtifactContains(t, repoRoot, "e2e/hackathon-trustworthiness-demo.ps1",
+	assertArtifactContains(t, repoRoot, "e2e/trustworthiness-demo.ps1",
 		`@("cluster-info")`,
 		`@("get", "deployment/$ReleaseName-k8s-controller"`,
 		`mutationCommands = @()`,
@@ -196,31 +196,31 @@ func TestHackathonTrustworthinessFallbackAcceptanceContract(t *testing.T) {
 		`name = "kubernetesNetworkPolicy"; availability = "unavailable"`,
 		`$script:fallbackCleanupPassed = $tempRemoved -and $fixtureStopped -and $dashboardStopped`,
 	)
-	assertArtifactContains(t, repoRoot, "e2e/hackathon-trustworthiness-fallback-e2e.ps1",
+	assertArtifactContains(t, repoRoot, "e2e/trustworthiness-fallback-e2e.ps1",
 		`$missingContext = "kognition-unavailable-$DemoRunId"`,
 		`$report.preflight.mutationCommands`,
 		`$requiredAssertions = @("toolAllow", "memoryAllow", "denyBeforeExecution", "standaloneApprovalEvidence", "liveRevocationEvidence", "decisionExplorer")`,
 		`$requiredUnavailableClaims = @("kubernetesNamespaceIsolation", "kubernetesAdmission", "kubernetesNetworkPolicy", "productionStandaloneParity", "publication")`,
 		`$report.cleanup.passed`,
 	)
-	assertArtifactContains(t, repoRoot, "samples/hackathon-trustworthiness/runbook.md",
-		`hackathon-trustworthiness-demo.ps1`,
+	assertArtifactContains(t, repoRoot, "samples/trustworthiness/runbook.md",
+		`trustworthiness-demo.ps1`,
 		`three sequential runs with distinct`,
 		`Restart that validation sequence after a failure or manual repair.`,
 		`do not count it as a passing cleanup assertion or a clean three-run sequence.`,
-		`hackathon-trustworthiness-fallback-e2e.ps1`,
+		`trustworthiness-fallback-e2e.ps1`,
 		`standalone-evidence-only`,
 	)
 }
 
 // TC-0316: A fixed rehearsal completes within 1 minute 55 seconds and returns to Trust Focus without prohibited actions.
-func TestHackathonTrustworthinessStoryboardAcceptanceContract(t *testing.T) {
+func TestTrustworthinessStoryboardAcceptanceContract(t *testing.T) {
 	repoRoot, err := findRepoRoot()
 	if err != nil {
 		t.Fatalf("find repo root: %v", err)
 	}
 
-	assertArtifactContains(t, repoRoot, "e2e/hackathon-trustworthiness-storyboard-e2e.ps1",
+	assertArtifactContains(t, repoRoot, "e2e/trustworthiness-storyboard-e2e.ps1",
 		`$rehearsal.elapsedSeconds -le 115`,
 		`$rehearsal.initialScreen -eq "Trust Focus"`,
 		`$rehearsal.finalScreen -eq "Trust Focus"`,
@@ -228,7 +228,7 @@ func TestHackathonTrustworthinessStoryboardAcceptanceContract(t *testing.T) {
 		`@($rehearsal.emptyStates).Count -eq 0`,
 		`@($rehearsal.pageErrors).Count -eq 0`,
 	)
-	assertArtifactContains(t, repoRoot, "e2e/hackathon-trustworthiness-browser-rehearsal.js",
+	assertArtifactContains(t, repoRoot, "e2e/trustworthiness-browser-rehearsal.js",
 		`const started = performance.now();`,
 		`elapsedSeconds: Math.round((performance.now() - started) / 10) / 100`,
 		`initialScreen: "Trust Focus"`,
@@ -236,7 +236,7 @@ func TestHackathonTrustworthinessStoryboardAcceptanceContract(t *testing.T) {
 		`expectedIDs`,
 		`pageErrors`,
 	)
-	assertArtifactContains(t, repoRoot, "samples/hackathon-trustworthiness/runbook.md",
+	assertArtifactContains(t, repoRoot, "samples/trustworthiness/runbook.md",
 		`Browser Rehearsal Contract`,
 		`Browser viewport`,
 		`1440 x 900`,

@@ -29,6 +29,13 @@ into the built-in pgvector store and exposes it to an agent through a
   ./make.ps1 deploy-kubernetes INSTALL_PLAN=./reviewed/install.json INSTALL_WRITERS_FROZEN=true
    ```
 
+   **Bash (Linux/macOS):**
+
+   ```bash
+   make docker-k8s
+   make deploy-kubernetes INSTALL_PLAN=./reviewed/install.json INSTALL_WRITERS_FROZEN=true
+   ```
+
   Follow the [guarded installer contract](../../docs/features/knowledge-provider-execution/installation-recovery-contract.md).
   Include `kbPgvector`, `kbIngester` and exact image settings in reviewed values;
   load images separately into the explicit reviewed cluster. The deploy target
@@ -40,10 +47,10 @@ into the built-in pgvector store and exposes it to an agent through a
 2. The pgvector `vector` extension is enabled (bundled with the
    pgvector/pgvector image):
 
-   ```powershell
-   kubectl -n kognition-system exec kognition-kb-pgvector-0 -- `
-     psql -U kognition_kb -d kognition_kb `
-     -c "CREATE EXTENSION IF NOT EXISTS vector"
+   This command works in Bash and PowerShell:
+
+   ```sh
+   kubectl -n kognition-system exec kognition-kb-pgvector-0 -- psql -U kognition_kb -d kognition_kb -c "CREATE EXTENSION IF NOT EXISTS vector"
    ```
 
 3. The `foundry-creds` SecretRef exists in the `default` namespace with
@@ -63,9 +70,17 @@ into the built-in pgvector store and exposes it to an agent through a
 ./samples/knowledge-base-kognition-docs/apply.ps1
 ```
 
+**Bash (Linux/macOS), with PowerShell 7 and `powershell-yaml` installed:**
+
+```bash
+pwsh -NoProfile -File ./samples/knowledge-base-kognition-docs/apply.ps1
+```
+
 Then watch the reindex:
 
-```powershell
+The following inspection commands work in Bash and PowerShell:
+
+```sh
 kubectl -n default get kbrun kognition-docs-reindex-now -o wide -w
 ```
 
@@ -78,7 +93,7 @@ kognition-docs-reindex-now    Succeeded   4      >0
 
 If it fails, inspect the Job pod:
 
-```powershell
+```sh
 kubectl -n default logs job/kb-indexrun-kognition-docs-reindex-now
 ```
 
@@ -92,12 +107,23 @@ Once the KB reports Ready:
   --mode kubernetes
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+./bin/kognitionctl chat kognition-docs-agent \
+  "What CRDs does Kognition expose?" \
+  --mode kubernetes
+```
+
 The agent should call `knowledge_search` and cite one or more of the
 four indexed files in its answer.
 
 ## Cleanup
 
-```powershell
+These deletion commands work in Bash and PowerShell. Use only the selected
+sample's namespace and resources:
+
+```sh
 kubectl -n default delete -f samples/knowledge-base-kognition-docs/indexrun.yaml --ignore-not-found
 kubectl -n default delete -f samples/knowledge-base-kognition-docs/agent.yaml --ignore-not-found
 kubectl -n default delete -f samples/knowledge-base-kognition-docs/kb.yaml --ignore-not-found

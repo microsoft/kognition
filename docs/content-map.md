@@ -17,6 +17,7 @@ repository documents until individually integrated.
 | [Get started](getting-started/README.md) | Developers and operators | Local, Kubernetes and AKS installation paths, followed by a first-agent walkthrough. |
 | [Resource model](concepts/resource-model.md) | Agent authors and integrators | Configuration, execution, authorization and observed state. |
 | [Guides](guides/README.md) | Capability users | Curated links to maintained subsystem guides and samples. |
+| [Video tutorial](guides/video-tutorial.md) | Agent authors | Dated Studio walkthrough with captions, chapter navigation and a searchable transcript. Current operational contracts remain authoritative. |
 | [Operations](operations/README.md) | Operators | Index of current installation, activation, recovery and diagnostic contracts. |
 | [Reference](reference/README.md) | Implementers | CLI behavior and exact API/configuration sources. |
 | [Contribution policy](../CONTRIBUTING.md#documentation) | Contributors | Authoring and content validation. |
@@ -25,7 +26,7 @@ repository documents until individually integrated.
 
 | Material | How to use it |
 | --- | --- |
-| [Installation and recovery](features/knowledge-provider-execution/installation-recovery-contract.md), [bootstrap verification](features/knowledge-provider-execution/bootstrap-verification-contract.md), [activation](features/knowledge-provider-execution/activation-transaction-contract.md) and [drain verification](features/knowledge-provider-execution/drain-verification-contract.md) | Authoritative installation, activation, recovery and enforcement contracts. Getting-started guides explain these boundaries without replacing their evidence or approval requirements. |
+| [Installation and recovery](features/knowledge-provider-execution/installation-recovery-contract.md), [bootstrap verification](features/knowledge-provider-execution/bootstrap-verification-contract.md), [activation](features/knowledge-provider-execution/activation-transaction-contract.md) and [drain verification](features/knowledge-provider-execution/drain-verification-contract.md) | Detailed upgrade/recovery and enforcement contracts. Fresh installations follow the getting-started workflow; existing paths remain stable. |
 | [Architecture references](architecture/reference/README.md) and [ADRs](adr/README.md) | Design structure and decision rationale; read status and scope. |
 | [Testing](testing.md) and [development gates](development-gates.md) | Contributor validation requirements. |
 | [Development plans and review records](development-plans/README.md) | Historical implementation context and scoped evidence, not current product certification. |
@@ -44,3 +45,6 @@ somewhere in the repository does not publish it.
 - Preserve existing paths when adding navigation. Split a long document only
   with reviewed links or compatibility pointers.
 - Do not add analytics, external search services or embedded tracking by default.
+- Tutorial media comes from checksum-pinned Release assets during trusted
+  publication builds. It is served by the same Pages site, with the site's
+  existing access controls; the MP4 is not stored in Git history.

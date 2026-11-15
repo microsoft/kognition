@@ -26,6 +26,7 @@ Env overrides (all optional):
 from __future__ import annotations
 
 import glob
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -55,6 +56,7 @@ def _resolve_files(docs_dir: Path) -> list[str]:
 
 
 def main() -> int:
+    governed = bool(os.environ.get("KOGNITION_SAMPLE_PROFILE_PATH"))
     container = os.environ.get("KOGNITION_BLOB_CONTAINER", "product-docs")
     prefix = os.environ.get("KOGNITION_BLOB_PREFIX", "mark7").strip("/")
     docs_dir = Path(os.environ.get("KOGNITION_DOCS_DIR", str(REPO_ROOT / "samples" / "docs")))
@@ -63,7 +65,7 @@ def main() -> int:
     files = _resolve_files(docs_dir)
     if not files:
         print(f"SKIP: no .md/.txt files under {docs_dir}", file=sys.stderr)
-        return 0
+        return 1 if governed else 0
 
     try:
         from azure.storage.blob import ContainerClient
@@ -74,17 +76,24 @@ def main() -> int:
             "azure-storage-blob`, then re-run.",
             file=sys.stderr,
         )
-        return 0  # non-fatal
+        return 1 if governed else 0
 
     if conn:
         # Azurite / shared-key path.
-        cc = ContainerClient.from_connection_string(conn, container_name=container)
+        cc = ContainerClient.from_connection_string(
+            conn, container_name=container, connection_timeout=5, read_timeout=30, retry_total=2
+        )
         try:
             cc.create_container()
-        except Exception:  # noqa: BLE001 - already exists is fine
-            pass
+        except Exception as exc:  # noqa: BLE001 - legacy path tolerates an existing container
+            if governed and getattr(exc, "error_code", None) != "ContainerAlreadyExists":
+                print(f"ERROR: fixture container creation failed ({type(exc).__name__}).", file=sys.stderr)
+                return 1
         target = f"container '{container}' (connection string)"
     else:
+        if governed:
+            print("ERROR: governed uploads require the local fixture connection string.", file=sys.stderr)
+            return 1
         # Real Azure, passwordless (service principal).
         env = load_env()
         tenant, client, secret = env.get("AZURE_TENANT_ID"), env.get("AZURE_CLIENT_ID"), env.get("AZURE_CLIENT_SECRET")
@@ -112,7 +121,7 @@ def main() -> int:
             print(f"  uploaded {name} -> {container}/{blob_name}")
             uploaded += 1
         except Exception as exc:  # noqa: BLE001 - surface a helpful hint
-            first = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
+            first = type(exc).__name__ if governed else (str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__)
             print(f"  FAILED {name}: {first}", file=sys.stderr)
             if not conn:
                 print(
@@ -122,10 +131,24 @@ def main() -> int:
                 )
             return 1
 
-    print(f"Uploaded {uploaded} file(s) to {container}/{prefix}/ ({target}).")
+    if governed:
+        try:
+            expected = {f"{prefix}/{Path(f).name}" if prefix else Path(f).name: Path(f).read_bytes() for f in files}
+            actual = {blob.name for blob in cc.list_blobs(name_starts_with=f"{prefix}/" if prefix else "")}
+            if actual != set(expected):
+                print("ERROR: Azure fixture verification found an unexpected object inventory.", file=sys.stderr)
+                return 1
+            for name, body in expected.items():
+                downloaded = cc.get_blob_client(name).download_blob().readall()
+                if hashlib.sha256(downloaded).digest() != hashlib.sha256(body).digest():
+                    print(f"ERROR: Azure fixture content verification failed for {name}.", file=sys.stderr)
+                    return 1
+        except Exception as exc:  # noqa: BLE001 - fail closed without printing credentials
+            print(f"ERROR: Azure fixture verification failed ({type(exc).__name__}).", file=sys.stderr)
+            return 1
+    print(f"{'Verified' if governed else 'Uploaded'} {uploaded} file(s) to {container}/{prefix}/ ({target}).")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

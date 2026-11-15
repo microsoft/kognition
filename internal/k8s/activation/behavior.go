@@ -55,7 +55,7 @@ func verifyPolicyBehavior(ctx context.Context, config *rest.Config, manifest Man
 	}
 	bounded := rest.CopyConfig(config)
 	bounded.Timeout = 10 * time.Second
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, policyBehaviorTimeout(len(manifest.Namespaces)))
 	defer cancel()
 	admin, err := client.New(bounded, client.Options{Scheme: scheme.Scheme})
 	if err != nil {
@@ -90,7 +90,7 @@ func verifyPolicyBehavior(ctx context.Context, config *rest.Config, manifest Man
 		}
 		resultErr = errors.Join(resultErr, cleanupErr)
 		if resultErr == nil {
-			resultErr = Verify(cleanup, admin, manifest)
+			resultErr = Verify(ctx, admin, manifest)
 		}
 	}()
 	create := func(object client.Object) error {

@@ -125,6 +125,16 @@ $env:KOGNITION_OTEL_TRACES_SERVICE_NAME = "kognition-dev"
 .\bin\kognition-controller-manager.exe
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+export KOGNITION_OTEL_TRACES_ENABLED=true
+export KOGNITION_OTEL_TRACES_ENDPOINT=localhost:4317
+export KOGNITION_OTEL_TRACES_PROTOCOL=grpc
+export KOGNITION_OTEL_TRACES_SERVICE_NAME=kognition-dev
+./bin/kognition-controller-manager
+```
+
 For HTTP/protobuf:
 
 ```powershell
@@ -132,6 +142,15 @@ $env:KOGNITION_OTEL_TRACES_ENABLED = "true"
 $env:KOGNITION_OTEL_TRACES_ENDPOINT = "http://localhost:4318/v1/traces"
 $env:KOGNITION_OTEL_TRACES_PROTOCOL = "http/protobuf"
 .\bin\kognition-apiserver.exe
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+export KOGNITION_OTEL_TRACES_ENABLED=true
+export KOGNITION_OTEL_TRACES_ENDPOINT=http://localhost:4318/v1/traces
+export KOGNITION_OTEL_TRACES_PROTOCOL=http/protobuf
+./bin/kognition-apiserver
 ```
 
 ## Local Jaeger Verification
@@ -167,6 +186,12 @@ Remove the local backend with:
 
 ```bash
 make jaeger-uninstall
+```
+
+**PowerShell (Windows):**
+
+```powershell
+.\make.ps1 jaeger-uninstall
 ```
 
 ## Collector Target

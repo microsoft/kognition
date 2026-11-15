@@ -17,8 +17,15 @@ including the namespace and cluster-scoped ToolClasses. Cleanup requires listing
 Tools across namespaces to check references. Use an explicit context:
 
 ```powershell
-.\samples\workflows\tool-sandbox.ps1 -Action Install -Context <test-context> -WhatIf
-.\samples\workflows\tool-sandbox.ps1 -Action Install -Context <test-context>
+.\samples\workflows\tool-sandbox.ps1 -Action Install -Context '<test-context>' -WhatIf
+.\samples\workflows\tool-sandbox.ps1 -Action Install -Context '<test-context>'
+```
+
+**Bash (Linux/macOS), with PowerShell 7 installed:**
+
+```bash
+pwsh -NoProfile -File ./samples/workflows/tool-sandbox.ps1 -Action Install -Context '<test-context>' -WhatIf
+pwsh -NoProfile -File ./samples/workflows/tool-sandbox.ps1 -Action Install -Context '<test-context>'
 ```
 
 Add `-Kubeconfig <path>` when needed. The script applies only the sample server
@@ -34,8 +41,10 @@ exposure. Do not send sensitive inputs to it.
 
 Forward the sample Service to loopback in a separate terminal:
 
-```powershell
-kubectl --context <test-context> -n samples-tool-sandbox port-forward --address 127.0.0.1 service/tool-sandbox 18080:8080
+The forwarding command works in either shell:
+
+```sh
+kubectl --context '<test-context>' -n samples-tool-sandbox port-forward --address 127.0.0.1 service/tool-sandbox 18080:8080
 ```
 
 In another terminal, initialize the sample session, list tools and invoke the
@@ -47,6 +56,16 @@ Invoke-RestMethod -Uri $uri -Method Post -ContentType application/json -Body '{"
 Invoke-RestMethod -Uri $uri -Method Post -ContentType application/json -Body '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 Invoke-RestMethod -Uri $uri -Method Post -ContentType application/json -Body '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 Invoke-RestMethod -Uri $uri -Method Post -ContentType application/json -Body '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sandbox-greet","arguments":{"who":"sample-user"}}}'
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+uri='http://127.0.0.1:18080/mcp'
+curl --fail --silent --show-error "$uri" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"sample-client","version":"1"}}}'
+curl --fail --silent --show-error "$uri" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+curl --fail --silent --show-error "$uri" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+curl --fail --silent --show-error "$uri" -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sandbox-greet","arguments":{"who":"sample-user"}}}'
 ```
 
 The list contains `sandbox-greet`; the invocation returns a greeting and synthetic
@@ -85,9 +104,21 @@ Get-ChildItem samples/workflows/*.yaml -Exclude _agents.yaml |
   ForEach-Object { kubectl apply -f $_.FullName }
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+kubectl apply -f samples/workflows/_agents.yaml
+for manifest in samples/workflows/*.yaml; do
+  [ "$manifest" = 'samples/workflows/_agents.yaml' ] && continue
+  kubectl apply -f "$manifest" || exit 1
+done
+```
+
 ## Inspect
 
-```powershell
+The inspection commands work in Bash and PowerShell:
+
+```sh
 kubectl -n default get workflows.kognition.dev -l app.kubernetes.io/part-of=workflow-demos
 kubectl -n default get agents.kognition.dev   -l app.kubernetes.io/part-of=workflow-demos
 ```
@@ -113,15 +144,23 @@ and any post-trigger commands (approvals, memory verification, etc.).
 
 ## Tear down
 
-```powershell
-kubectl --context <test-context> -n default delete workflows,workflowruns,agents,tools,toolgrants,agentpolicies,agentroles,agentrolebindings -l app.kubernetes.io/part-of=workflow-demos
+Use the selected test context in either shell:
+
+```sh
+kubectl --context '<test-context>' -n default delete workflows,workflowruns,agents,tools,toolgrants,agentpolicies,agentroles,agentrolebindings -l app.kubernetes.io/part-of=workflow-demos
 ```
 
 After deleting demo Tools that reference `sandbox-openapi` or `sandbox-mcp`,
 remove the optional server:
 
 ```powershell
-.\samples\workflows\tool-sandbox.ps1 -Action Uninstall -Context <test-context>
+.\samples\workflows\tool-sandbox.ps1 -Action Uninstall -Context '<test-context>'
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+pwsh -NoProfile -File ./samples/workflows/tool-sandbox.ps1 -Action Uninstall -Context '<test-context>'
 ```
 
 The script refuses cleanup while Tools still reference either shared ToolClass.
