@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"go.uber.org/zap"
@@ -70,8 +71,19 @@ func (a *AgentReconcilerAdapter) Reconcile(ctx context.Context, req ctrl.Request
 		if agent, loadErr := loadAgentForRuntimeRefresh(ctx, a.store, req.Namespace, req.Name); loadErr != nil {
 			a.logger.Warn("failed to load agent for runtime refresh", zap.Error(loadErr))
 		} else if agent != nil {
-			if runtimeErr := a.dispatcher.EnsureAgentRuntime(ctx, agent); runtimeErr != nil {
+			runtimeErr := a.dispatcher.EnsureAgentRuntime(ctx, agent)
+			if runtimeErr != nil {
 				a.logger.Warn("failed to ensure agent runtime", zap.Error(runtimeErr))
+			}
+			// Observe the Deployment even when provisioning failed so a rejected
+			// update or missing Deployment never leaves stale healthy counts.
+			if agent.DeletionTimestamp == nil {
+				if err := a.refreshRuntimeStatus(ctx, agent); err != nil {
+					if runtimeErr == nil {
+						return ctrl.Result{}, err
+					}
+					a.logger.Warn("failed to refresh agent runtime status", zap.Error(err))
+				}
 			}
 		} else if annErr := a.dispatcher.EnsureOwnerAnnotations(ctx, req.Name, req.Namespace); annErr != nil {
 			a.logger.Warn("failed to ensure owner annotations", zap.Error(annErr))
@@ -82,6 +94,26 @@ func (a *AgentReconcilerAdapter) Reconcile(ctx context.Context, req ctrl.Request
 		Requeue:      result.Requeue,
 		RequeueAfter: result.RequeueAfter,
 	}, nil
+}
+
+func (a *AgentReconcilerAdapter) refreshRuntimeStatus(ctx context.Context, agent *api.Agent) error {
+	status, err := a.dispatcher.ReadAgentRuntimeStatus(ctx, agent)
+	if err != nil {
+		return err
+	}
+	if agent.Status.Runtime == nil && status == nil ||
+		agent.Status.Runtime != nil && status != nil && *agent.Status.Runtime == *status {
+		return nil
+	}
+	agent.Status.Runtime = status
+	data, err := json.Marshal(agent)
+	if err != nil {
+		return fmt.Errorf("encode Agent runtime status: %w", err)
+	}
+	if err := a.store.Update(ctx, "Agent", agent.Namespace, agent.Name, data, agent.ResourceVersion); err != nil {
+		return fmt.Errorf("update Agent runtime status: %w", err)
+	}
+	return nil
 }
 
 // SetupWithManager registers the Agent reconciler with the controller-runtime manager.

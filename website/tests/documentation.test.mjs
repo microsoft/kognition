@@ -2,7 +2,8 @@
 // Licensed under the MIT License.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -11,6 +12,72 @@ import { unified } from 'unified';
 import repositoryLinks from '../src/repository-links.ts';
 import { checkSite } from '../scripts/check-links.mjs';
 import { docsDirectory, getSiteConfig, pagePath, pages, repositoryRoot } from '../site.mjs';
+
+function currentGuides(directory = repositoryRoot) {
+  const excluded = new Set([
+    'docs/adr', 'docs/development-plans', 'docs/release-preparation',
+    'docs/maintaining-docs.md',
+  ]);
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const absolute = path.join(directory, entry.name);
+    const relative = path.relative(repositoryRoot, absolute).split(path.sep).join('/');
+    if (excluded.has(relative)) return [];
+    if (entry.isDirectory()) {
+      if (directory === repositoryRoot && !['docs', 'deploy', 'samples', 'tests', 'infra'].includes(entry.name)) return [];
+      return currentGuides(absolute);
+    }
+    if (!entry.isFile() || !entry.name.endsWith('.md')) return [];
+    if (relative.startsWith('samples/docs/') && entry.name !== 'README.md') return [];
+    return [{ relative, source: readFileSync(absolute, 'utf8').replace(/\r\n/g, '\n') }];
+  });
+}
+
+function commandBlocks(source) {
+  return [...source.matchAll(/^([ \t]*)```(bash|sh|powershell|pwsh|ps1)[^\n]*\n([\s\S]*?)^\1```[ \t]*$/gm)]
+    .map((match) => ({
+      language: match[2],
+      code: match[3].split('\n').map((line) => line.startsWith(match[1]) ? line.slice(match[1].length) : line).join('\n'),
+      line: source.slice(0, match.index).split('\n').length,
+    }));
+}
+
+test('current guides pair shell-specific instructions and keep shared commands portable', () => {
+  const guides = currentGuides();
+  assert.ok(guides.length > 40, 'The review must include repository guides, not only website pages');
+  for (const { relative, source } of guides) {
+    const blocks = commandBlocks(source);
+    for (const [index, block] of blocks.entries()) {
+      if (['powershell', 'pwsh', 'ps1'].includes(block.language)) {
+        assert.ok([blocks[index - 1], blocks[index + 1]].some((neighbor) =>
+          neighbor && ['bash', 'sh'].includes(neighbor.language)),
+        `${relative}:${block.line} needs an adjacent Bash alternative or shared command`);
+      } else {
+        assert.doesNotMatch(block.code, /\$env:|\.\x5c|[A-Za-z]:\x5c|\.exe\b|`\s*\n/,
+          `${relative}:${block.line} contains Windows-only syntax in a Bash/shared example`);
+        if (block.language === 'sh') {
+          assert.doesNotMatch(block.code, /\\\n|<<|^\s*(?:export|source)\s|\$\(/m,
+            `${relative}:${block.line} uses Bash-only syntax in a shared-shell example`);
+        }
+      }
+    }
+  }
+});
+
+test('Bash examples parse without executing deployment or provider operations', (t) => {
+  const blocks = currentGuides().flatMap(({ relative, source }) =>
+    commandBlocks(source).filter(({ language }) => ['bash', 'sh'].includes(language))
+      .map((block) => ({ ...block, relative })));
+  const input = blocks.map(({ relative, line, code }) =>
+    `{\n# ${relative}:${line}\n:\n${code}\n}\n`).join('\n');
+  const result = spawnSync('bash', ['-n'], { input, encoding: 'utf8', timeout: 30_000 });
+  if (result.error?.code === 'ENOENT' && process.platform === 'win32') {
+    t.skip('Install Bash (Git Bash or WSL) to validate Bash syntax locally; required on Linux CI');
+    return;
+  }
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(blocks.length > 100);
+});
 
 test('public and private Pages configurations produce correct route bases', () => {
   assert.equal(pagePath('index', getSiteConfig({})), '/kognition/');
@@ -43,28 +110,33 @@ test('publication is an explicit unique list of reader pages', () => {
   }
 });
 
-test('installation guidance preserves the committed bootstrap and activation boundary', () => {
+test('installation entry points stay generic and preserve the selected AKS target', () => {
   for (const relative of [
-    'README.md', 'QUICKSTART.md', 'TUTORIAL.md',
-    'docs/getting-started/kubernetes.md', 'docs/getting-started/aks.md',
+    'README.md', 'QUICKSTART.md', 'deploy/QUICKSTART.md', 'deploy/aks/README.md',
+    'docs/bootstrapping.md', 'docs/getting-started/kubernetes.md', 'docs/getting-started/aks.md',
   ]) {
     const source = readFileSync(path.join(repositoryRoot, relative), 'utf8');
     assert.doesNotMatch(source, /az\s+aks\s+(?:start|stop)\b/i, relative);
-    assert.doesNotMatch(source, /kognition-install(?:\.exe)?\s+fresh(?:-recover)?\b/i, relative);
-    assert.doesNotMatch(source, /bootstrap\.ps1[^\n]*-Kubeconfig/i, relative);
+    assert.doesNotMatch(source, /automatic[^\n]*(?:bootstrap|quickstart)[^\n]*blocked/i, relative);
   }
-  const kubernetes = readFileSync(path.join(docsDirectory, 'getting-started', 'kubernetes.md'), 'utf8');
-  assert.match(kubernetes, /kognition-install\.exe bootstrap --plan/);
-  assert.match(kubernetes, /--writers-frozen/);
-  assert.match(kubernetes, /does not activate the controller/);
-  assert.match(kubernetes, /separately approved activation/);
   const aks = readFileSync(path.join(docsDirectory, 'getting-started', 'aks.md'), 'utf8');
-  assert.match(aks, /exec\/auth-provider credential plugins are unsupported/);
-  assert.match(aks, /static kubeconfig/);
-  assert.match(aks, /separate activation/);
+  assert.equal((aks.match(/^\$Kubeconfig\s*=/gm) ?? []).length, 1);
+  assert.equal((aks.match(/^\$Context\s*=/gm) ?? []).length, 1);
+  assert.equal((aks.match(/^Kubeconfig=/gm) ?? []).length, 1);
+  assert.equal((aks.match(/^Context=/gm) ?? []).length, 1);
+  assert.match(aks, /helm show crds \$Chart \| kubectl --kubeconfig \$Kubeconfig --context \$Context apply -f -/);
+  assert.ok(aks.includes('helm show crds "$Chart" | kubectl --kubeconfig "$Kubeconfig" --context "$Context" apply -f -'));
+  const bashInstallation = commandBlocks(aks).find(({ language, code }) =>
+    language === 'bash' && code.includes('Install-RuntimeBase.ps1'));
+  assert.ok(bashInstallation);
+  assert.ok(bashInstallation.code.includes('-Kubeconfig "$Kubeconfig" -Context "$Context" -ChartPackage "$Chart"'));
+  const bootstrap = readFileSync(path.join(docsDirectory, 'bootstrapping.md'), 'utf8');
+  assert.match(bootstrap, /^### Configure an Azure tenant$/m);
+  const verification = readFileSync(path.join(docsDirectory, 'features', 'knowledge-provider-execution', 'bootstrap-verification-contract.md'), 'utf8');
+  assert.match(verification, /Nine policies and nine bindings/);
 });
 
-test('canonical Markdown links resolve to site routes or repository sources and fail closed', () => {
+test('canonical Markdown links resolve to site routes or repository sources and fail closed', async () => {
   const source = { path: path.join(docsDirectory, 'README.md') };
   const processor = unified().use(repositoryLinks);
   const tree = (href) => ({
@@ -74,18 +146,18 @@ test('canonical Markdown links resolve to site routes or repository sources and 
       { type: 'paragraph', children: [{ type: 'link', url: href, children: [{ type: 'text', value: 'Guide' }] }] },
     ],
   });
-  const published = processor.runSync(tree('getting-started/local.md#1-prepare-the-checkout-and-tools'), source);
+  const published = await processor.run(tree('getting-started/local.md#1-prepare-the-checkout-and-tools'), source);
   assert.equal(published.children.length, 1);
   assert.equal(published.children[0].children[0].url,
     `${pagePath('getting-started/local')}#1-prepare-the-checkout-and-tools`);
-  const repository = processor.runSync(tree('../CONTRIBUTING.md'), source);
+  const repository = await processor.run(tree('../CONTRIBUTING.md'), source);
   assert.equal(repository.children[0].children[0].url,
     'https://github.com/microsoft/kognition/blob/main/CONTRIBUTING.md');
-  const external = processor.runSync(tree('https://example.org/guide'), source);
+  const external = await processor.run(tree('https://example.org/guide'), source);
   assert.equal(external.children[0].children[0].url, 'https://example.org/guide');
-  assert.throws(() => processor.runSync(tree('missing-guide.md'), source), /missing link target/);
-  assert.throws(() => processor.runSync(tree('../../outside.md'), source), /escapes the repository/);
-  assert.throws(() => processor.runSync(tree('javascript:alert(1)'), source), /unsupported link protocol/);
+  await assert.rejects(processor.run(tree('missing-guide.md'), source), /missing link target/);
+  await assert.rejects(processor.run(tree('../../outside.md'), source), /escapes the repository/);
+  await assert.rejects(processor.run(tree('javascript:alert(1)'), source), /unsupported link protocol/);
 });
 
 test('PR validation has no deploy permissions and publication requires explicit trusted-main opt-in', () => {

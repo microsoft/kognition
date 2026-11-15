@@ -3,7 +3,8 @@
 
 # Explicit model authorization for sample Agents. ModelGrant is intentionally
 # one Agent/model pair so samples exercise the same fail-closed policy as a
-# production deployment.
+# production deployment. Knowledge queries also require the indexed embedding
+# Model, separately from the Agent's chat Model.
 apiVersion: kognition.dev/v1alpha1
 kind: ModelGrant
 metadata: {name: sample-analyze-dataset-agent-gpt-6-luna, namespace: default}
@@ -31,6 +32,11 @@ spec: {agentRef: {name: azure-docs-agent}, modelRef: {name: gpt-6-luna}}
 ---
 apiVersion: kognition.dev/v1alpha1
 kind: ModelGrant
+metadata: {name: sample-azure-docs-agent-text-embedding-3-small, namespace: default}
+spec: {agentRef: {name: azure-docs-agent}, modelRef: {name: text-embedding-3-small}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
 metadata: {name: sample-foundry-hello-gpt-6-luna, namespace: default}
 spec: {agentRef: {name: foundry-hello}, modelRef: {name: gpt-6-luna}}
 ---
@@ -38,6 +44,11 @@ apiVersion: kognition.dev/v1alpha1
 kind: ModelGrant
 metadata: {name: sample-kognition-docs-agent-gpt-6-luna, namespace: default}
 spec: {agentRef: {name: kognition-docs-agent}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-kognition-docs-agent-text-embedding-3-small, namespace: default}
+spec: {agentRef: {name: kognition-docs-agent}, modelRef: {name: text-embedding-3-small}}
 ---
 apiVersion: kognition.dev/v1alpha1
 kind: ModelGrant
@@ -88,6 +99,11 @@ apiVersion: kognition.dev/v1alpha1
 kind: ModelGrant
 metadata: {name: sample-s3-docs-agent-gpt-6-luna, namespace: default}
 spec: {agentRef: {name: s3-docs-agent}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-s3-docs-agent-text-embedding-3-small, namespace: default}
+spec: {agentRef: {name: s3-docs-agent}, modelRef: {name: text-embedding-3-small}}
 ---
 apiVersion: kognition.dev/v1alpha1
 kind: ModelGrant

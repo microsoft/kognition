@@ -1,8 +1,14 @@
 # Bootstrap Verification Contract
 
-- Scope: SG-01 structural bootstrap verification with SG-02 drain prerequisites.
-- Updated: 2026-09-24.
-- Release gate: BLOCKED. Structural verification does not authorize activation.
+- Scope: structural verification of the admission-first startup stage used by the
+  fresh installer and the manual existing-release workflow.
+- Implementation evidence date: 2026-09-24; documentation scope updated 2026-11-13.
+- Verification alone does not start the controller or establish release qualification.
+
+The [fresh installer](../../getting-started/kubernetes.md) runs this verification,
+checks migrations and admission behavior, then completes controller startup.
+The [manual activation contract](activation-transaction-contract.md) remains the
+existing-release reference.
 
 ## Trusted Input
 
@@ -36,18 +42,26 @@ The protected inventory contains exactly:
 
 | Objects | API version | Requirement |
 | --- | --- | --- |
-| Six policies and six bindings | `admissionregistration.k8s.io/v1` | Same-name pairs; Fail policies with rules, conditions and Forbidden validations; Deny bindings without narrowed scope or parameters |
+| Nine policies and nine bindings | `admissionregistration.k8s.io/v1` | Same-name pairs; Fail policies with rules, conditions and Forbidden validations; Deny bindings without narrowed scope or parameters |
 | Guard Deployment | `apps/v1` | Independent guard service account; positive replica count |
 | Guard Service and ServiceAccount | `v1` | Exact guard name and installation namespace |
 | Guard webhook configuration | `admissionregistration.k8s.io/v1` | Exact two ordered webhook identities, service target, controller/namespace/name conditions, rules and delivery settings |
 | Baseline NetworkPolicy per workload namespace | `networking.k8s.io/v1` | Exact stdio selector; Egress-only deny baseline |
 | Guard Role and RoleBinding per workload namespace | `rbac.authorization.k8s.io/v1` | Only GET Pods, Jobs and NetworkPolicies; exact guard subject and Role reference |
+| Cilium workload deny policy per enrolled namespace when using the Cilium profile | `cilium.io/v2` | Exact sandbox selector and deny-all egress baseline |
+| Optional scoped Cilium API egress policy | `cilium.io/v2` | Exact installation release/component selectors; only `host` and `kube-apiserver` on TCP 443/6443 |
+| Optional Cilium node-health ingress policies | `cilium.io/v2` | Known control-plane component selectors; only node/health entities and one TCP port |
+| Optional runtime probe policy | `cilium.io/v2` (`CiliumClusterwideNetworkPolicy`) | Managed runtime selector restricted to enrolled namespaces, node/health entities and TCP 8080; no egress |
+
+Probe policies set `enableDefaultDeny.ingress` and `enableDefaultDeny.egress`
+to `false`. They add node-health allowances while preserving the default-deny
+behavior established by workload isolation policies.
 
 Unknown GVKs in this inventory, duplicates, missing objects, owner references,
 deleting objects, identity mismatches, and duplicate or installation workload
-namespaces fail verification. The parser selects the chart's named guard and
-baseline resources and all policies/bindings; it is not a general-purpose manifest
-or cluster-wide security audit.
+namespaces fail verification. The parser selects the chart's named guard and baseline resources, all admission
+policies/bindings and the supported Cilium policies; it is not a general-purpose
+manifest or cluster-wide security audit.
 
 ## Live State Checks
 
@@ -79,8 +93,10 @@ normalization errors, cancellation and expired deadlines fail verification.
 
 Run from the repository with administrator-reviewed paths:
 
-```powershell
-go run ./tools/check-admission-activation --manifest <trusted-render.yaml> --kubeconfig <explicit-kubeconfig>
+Run in Bash or PowerShell:
+
+```sh
+go run ./tools/check-admission-activation --manifest '<trusted-render.yaml>' --kubeconfig '<explicit-kubeconfig>'
 ```
 
 This default structural mode never uses an implicit kubeconfig. Requests have a 15-second timeout
@@ -99,7 +115,11 @@ Reads are sequential snapshots, not a transactional authorization decision.
 Concurrent administrators or reconcilers can change state after verification.
 The [SG-02 drain contract](drain-verification-contract.md) defines the mandatory
 writer freeze, migration inventory and pre-bootstrap drain-only invocation.
-The [SG-04 transaction](activation-transaction-contract.md) binds activation to fresh verified state and acceptance evidence.
+The [manual transaction](activation-transaction-contract.md) binds existing-release
+activation to verified state and acceptance evidence.
+The fresh installer instead binds its automatically generated first-install
+authorization to the completed revision-zero bootstrap claim and exact live target
+under [ADR-0028](../../adr/0028-first-installation-lifecycle.md).
 A printed hash is not an activation token.
 
 ## Evidence Boundaries

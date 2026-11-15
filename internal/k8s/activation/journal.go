@@ -35,8 +35,16 @@ func installationKey(namespace string, target ActivationTarget) client.ObjectKey
 	return client.ObjectKey{Namespace: namespace, Name: fmt.Sprintf("activation-%x", sha256.Sum256([]byte(identity)))}
 }
 
+func TransactionKey(namespace string, target ActivationTarget) client.ObjectKey {
+	return installationKey(namespace, target)
+}
+
 func claimApproval(ctx context.Context, admin client.Client, record *corev1.ConfigMap, approval Approval, now time.Time) (*corev1.ConfigMap, error) {
-	if err := ValidateApproval(approval, approval.Target, now); err != nil {
+	return claimAuthorization(ctx, admin, record, approval, now, ValidateApproval)
+}
+
+func claimAuthorization(ctx context.Context, admin client.Client, record *corev1.ConfigMap, approval Approval, now time.Time, validate approvalValidator) (*corev1.ConfigMap, error) {
+	if err := validate(approval, approval.Target, now); err != nil {
 		return nil, err
 	}
 	if record == nil || record.UID == "" || record.Namespace == "" {

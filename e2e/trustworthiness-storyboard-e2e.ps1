@@ -7,9 +7,9 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$reportPath = Join-Path $repoRoot "test-results/hackathon-trustworthiness-$DemoRunId.json"
-$rehearsalPath = Join-Path $repoRoot "test-results/hackathon-trustworthiness-rehearsal-$DemoRunId.json"
-$screenshotPath = Join-Path $repoRoot "test-results/hackathon-trustworthiness-rehearsal-$DemoRunId.png"
+$reportPath = Join-Path $repoRoot "test-results/trustworthiness-$DemoRunId.json"
+$rehearsalPath = Join-Path $repoRoot "test-results/trustworthiness-rehearsal-$DemoRunId.json"
+$screenshotPath = Join-Path $repoRoot "test-results/trustworthiness-rehearsal-$DemoRunId.png"
 $missingContext = "kognition-unavailable-$DemoRunId"
 $report = $null
 
@@ -25,7 +25,7 @@ function Assert-True {
 }
 
 try {
-    & (Join-Path $PSScriptRoot "hackathon-trustworthiness-demo.ps1") -DemoRunId $DemoRunId -PreflightContext $missingContext -ReportPath $reportPath -KeepFallbackServers
+    & (Join-Path $PSScriptRoot "trustworthiness-demo.ps1") -DemoRunId $DemoRunId -PreflightContext $missingContext -ReportPath $reportPath -KeepFallbackServers
     if ($LASTEXITCODE -ne 0) {
         throw "Demo runner exited with code $LASTEXITCODE"
     }
@@ -38,7 +38,7 @@ try {
     Assert-True ($report.cleanup.deferred) "Fallback servers were not retained for browser observation"
     Assert-True ($null -ne $report.retainedRuntime) "Retained runtime metadata is missing"
 
-    & node (Join-Path $PSScriptRoot "hackathon-trustworthiness-browser-rehearsal.js") $report.dashboardURL $DemoRunId $rehearsalPath $screenshotPath
+    & node (Join-Path $PSScriptRoot "trustworthiness-browser-rehearsal.js") $report.dashboardURL $DemoRunId $rehearsalPath $screenshotPath
     if ($LASTEXITCODE -ne 0) {
         throw "Browser rehearsal exited with code $LASTEXITCODE"
     }

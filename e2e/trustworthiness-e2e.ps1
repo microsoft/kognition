@@ -19,13 +19,13 @@ if ($DemoRunId -notmatch '^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$') {
     throw "DemoRunId must be 1-40 lowercase DNS-label characters"
 }
 
-$namespace = "kognition-hack-$DemoRunId"
+$namespace = "kognition-demo-$DemoRunId"
 $controllerDeployment = "$ReleaseName-k8s-controller"
 $webhookService = "$ReleaseName-webhook"
 $webhookTLSSecret = "$ReleaseName-webhook-tls"
-$manifestsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "samples/hackathon-trustworthiness"
+$manifestsPath = Join-Path (Split-Path $PSScriptRoot -Parent) "samples/trustworthiness"
 if (-not $ReportPath) {
-    $ReportPath = Join-Path (Split-Path $PSScriptRoot -Parent) "test-results/hackathon-trustworthiness-$DemoRunId.json"
+    $ReportPath = Join-Path (Split-Path $PSScriptRoot -Parent) "test-results/trustworthiness-$DemoRunId.json"
 }
 $memoryPhaseReportPath = Join-Path (Split-Path $ReportPath -Parent) "memory-boundary-$DemoRunId.json"
 
@@ -111,8 +111,8 @@ function Remove-RehearsalScope {
         catch { $cleanupErrors.Add($_.Exception.Message) }
     }
     return [PSCustomObject]@{
-        status = if ($cleanupErrors.Count) { "failed" } else { "passed" }
-        evidence = if ($cleanupErrors.Count) { $cleanupErrors -join "`n" } elseif ($retainedRecords.Count) { "workloads and run-owned external resources removed; $($retainedRecords.Count) security records retained until their mandated deadlines" } else { "namespace and run-owned resources removed" }
+        status = if ($cleanupErrors.Count) { "failed" } elseif ($retainedRecords.Count) { "retained" } else { "passed" }
+        evidence = if ($cleanupErrors.Count) { $cleanupErrors -join "`n" } elseif ($retainedRecords.Count) { "namespace $namespace remains Terminating; workloads and run-owned external resources removed; $($retainedRecords.Count) security records retained until their mandated deadlines" } else { "namespace and run-owned resources removed" }
         retainedSecurityRecords = $retainedRecords
     }
 }
@@ -181,7 +181,7 @@ function Apply-KubernetesObject {
 function Install-WorkflowFixtures {
     $targetName = "trust-demo-tool-target"
     $toolServer = Get-Content (Join-Path $manifestsPath "publication_server.py") -Raw
-    $labels = @{ "app.kubernetes.io/part-of" = "hackathon-trustworthiness"; "kognition.dev/demo-run" = $DemoRunId }
+    $labels = @{ "app.kubernetes.io/part-of" = "trustworthiness"; "kognition.dev/demo-run" = $DemoRunId }
     Apply-KubernetesObject @{ apiVersion = "v1"; kind = "ConfigMap"; metadata = @{ name = $targetName; namespace = $namespace; labels = $labels }; data = @{ "server.py" = $toolServer } }
     Apply-KubernetesObject @{ apiVersion = "v1"; kind = "PersistentVolumeClaim"; metadata = @{ name = $targetName; namespace = $namespace; labels = $labels }; spec = @{ accessModes = @("ReadWriteOnce"); resources = @{ requests = @{ storage = "1Gi" } } } }
     Apply-KubernetesObject @{ apiVersion = "apps/v1"; kind = "Deployment"; metadata = @{ name = $targetName; namespace = $namespace; labels = $labels }; spec = @{ replicas = 1; strategy = @{ type = "Recreate" }; selector = @{ matchLabels = @{ app = $targetName } }; template = @{ metadata = @{ labels = @{ app = $targetName; "kognition.dev/demo-run" = $DemoRunId } }; spec = @{ containers = @(@{ name = "server"; image = "python:3.12-alpine"; command = @("python", "/app/server.py"); env = @(@{ name = "PUBLICATION_HOST"; value = "0.0.0.0" }, @{ name = "PUBLICATION_DATABASE"; value = "/data/publications.db" }); ports = @(@{ containerPort = 8080 }); readinessProbe = @{ httpGet = @{ path = "/healthz"; port = 8080 }; initialDelaySeconds = 1; periodSeconds = 1 }; volumeMounts = @(@{ name = "source"; mountPath = "/app"; readOnly = $true }, @{ name = "data"; mountPath = "/data" }) }); volumes = @(@{ name = "source"; configMap = @{ name = $targetName } }, @{ name = "data"; persistentVolumeClaim = @{ claimName = $targetName } }) } } } }
@@ -251,8 +251,14 @@ function Wait-ForWorkflowRun {
     )
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $terminalFailure = $false
     do {
         $run = Invoke-Kubectl @("get", "workflowrun/trust-demo-run", "-n", $namespace, "-o", "json") | ConvertFrom-Json
+        $status = Get-OptionalProperty -InputObject $run -Name "status" -Default ([PSCustomObject]@{})
+        if ((Get-OptionalProperty -InputObject $status -Name "phase") -in @("Failed", "Error")) {
+            $terminalFailure = $true
+            break
+        }
         if (& $Predicate $run) {
             return $run
         }
@@ -260,6 +266,7 @@ function Wait-ForWorkflowRun {
     } while ([DateTime]::UtcNow -lt $deadline)
 
     $jobs = Invoke-Kubectl @("get", "agentjobs", "-n", $namespace, "-o", "json") | ConvertFrom-Json
+    $events = Invoke-Kubectl @("get", "events", "-n", $namespace, "--field-selector", "involvedObject.kind=WorkflowRun,involvedObject.name=trust-demo-run", "-o", "json") | ConvertFrom-Json
     $runStatus = Get-OptionalProperty -InputObject $run -Name "status" -Default ([PSCustomObject]@{})
     $snapshot = [PSCustomObject]@{
         workflowRun = [PSCustomObject]@{
@@ -287,7 +294,14 @@ function Wait-ForWorkflowRun {
                 output = Get-OptionalProperty -InputObject $jobStatus -Name "output"
             }
         })
+        events = @($events.items | Select-Object -Last 10 | ForEach-Object {
+            [PSCustomObject]@{
+                reason = Get-OptionalProperty -InputObject $_ -Name "reason"
+                message = Get-OptionalProperty -InputObject $_ -Name "message"
+            }
+        })
     } | ConvertTo-Json -Depth 10 -Compress
+    if ($terminalFailure) { throw "WorkflowRun failed while waiting for $Description. Last observed state: $snapshot" }
     throw "Timed out waiting for $Description. Last observed state: $snapshot"
 }
 
@@ -320,7 +334,7 @@ function Assert-PublicationProof {
         [Parameter(Mandatory = $true)][string]$Content
     )
 
-    $scope = "kognition-hack-$RunID"
+    $scope = "kognition-demo-$RunID"
     if ($Run.metadata.namespace -ne $scope -or $Run.metadata.name -ne "trust-demo-run" -or $Run.status.phase -ne "Ready" -or @($Run.status.completedSteps) -notcontains "publish") { throw "Publication workflow is incomplete or belongs to another run" }
     $steps = @($Run.status.snapshotSpec.steps | Where-Object { $_.name -eq "publish" })
     if ($steps.Count -ne 1 -or $steps[0].type -ne "tool" -or $steps[0].toolRef.name -ne "trust-demo-publish") { throw "Workflow lacks a real publication Tool step" }
@@ -455,7 +469,7 @@ try {
         Invoke-Kubectl @("create", "namespace", $namespace) | Out-Null
         $namespaceCreated = $true
 
-        & (Join-Path $PSScriptRoot "hackathon-trust-profile-phases.ps1") -KubernetesContext $KubernetesContext -ControllerNamespace $ControllerNamespace -ReleaseName $ReleaseName -DemoRunId $DemoRunId -ScopeNamespace $namespace -KeepScopeNamespace
+        & (Join-Path $PSScriptRoot "trust-profile-phases.ps1") -KubernetesContext $KubernetesContext -ControllerNamespace $ControllerNamespace -ReleaseName $ReleaseName -DemoRunId $DemoRunId -ScopeNamespace $namespace -KeepScopeNamespace
         $assertions.Add([PSCustomObject]@{ name = "model-phase"; passed = $true; evidence = "a signed source-session capability completed a real Model Gateway provider call" })
         $assertions.Add([PSCustomObject]@{ name = "communication-phase"; passed = $true; evidence = "a signed source session exchanged an exact capability and invoked a ready AgentService" })
 
@@ -697,4 +711,4 @@ finally {
 if ($failure) {
     throw $failure
 }
-Write-Host "Hackathon trustworthiness E2E passed for $DemoRunId" -ForegroundColor Green
+Write-Host "Demo trustworthiness E2E passed for $DemoRunId" -ForegroundColor Green

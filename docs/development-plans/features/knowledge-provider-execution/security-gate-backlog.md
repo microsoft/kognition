@@ -598,7 +598,7 @@ additional changes to that file are authorized.
 .azure/infrastructure-plan.json
 .azure/insights.json
 .azure/validate-status.json
-.hackaton2026/project-long-description.md
+.demo-preparation/project-long-description.md
 cmd/kognition-knowledge-pgvector/admin_server_test.go
 cmd/kognition-knowledge-pgvector/main_helpers_test.go
 cmd/kognition-knowledge-pgvector/wait_for_shutdown_test.go

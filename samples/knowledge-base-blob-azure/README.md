@@ -30,6 +30,9 @@ Only the storage portion avoids an external Azure service.
 1. `azurite.yaml` — deploys Azurite (Deployment + Service) with
    `--disableProductStyleUrl` so the in-cluster Service DNS name resolves the
    account from the URL path (otherwise Azurite 404s domain-host requests).
+   The installer first creates the `azurite-account` Secret with a random
+   per-installation account key, and Azurite reads it through
+   `AZURITE_ACCOUNTS`; no storage key is committed to the repository.
 2. `apply.ps1` port-forwards Azurite and uploads
    [`samples/docs/*.md`](../docs/README.md) into the `product-docs` container
    under `mark7/`, then creates the `azurite-blob-creds` SecretRef (a
@@ -51,6 +54,18 @@ $env:VIRTUAL_ENV = (Resolve-Path ./.venv).Path
 .\make.ps1 samples-install SAMPLE=knowledge-base-blob-azure
 ```
 
+**Bash (Linux/macOS), with PowerShell 7 and `powershell-yaml` installed:**
+
+```bash
+source .venv/bin/activate
+python -c "import azure.storage.blob"
+pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=knowledge-base-blob-azure
+```
+
+Create the environment with `python3 -m venv .venv` if needed and install the
+upload SDK there. See [command shells](../../docs/README.md#command-shells)
+for the shared PowerShell module prerequisite.
+
 Use the reviewed `KUBECONFIG`. For a nondefault platform, also set
 `KOGNITION_PLATFORM_NAMESPACE` and `KOGNITION_PLATFORM_RELEASE` and pass matching
 `NAMESPACE`/`RELEASE` arguments to Make.
@@ -63,7 +78,9 @@ data in `emptyDir`, so a replacement Pod may require re-upload. After fixing a
 missing container or database extension, preserve failed index runs and create a
 new named `KnowledgeBaseIndexRun`. Watch ingestion:
 
-```powershell
+The watch command is the same in Bash and PowerShell:
+
+```sh
 kubectl -n default get knowledgebase azure-docs-kb -o wide -w
 ```
 

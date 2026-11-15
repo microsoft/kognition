@@ -205,3 +205,11 @@ the implementations land:
 # Or manually:
 go test -tags=integration -v -count=1 ./tests/integration/...
 ```
+
+**Bash (Linux/macOS):**
+
+```bash
+pwsh -NoProfile -File ./tests/integration/run_tests.ps1
+# Or invoke the same test package directly:
+go test -tags=integration -v -count=1 ./tests/integration/...
+```

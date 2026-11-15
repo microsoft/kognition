@@ -78,12 +78,15 @@ func (manifest Manifest) validateObject(object *unstructured.Unstructured) error
 		return err
 	}
 	switch object.GetKind() {
-	case "CiliumNetworkPolicy":
+	case "CiliumNetworkPolicy", "CiliumClusterwideNetworkPolicy":
 		if object.GetLabels()["app.kubernetes.io/managed-by"] != "Helm" || object.GetAnnotations()["meta.helm.sh/release-name"] == "" || object.GetAnnotations()["meta.helm.sh/release-name"] != object.GetLabels()["app.kubernetes.io/instance"] || object.GetAnnotations()["meta.helm.sh/release-namespace"] != manifest.Namespace {
 			return errors.New("invalid Cilium baseline release ownership")
 		}
 		if manifest.isCiliumAPIEgress(object) {
 			return manifest.validateCiliumAPIEgress(object)
+		}
+		if manifest.probeComponent(object) != "" || manifest.isRuntimeProbe(object) {
+			return manifest.validateProbeIngress(object)
 		}
 		expected := map[string]interface{}{
 			"endpointSelector": map[string]interface{}{

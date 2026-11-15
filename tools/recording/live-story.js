@@ -68,7 +68,7 @@ function fixtureObjects(repository, targetName) {
   recordingTarget(targetName);
   const labels = { "app.kubernetes.io/part-of": "kognition-tutorial-tools", "kognition.dev/story-fixture": "true" };
   const source = extractSandboxSource(fs.readFileSync(path.join(repository, "samples", "workflows", "tool-sandbox.yaml"), "utf8"));
-  const publication = fs.readFileSync(path.join(repository, "samples", "hackathon-trustworthiness", "publication_server.py"), "utf8");
+  const publication = fs.readFileSync(path.join(repository, "samples", "trustworthiness", "publication_server.py"), "utf8");
   const securityContext = { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } };
   return [
     { apiVersion: "v1", kind: "ConfigMap", metadata: { name: FIXTURE, namespace: NAMESPACE, labels },

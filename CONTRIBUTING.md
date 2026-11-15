@@ -28,7 +28,9 @@ public contributions. This document does not attest that it is already enabled.
   [docs/security.md](docs/security.md) before changing runtime behavior.
 - Use the Go version declared in `go.mod` for CI checks and formatting, plus
   Docker and Buf as described in the README. Build with
-  `make build`; run focused Go tests for the packages you change.
+  `make build` in Bash or `.\make.ps1 build` in PowerShell 7; run focused Go tests
+  for the packages you change. See [command shells](docs/README.md#command-shells)
+  for cross-platform helper prerequisites.
 - Keep changes scoped, preserve native runtime compatibility, and add regression
   coverage for changed behavior through public interfaces.
 - Run `go test` and the repository-configured Go linters for affected packages.
@@ -61,7 +63,9 @@ Use the [documentation map](docs/content-map.md) to distinguish reader guides,
 operational contracts and historical development records. The website requires
 Node.js 24 and npm. From the repository root, validate documentation changes with:
 
-```powershell
+These commands work in Bash and PowerShell:
+
+```sh
 npm --prefix website ci
 npm --prefix website test
 npm --prefix website run check

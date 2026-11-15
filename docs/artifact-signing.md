@@ -47,8 +47,18 @@ offline; the command never contacts Kubernetes or the API server:
 
 ```bash
 kognitionctl artifact signing-payload -f tool.yaml > tool.payload.json
-cosign sign-blob --key <operator-private-key-path> --output-signature tool.sig tool.payload.json
+cosign sign-blob --key '<operator-private-key-path>' --output-signature tool.sig tool.payload.json
 ```
+
+**PowerShell 7.4 or newer (Windows):**
+
+```powershell
+kognitionctl artifact signing-payload -f tool.yaml > tool.payload.json
+cosign sign-blob --key '<operator-private-key-path>' --output-signature tool.sig tool.payload.json
+```
+
+PowerShell 7.4 or newer preserves native stdout bytes during redirection. Do not
+use Windows PowerShell 5.1 or a text pipeline such as `Out-File` for this payload.
 
 The command emits exact bytes without a trailing newline. Use byte-preserving
 redirection; do not round-trip through an editor, pretty-printer or shell text

@@ -78,7 +78,7 @@ type fixtureState struct {
 
 func main() {
 	listenAddress := flag.String("listen", "127.0.0.1:0", "HTTP listen address")
-	workspace := flag.String("workspace", "kognition-hack-standalone", "fixture workspace")
+	workspace := flag.String("workspace", "kognition-demo-standalone", "fixture workspace")
 	runID := flag.String("run-id", "standalone-demo", "fixture run ID")
 	flag.Parse()
 

@@ -5,7 +5,7 @@
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $originalDirectory = (Get-Location).Path
-$fixture = Join-Path ([IO.Path]::GetTempPath()) "kognition-blob-provisioning-$([guid]::NewGuid().ToString('N'))"
+$fixture = Join-Path $repoRoot ".blob-provisioning-tests-$([guid]::NewGuid().ToString('N'))"
 $fixture = (New-Item -ItemType Directory -Path $fixture).FullName
 $calls = [Collections.Generic.List[string]]::new()
 $subscription = '00000000-0000-0000-0000-000000000000'
@@ -121,7 +121,8 @@ try {
     Remove-Variable -Scope Global -Name KognitionAzureProvisioningFixture
     if (Test-Path -LiteralPath $fixture) {
         $resolved = (Resolve-Path -LiteralPath $fixture).Path
-        if ((Split-Path -Leaf $resolved) -notlike 'kognition-blob-provisioning-*') { throw 'Unexpected temporary fixture path.' }
+        if ((Split-Path -Leaf $resolved) -notlike '.blob-provisioning-tests-*' -or
+            (Split-Path -Parent $resolved) -ne $repoRoot) { throw 'Unexpected test fixture path.' }
         Remove-Item -LiteralPath $resolved -Recurse -Force
     }
 }

@@ -39,11 +39,24 @@ Install all samples:
 ./make.ps1 samples-install
 ```
 
+**Bash (Linux/macOS), with PowerShell 7 installed:**
+
+```bash
+pwsh -NoProfile -File ./make.ps1 samples-install
+```
+
 Install only this sample after its target agent exists:
 
 ```powershell
 ./make.ps1 samples-install SAMPLE=simple-agent
 ./make.ps1 samples-install SAMPLE=evaluation
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=simple-agent
+pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=evaluation
 ```
 
 The full sample install path applies `simple-agent` before `evaluation`, so the target
@@ -54,7 +67,9 @@ dataset case.
 
 Use Kubernetes resources directly:
 
-```powershell
+The inspection commands work in either shell:
+
+```sh
 kubectl get evaluations.kognition.dev
 kubectl get evaluationdatasets.kognition.dev
 kubectl get evaluationruns.kognition.dev
@@ -64,6 +79,12 @@ kubectl get evaluationruns.kognition.dev -o yaml
 Or open the dashboard:
 
 ```powershell
+.\bin\kognitionctl.exe dashboard --mode kubernetes
+```
+
+**Bash (Linux/macOS):**
+
+```bash
 ./bin/kognitionctl dashboard --mode kubernetes
 ```
 

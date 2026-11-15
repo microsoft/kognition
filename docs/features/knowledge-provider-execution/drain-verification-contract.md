@@ -69,8 +69,10 @@ does not read Secret contents, assess state schemas or perform any migration.
 
 Run from the repository after replacing placeholders with reviewed values:
 
-```powershell
-go run ./tools/check-admission-activation --drain-only --kubeconfig <explicit-kubeconfig> --namespace <installation> --controller-service-account <controller-sa> --controller-deployment <controller-deployment> --workload-namespaces <workload-a,workload-b>
+Run in Bash or PowerShell:
+
+```sh
+go run ./tools/check-admission-activation --drain-only --kubeconfig '<explicit-kubeconfig>' --namespace '<installation>' --controller-service-account '<controller-sa>' --controller-deployment '<controller-deployment>' --workload-namespaces '<workload-a,workload-b>'
 ```
 
 Do not combine `--drain-only` with `--manifest`. Without drain-only mode, use the

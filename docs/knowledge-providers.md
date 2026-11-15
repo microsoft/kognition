@@ -341,7 +341,9 @@ records qualification evidence and pending deployment gates.
 
 Run the focused SDK tests without a database, cluster or cloud subscription:
 
-```powershell
+These offline checks work in Bash and PowerShell:
+
+```sh
 go test ./pkg/pluginsdk -run TestKnowledge -count=1
 go test ./internal/k8s/knowledge ./internal/convert -count=1
 go test -tags integration ./api/k8s/v1alpha1 -run 'TestKnowledgeBackend.*CRDContract' -count=1
@@ -374,7 +376,9 @@ extension. Set `KOGNITION_PGVECTOR_TEST_DSN` through a local environment/secret
 mechanism to a disposable PostgreSQL server with pgvector available and a role
 allowed to create databases and extensions. Run:
 
-```powershell
+Run the approved database/TLS checks in either shell:
+
+```sh
 go test ./providers/pgvector -run 'TestQuerierPostgres|TestConnectionMaterial' -count=1 -v
 ```
 

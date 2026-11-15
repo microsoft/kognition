@@ -96,7 +96,7 @@ func Parse(reader io.Reader) (Manifest, error) {
 					result.StdioIsolationProfile, _, _ = unstructured.NestedString(object.Object, "spec", "template", "metadata", "annotations", "kognition.dev/stdio-isolation-profile")
 				}
 			}
-		case "CiliumNetworkPolicy":
+		case "CiliumNetworkPolicy", "CiliumClusterwideNetworkPolicy":
 			result.Objects = append(result.Objects, object)
 		case "NetworkPolicy":
 			if strings.HasSuffix(object.GetName(), "-stdio-baseline") {
@@ -328,8 +328,9 @@ func (manifest Manifest) validate() error {
 	policies := map[string]bool{}
 	bindings := map[string]bool{}
 	versions := map[string]string{
-		"CiliumNetworkPolicy":       "cilium.io/v2",
-		"ValidatingAdmissionPolicy": "admissionregistration.k8s.io/v1", "ValidatingAdmissionPolicyBinding": "admissionregistration.k8s.io/v1", "ValidatingWebhookConfiguration": "admissionregistration.k8s.io/v1",
+		"CiliumNetworkPolicy":            "cilium.io/v2",
+		"CiliumClusterwideNetworkPolicy": "cilium.io/v2",
+		"ValidatingAdmissionPolicy":      "admissionregistration.k8s.io/v1", "ValidatingAdmissionPolicyBinding": "admissionregistration.k8s.io/v1", "ValidatingWebhookConfiguration": "admissionregistration.k8s.io/v1",
 		"Deployment": "apps/v1", "Service": "v1", "ServiceAccount": "v1", "NetworkPolicy": "networking.k8s.io/v1", "Role": "rbac.authorization.k8s.io/v1", "RoleBinding": "rbac.authorization.k8s.io/v1",
 	}
 	seen := map[string]bool{}
@@ -366,8 +367,12 @@ func (manifest Manifest) validate() error {
 				return errors.New("guard identity mismatch")
 			}
 		case "CiliumNetworkPolicy":
-			if !manifest.isCiliumAPIEgress(object) && !slices.Contains(manifest.Namespaces, object.GetNamespace()) {
+			if !manifest.isCiliumAPIEgress(object) && manifest.probeComponent(object) == "" && !slices.Contains(manifest.Namespaces, object.GetNamespace()) {
 				return errors.New("unexpected workload namespace")
+			}
+		case "CiliumClusterwideNetworkPolicy":
+			if !manifest.isRuntimeProbe(object) {
+				return errors.New("unexpected cluster-wide Cilium policy")
 			}
 		case "NetworkPolicy", "Role", "RoleBinding":
 			if !slices.Contains(manifest.Namespaces, object.GetNamespace()) {
@@ -381,7 +386,7 @@ func (manifest Manifest) validate() error {
 		}
 		switch object.GetKind() {
 		case "CiliumNetworkPolicy":
-			if manifest.isCiliumAPIEgress(object) {
+			if manifest.isCiliumAPIEgress(object) || manifest.probeComponent(object) != "" {
 				continue
 			}
 			if denies[object.GetNamespace()] || !strings.HasSuffix(object.GetName(), "-stdio-deny") {

@@ -22,11 +22,11 @@ PRIVATE_RELEASE_DOCUMENTS = (
     "going-public.md", "release-assessment.md",
     "repository-publication-audit.md", "responsible-ai-readiness.md",
 )
-PRIVATE_HACKATHON_DOCUMENTS = (
+PRIVATE_DEMO_DOCUMENTS = (
     "docs/development-plans/tutorials/tutorial-video-script.md",
     "docs/development-plans/tutorials/tutorial-video-coverage.md",
     "tools/recording/README.md",
-    "samples/hackathon-trustworthiness/storyboard-v1.md",
+    "samples/trustworthiness/storyboard-v1.md",
 )
 
 
@@ -175,7 +175,7 @@ def test_publication_ignores_local_state_and_raw_acceptance_output() -> None:
         ".github/instructions/postman-collections-pre-request.instructions.md",
         ".env.production", "playwright-report/index.html", "blob-report/report.zip",
         "logs/runtime.log", "runtime.pprof",
-        ".hackaton2026/video-production/recording-notes.md",
+        ".demo-preparation/video-production/recording-notes.md",
         "docs/release-preparation/future-assessment.md",
         "docs/features/knowledge-provider-execution/sg07-deployed-acceptance.txt",
         "docs/features/knowledge-provider-execution/sg08-deployed-acceptance.txt",
@@ -184,7 +184,7 @@ def test_publication_ignores_local_state_and_raw_acceptance_output() -> None:
         "docs/features/knowledge-provider-execution/sg08-scoped-lint.txt",
     ]
     paths.extend("docs/release-preparation/" + name for name in PRIVATE_RELEASE_DOCUMENTS)
-    paths.extend(PRIVATE_HACKATHON_DOCUMENTS)
+    paths.extend(PRIVATE_DEMO_DOCUMENTS)
     result = subprocess.run(
         ["git", "check-ignore", "--no-index", "-z", "--stdin"], cwd=ROOT,
         input=("\0".join(paths) + "\0").encode(), capture_output=True, timeout=30,
@@ -204,12 +204,12 @@ def test_publication_retains_source_tests_legal_and_build_inputs() -> None:
         "samples/helm-umbrella/charts/kognition-0.1.0.tgz",
         "docs/development-plans/refactoring/repository-refactor-plan.md",
         "tools/recording/live-pilot.js", "tools/recording/live-pilot.test.js",
-        "samples/hackathon-trustworthiness/runbook.md",
-        "samples/hackathon-trustworthiness/publication_server.py",
-        "samples/hackathon-trustworthiness/test_publication_server.py",
-        "e2e/hackathon-trustworthiness-browser-rehearsal.js",
-        "e2e/hackathon-trustworthiness-storyboard-e2e.ps1",
-        "e2e/hackathon-trustworthiness-e2e.ps1",
+        "samples/trustworthiness/runbook.md",
+        "samples/trustworthiness/publication_server.py",
+        "samples/trustworthiness/test_publication_server.py",
+        "e2e/trustworthiness-browser-rehearsal.js",
+        "e2e/trustworthiness-storyboard-e2e.ps1",
+        "e2e/trustworthiness-e2e.ps1",
         "e2e/workload-identity-acceptance.ps1",
         "e2e/fixtures/workload-identity-platform.yaml",
         "e2e/mint-model-session-capability.go",
@@ -241,13 +241,13 @@ def test_release_assessments_are_not_in_the_publishable_inventory() -> None:
     assert not published.intersection("docs/" + name for name in PRIVATE_RELEASE_DOCUMENTS)
 
 
-def test_hackathon_preparation_documents_are_not_public_dependencies() -> None:
+def test_demo_preparation_documents_are_not_public_dependencies() -> None:
     result = subprocess.run(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=ROOT, capture_output=True, timeout=30, check=True,
     )
     published = set(result.stdout.decode().split("\0"))
-    assert not published.intersection(PRIVATE_HACKATHON_DOCUMENTS)
+    assert not published.intersection(PRIVATE_DEMO_DOCUMENTS)
     for relative in published:
         path = ROOT / relative
         if not relative.endswith(".md") or not path.is_file():
@@ -257,7 +257,7 @@ def test_hackathon_preparation_documents_are_not_public_dependencies() -> None:
                 continue
             destination = (path.parent / target.split("#", 1)[0].strip("<>")).resolve()
             if destination.is_relative_to(ROOT):
-                assert destination.relative_to(ROOT).as_posix() not in PRIVATE_HACKATHON_DOCUMENTS, (
+                assert destination.relative_to(ROOT).as_posix() not in PRIVATE_DEMO_DOCUMENTS, (
                     f"{relative}: {target}"
                 )
 
@@ -295,6 +295,14 @@ def test_privacy_notice_and_documented_tracing_opt_out_are_shipped() -> None:
     assert "trace export is disabled by default" in readme
     assert "### Data Collection Notice" not in readme
     assert "Data Collection. The software may collect" not in readme
+
+
+def test_installation_state_is_excluded_from_source_and_image_contexts() -> None:
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert "/.local/" in gitignore
+    assert ".local/" in dockerignore
+    assert ".azure/" in dockerignore
 
 
 @pytest.mark.parametrize("archive", ["kognition-0.1.0.tgz", "kognition-governance-0.1.0.tgz"])

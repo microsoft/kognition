@@ -18,18 +18,22 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.phase
-      name: Phase
-      type: string
-    - jsonPath: .status.readyReplicas
+    - jsonPath: .status.runtime.ready
       name: Ready
+      type: string
+    - jsonPath: .status.runtime.updatedReplicas
+      name: Up-to-date
       type: integer
-    - jsonPath: .status.replicas
-      name: Replicas
+    - jsonPath: .status.runtime.availableReplicas
+      name: Available
       type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
+    - jsonPath: .status.phase
+      name: Phase
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -413,13 +417,41 @@ spec:
                 format: int32
                 type: integer
               replicas:
-                description: Replicas is the current number of instances.
+                description: Replicas is the desired number of controller-owned instances.
                 format: int32
                 type: integer
               revisionCount:
                 description: RevisionCount is the number of spec revisions processed.
                 format: int64
                 type: integer
+              runtime:
+                description: Runtime observes the backing Deployment rather than completed sessions.
+                properties:
+                  ready:
+                    type: string
+                  desiredReplicas:
+                    format: int32
+                    type: integer
+                  replicas:
+                    format: int32
+                    type: integer
+                  readyReplicas:
+                    format: int32
+                    type: integer
+                  updatedReplicas:
+                    format: int32
+                    type: integer
+                  availableReplicas:
+                    format: int32
+                    type: integer
+                required:
+                - ready
+                - desiredReplicas
+                - replicas
+                - readyReplicas
+                - updatedReplicas
+                - availableReplicas
+                type: object
             type: object
         type: object
     served: true

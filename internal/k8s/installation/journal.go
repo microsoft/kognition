@@ -89,6 +89,12 @@ func Claim(ctx context.Context, admin client.Client, plan Plan, digest string) (
 	}
 	key := JournalKey(plan)
 	record := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}, Data: map[string]string{"version": "1", "planSHA256": digest, "events": "claimed\n"}}
+	if plan.ReleaseRevision == 0 {
+		record.Data["mode"] = "fresh"
+		record.Data["clusterUID"] = plan.ClusterUID
+		record.Data["namespaceUID"] = plan.NamespaceUID
+		record.Data["release"] = plan.Release
+	}
 	if err := admin.Create(ctx, record); err != nil {
 		return nil, fmt.Errorf("target claim was not acquired; do not retry mutations until settled-request recovery: %w", err)
 	}

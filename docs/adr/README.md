@@ -41,6 +41,7 @@ This directory holds Architecture Decision Records for the Kognition platform.
 - [ADR-0025: Model invocation contracts](0025-model-invocation-contracts.md), accepted 2026-10-22.
 - [ADR-0026: Studio tutorial execution](0026-studio-tutorial-execution.md), Accepted for isolated implementation, 2026-10-29.
 - [ADR-0027: Runtime approval instance configuration](0027-runtime-approval-instance-configuration.md), Proposed, 2026-11-06.
+- [ADR-0028: First installation lifecycle](0028-first-installation-lifecycle.md), Accepted for fresh installation, 2026-11-12; partially supersedes ADR-0016 decision 1.
 
 ## Related
 

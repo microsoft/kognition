@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kognition-ai/kognition/internal/k8s/activation"
 	"github.com/kognition-ai/kognition/internal/k8s/installation"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/discovery"
@@ -44,11 +45,17 @@ func helmEnvironment(environment []string, path, digest string) []string {
 
 func run(arguments []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(arguments) == 0 {
-		_, _ = fmt.Fprintln(stderr, "use bootstrap or recover --plan <reviewed.json> --writers-frozen")
+		_, _ = fmt.Fprintln(stderr, "use fresh --help for a new installation; use bootstrap or recover --plan <reviewed.json> --writers-frozen for an existing installation")
 		return 2
 	}
-	if arguments[0] == "post-render" {
-		if err := postRender(stdin, stdout); err != nil {
+	if arguments[0] == "fresh" {
+		return runFresh(arguments[1:], stdout, stderr)
+	}
+	if arguments[0] == "fresh-recover" {
+		return runFreshRecovery(arguments[1:], stdout, stderr)
+	}
+	if arguments[0] == "post-render" || arguments[0] == "fresh-post-render" {
+		if err := postRenderMode(stdin, stdout, arguments[0] == "fresh-post-render"); err != nil {
 			_, _ = fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -84,6 +91,10 @@ func run(arguments []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 func postRender(stdin io.Reader, stdout io.Writer) error {
+	return postRenderMode(stdin, stdout, false)
+}
+
+func postRenderMode(stdin io.Reader, stdout io.Writer, fresh bool) error {
 	path := os.Getenv("KOGNITION_INSTALL_PLAN")
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -96,6 +107,11 @@ func postRender(stdin io.Reader, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if fresh {
+		if err := installation.ValidateFreshPlan(plan); err != nil {
+			return err
+		}
+	}
 	expected, err := installation.ReadArtifact(plan.Manifest)
 	if err != nil {
 		return err
@@ -107,7 +123,12 @@ func postRender(stdin io.Reader, stdout io.Writer) error {
 	if len(actual) > 32*1024*1024 {
 		return errors.New("render exceeds 32 MiB")
 	}
-	if _, err := installation.ValidateRender(expected, actual, plan.Release); err != nil {
+	if fresh {
+		actual, err = installation.FreshRender(expected, actual, plan.Release)
+	} else {
+		_, err = installation.ValidateRender(expected, actual, plan.Release)
+	}
+	if err != nil {
 		return err
 	}
 	_, err = stdout.Write(actual)
@@ -141,7 +162,15 @@ func execute(mode, path, claimUID, helmUID, helmDigest string, stdout, stderr io
 	if err != nil {
 		return err
 	}
-	plan, snapshotPath, cleanup, err := installation.Snapshot(plan)
+	freshSnapshot := mode == "fresh" || mode == "fresh-recover"
+	if mode == "recover" && installation.ValidateFreshPlan(plan) == nil {
+		freshSnapshot = true
+	}
+	snapshot := installation.Snapshot
+	if freshSnapshot {
+		snapshot = installation.SnapshotFresh
+	}
+	plan, snapshotPath, cleanup, err := snapshot(plan)
 	if err != nil {
 		return err
 	}
@@ -159,6 +188,9 @@ func execute(mode, path, claimUID, helmUID, helmDigest string, stdout, stderr io
 		return errors.New("kubeconfig endpoint mismatch, insecure TLS or impersonation is unsupported")
 	}
 	config.Timeout = 15 * time.Second
+	if freshSnapshot {
+		config.QPS, config.Burst = 50, 100
+	}
 	admin, err := client.New(config, client.Options{Scheme: scheme.Scheme})
 	if err != nil {
 		return err
@@ -167,9 +199,16 @@ func execute(mode, path, claimUID, helmUID, helmDigest string, stdout, stderr io
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	timeout := 8 * time.Minute
+	if mode == "fresh" {
+		timeout = 15 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	operations := &installation.Kubernetes{Plan: plan, Manifest: manifest, Admin: admin, Discovery: discover}
+	if mode == "fresh-recover" {
+		return recoverFresh(ctx, operations, config, path, planDigest, claimUID, stdout, stderr)
+	}
 	if mode == "recover" {
 		if err := operations.VerifyTarget(ctx); err != nil {
 			return err
@@ -320,7 +359,11 @@ func execute(mode, path, claimUID, helmUID, helmDigest string, stdout, stderr io
 		if err != nil {
 			return err
 		}
-		_, err = installation.ValidateRender(expected, output, plan.Release)
+		if mode == "fresh" {
+			_, err = installation.FreshRender(expected, output, plan.Release)
+		} else {
+			_, err = installation.ValidateRender(expected, output, plan.Release)
+		}
 		return err
 	}
 	operations.Apply = func(ctx context.Context) error {
@@ -341,7 +384,11 @@ func execute(mode, path, claimUID, helmUID, helmDigest string, stdout, stderr io
 		if err := operations.VerifyReleaseObjects(ctx); err != nil {
 			return err
 		}
-		output, err := command(ctx, append([]string{"upgrade", "--install", plan.Release, plan.Chart.Path, "--reset-values", "--values", plan.Values.Path, "--set", "k8sController.activated=false", "--no-hooks", "--skip-crds", "--post-renderer", executable, "--post-renderer-args", "post-render", "--timeout", "5m"}, common...)...)
+		renderMode := "post-render"
+		if mode == "fresh" {
+			renderMode = "fresh-post-render"
+		}
+		output, err := command(ctx, append([]string{"upgrade", "--install", plan.Release, plan.Chart.Path, "--reset-values", "--values", plan.Values.Path, "--set", "k8sController.activated=false", "--no-hooks", "--skip-crds", "--post-renderer", executable, "--post-renderer-args", renderMode, "--timeout", "5m"}, common...)...)
 		if err != nil {
 			return err
 		}
@@ -361,6 +408,48 @@ func execute(mode, path, claimUID, helmUID, helmDigest string, stdout, stderr io
 	}
 	if err := installation.Bootstrap(ctx, operations, record, true); err != nil {
 		return err
+	}
+	if mode == "fresh" {
+		if err := installation.WaitForFreshServices(ctx, admin, expected); err != nil {
+			return err
+		}
+		candidate, err := activation.ParseCandidate(expected, plan.Release)
+		if err != nil {
+			return err
+		}
+		binary, err := os.ReadFile(executable)
+		if err != nil {
+			return err
+		}
+		serverVersion, err := discover.ServerVersion()
+		if err != nil {
+			return err
+		}
+		replicas, err := freshReplicaCount(plan.Values)
+		if err != nil {
+			return err
+		}
+		target, err := candidate.Snapshot(ctx, admin, config.Host, serverVersion.GitVersion, plan.Chart.SHA256,
+			fmt.Sprintf("sha256:%x", sha256.Sum256(binary)), plan.AuthorityNamespace, replicas)
+		if err != nil {
+			return err
+		}
+		authorization, err := record.AuthorizeFresh(ctx, plan, target)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(stdout, "Admission and migrations verified; activation record %s/%s. Starting the controller after behavioral checks.\n", authorization.Namespace, authorization.Name); err != nil {
+			return err
+		}
+		audit, err := candidate.ActivateFresh(ctx, admin, config, activation.ActivationOptions{
+			Approval: client.ObjectKeyFromObject(authorization), Endpoint: config.Host,
+			ServerVersion: serverVersion.GitVersion, ChartSHA256: target.ChartSHA256, ToolVersion: target.ToolVersion,
+			Replicas: target.Replicas, WritersFrozen: true,
+		})
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(stdout).Encode(audit)
 	}
 	_, err = fmt.Fprintln(stdout, "Verified inactive bootstrap. Producers remain frozen. Use the separately approved SG-04 activation transaction only after all acceptance gates pass.")
 	return err

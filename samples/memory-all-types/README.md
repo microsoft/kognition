@@ -50,7 +50,9 @@ which covers only `working`.
 
 - Kognition installed in the cluster.
 - The tool sandbox running:
-  ```powershell
+  Use the same commands in Bash or PowerShell:
+
+  ```sh
   kubectl apply -f samples/workflows/tool-sandbox.yaml
   kubectl -n default wait --for=condition=Available --timeout=60s deployment/tool-sandbox
   ```
@@ -75,6 +77,20 @@ kubectl -n default wait --for=jsonpath='{.status.phase}'=Ready `
   agent/memory-explorer agent/memory-explorer-peer --timeout=120s
 
 # Sanity check — five claims, five volumes, all Bound:
+kubectl get memoryclaims -n default
+kubectl get memoryvolumes -n default
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+kubectl apply -f samples/memory-all-types/manifests.yaml
+kubectl -n default wait '--for=jsonpath={.status.phase}=Bound' \
+  memoryclaim/explorer-episodic memoryclaim/explorer-semantic \
+  memoryclaim/explorer-working memoryclaim/explorer-procedural \
+  memoryclaim/explorer-shared --timeout=60s
+kubectl -n default wait '--for=jsonpath={.status.phase}=Ready' \
+  agent/memory-explorer agent/memory-explorer-peer --timeout=120s
 kubectl get memoryclaims -n default
 kubectl get memoryvolumes -n default
 ```
@@ -113,16 +129,40 @@ state — every fact has to come back through `sandbox_memory_recall`.
   "What do you know? List the procedure, the dog name, issue #871, the working note, and the shared policy." --mode kubernetes
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+./bin/kognitionctl chat memory-explorer \
+  "Remember as a working note: intermediate sum = 42." --mode kubernetes
+./bin/kognitionctl chat memory-explorer \
+  "Record this episodic event: on 2024-03-12 the user reported issue #871." --mode kubernetes
+./bin/kognitionctl chat memory-explorer \
+  "Remember this semantic fact: the user's dog is named Pepper." --mode kubernetes
+./bin/kognitionctl chat memory-explorer \
+  "Remember this procedure: to deploy, run 'make build' then 'kubectl apply -f manifests.yaml'." --mode kubernetes
+./bin/kognitionctl chat memory-explorer \
+  "Remember this shared team policy: every release must include an SBOM." --mode kubernetes
+./bin/kognitionctl chat memory-explorer \
+  "What do you know? List the procedure, the dog name, issue #871, the working note, and the shared policy." --mode kubernetes
+```
+
 ## Verify each type independently
 
 Filter by tag against the sandbox to prove every type is stored distinctly.
 The records share one backing list but the `tag` field pins each one to
 its conceptual type.
 
-```powershell
-kubectl -n default port-forward service/tool-sandbox 18080:8080
+In one terminal (Bash or PowerShell):
 
-# In another shell — one block per memory type:
+```sh
+kubectl -n default port-forward service/tool-sandbox 18080:8080
+```
+
+In a second terminal, choose one of the following blocks.
+
+**PowerShell (Windows):**
+
+```powershell
 foreach ($t in "working","episodic","semantic","procedural","shared") {
     Write-Host "`n=== $t ===" -ForegroundColor Cyan
     Invoke-RestMethod -Uri http://127.0.0.1:18080/memory-recall `
@@ -132,12 +172,30 @@ foreach ($t in "working","episodic","semantic","procedural","shared") {
 }
 ```
 
+**Bash (Linux/macOS):**
+
+```bash
+for t in working episodic semantic procedural shared; do
+  printf '\n=== %s ===\n' "$t"
+  curl --fail --silent --show-error http://127.0.0.1:18080/memory-recall \
+    --header 'Content-Type: application/json' \
+    --data "{\"query\":\"\",\"tag\":\"$t\",\"top_k\":25}" |
+    python3 -m json.tool
+done
+```
+
 Each block should return only the records tagged with that type.
 
 The runtime also logs every tool call:
 
 ```powershell
 kubectl -n default logs deployment/agent-memory-explorer --tail=40 | Select-String "sandbox_memory"
+```
+
+**Bash (Linux/macOS):**
+
+```bash
+kubectl -n default logs deployment/agent-memory-explorer --tail=40 | grep -F 'sandbox_memory'
 ```
 
 ## How the wiring works

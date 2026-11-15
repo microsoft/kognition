@@ -17,7 +17,7 @@ These files remain versioned so contributors can follow implementation decisions
 and reproduce development work. Preserve historical evidence scope and failure
 results when updating a plan.
 
-Hackathon preparation documents, including video-production plans, recording
+Demo preparation documents, including video-production plans, recording
 notes and the presenter storyboard, are local-only and excluded from Git.
 Runnable samples, recording helpers and regression tests remain versioned.
 

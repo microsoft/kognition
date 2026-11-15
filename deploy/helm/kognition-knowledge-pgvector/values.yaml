@@ -6,6 +6,7 @@ adapter:
   image: ""
   imagePullPolicy: IfNotPresent
   watchNamespace: default
+  secretNames: []
   tlsSecretName: ""
   clientPeerURI: ""
   databaseAddress: ""
@@ -15,6 +16,7 @@ adapter:
   networkPolicy:
     enabled: true
     ciliumApiServerEgress: false
+    ciliumHostProbeIngress: false
     kubernetesApiEgressCIDRs: []
     clients: []
     kubeletProbeIngressCIDRs: []

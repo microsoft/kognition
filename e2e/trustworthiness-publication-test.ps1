@@ -6,7 +6,7 @@ Set-StrictMode -Version Latest
 
 $tokens = $null
 $parseErrors = $null
-$scriptAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot "hackathon-trustworthiness-e2e.ps1"), [ref]$tokens, [ref]$parseErrors)
+$scriptAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot "trustworthiness-e2e.ps1"), [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 foreach ($functionName in @("Assert-PublicationProof", "Submit-WorkflowApproval", "Get-OptionalProperty", "Wait-ForWorkflowRun")) {
     $functionAst = $scriptAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName }, $true)
@@ -15,7 +15,7 @@ foreach ($functionName in @("Assert-PublicationProof", "Submit-WorkflowApproval"
 }
 
 $runID = "proof-test"
-$namespace = "kognition-hack-$runID"
+$namespace = "kognition-demo-$runID"
 & {
     $script:workflowReads = 0
     function Invoke-Kubectl {
@@ -101,7 +101,7 @@ Write-Host "Publication proof: valid evidence accepted, $($cases.Count) invalid 
         if ($Arguments[0] -ne "get") { throw "Policy discovery attempted mutation" }
         if ($Arguments[1] -in $script:existingPolicies) { return $Arguments[1] }
     }
-    $phaseAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot "hackathon-trust-profile-phases.ps1"), [ref]$tokens, [ref]$parseErrors)
+    $phaseAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot "trust-profile-phases.ps1"), [ref]$tokens, [ref]$parseErrors)
     if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
     $selection = $phaseAst.Find({ param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$isolatedComponents' }, $true)
     $baseline = $scriptAst.Find({ param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$controllerBaselinePolicy' }, $true)

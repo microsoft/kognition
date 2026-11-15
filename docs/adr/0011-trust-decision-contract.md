@@ -8,7 +8,7 @@
 
 Kognition persists Tool and Memory evidence through CognitiveAuditLog, but
 producer-specific `details` values do not provide one stable contract for
-operators or the Trust Focus dashboard. The Hackathon demonstration needs to
+operators or the Trust Focus dashboard. The Demo demonstration needs to
 show why a request was allowed, denied, replayed, or revoked without exposing
 credentials, prompts, provider responses, or unrestricted arguments.
 
