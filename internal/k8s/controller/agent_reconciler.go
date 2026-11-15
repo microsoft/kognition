@@ -71,11 +71,18 @@ func (a *AgentReconcilerAdapter) Reconcile(ctx context.Context, req ctrl.Request
 		if agent, loadErr := loadAgentForRuntimeRefresh(ctx, a.store, req.Namespace, req.Name); loadErr != nil {
 			a.logger.Warn("failed to load agent for runtime refresh", zap.Error(loadErr))
 		} else if agent != nil {
-			if runtimeErr := a.dispatcher.EnsureAgentRuntime(ctx, agent); runtimeErr != nil {
+			runtimeErr := a.dispatcher.EnsureAgentRuntime(ctx, agent)
+			if runtimeErr != nil {
 				a.logger.Warn("failed to ensure agent runtime", zap.Error(runtimeErr))
-			} else if agent.DeletionTimestamp == nil {
+			}
+			// Observe the Deployment even when provisioning failed so a rejected
+			// update or missing Deployment never leaves stale healthy counts.
+			if agent.DeletionTimestamp == nil {
 				if err := a.refreshRuntimeStatus(ctx, agent); err != nil {
-					return ctrl.Result{}, err
+					if runtimeErr == nil {
+						return ctrl.Result{}, err
+					}
+					a.logger.Warn("failed to refresh agent runtime status", zap.Error(err))
 				}
 			}
 		} else if annErr := a.dispatcher.EnsureOwnerAnnotations(ctx, req.Name, req.Namespace); annErr != nil {
