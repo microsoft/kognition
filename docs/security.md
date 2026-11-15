@@ -396,9 +396,12 @@ scale-down example below is insufficient by itself when those writers are
 enabled: establish verified quiescence of every writer before changing a holder.
 No timeout or Lease age proves an uncertain action was not executed.
 
-Each step must succeed before the next one runs. If scale-down or rollout
-fails, stop: do not clear the holder while a controller replica might still be
-writing.
+Each step must succeed before the next one runs. A successful rollout after
+scaling to zero does not prove that terminating Pods have exited, so the
+procedure also waits for every Pod selected by the controller Deployment to
+disappear and then confirms none remain. If scale-down, the wait, or the final
+Pod check fails (including API errors and timeouts), stop: do not clear the
+holder while a controller replica might still be writing.
 
 ```powershell
 $ErrorActionPreference = "Stop"
@@ -411,8 +414,14 @@ $namespace = "kognition-system"
 $deployment = "kognition-k8s-controller"
 $replicas = (& kubectl get deployment $deployment -n $namespace -o jsonpath='{.spec.replicas}')
 if ($LASTEXITCODE -ne 0 -or $replicas -notmatch '^[1-9][0-9]*$') { throw "Could not read a nonzero replica count for $deployment" }
+$selector = ("$(& kubectl get deployment $deployment -n $namespace -o go-template='{{range $k,$v:=.spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}')").TrimEnd(',')
+if ($LASTEXITCODE -ne 0 -or -not $selector) { throw "Could not read the Pod selector for $deployment" }
 Invoke-Kubectl scale deployment $deployment -n $namespace --replicas=0
 Invoke-Kubectl rollout status deployment $deployment -n $namespace --timeout=180s
+& kubectl wait --for=delete pod -l $selector -n $namespace --timeout=180s
+$remaining = & kubectl get pods -l $selector -n $namespace -o name
+if ($LASTEXITCODE -ne 0) { throw "Could not list controller Pods for $deployment" }
+if ($remaining) { throw "Controller Pods are still present: $remaining" }
 Invoke-Kubectl patch lease kognition-runtime-approval-binding-keys -n $namespace --type merge -p '{"spec":{"holderIdentity":""}}'
 Invoke-Kubectl scale deployment $deployment -n $namespace --replicas=$replicas
 Invoke-Kubectl rollout status deployment $deployment -n $namespace --timeout=180s
@@ -426,8 +435,14 @@ namespace=kognition-system
 deployment=kognition-k8s-controller
 replicas="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.spec.replicas}')"
 [[ "$replicas" =~ ^[1-9][0-9]*$ ]] || { echo "Could not read a nonzero replica count for $deployment" >&2; exit 1; }
+selector="$(kubectl get deployment "$deployment" -n "$namespace" -o go-template='{{range $k,$v:=.spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}')"
+selector="${selector%,}"
+[[ -n "$selector" ]] || { echo "Could not read the Pod selector for $deployment" >&2; exit 1; }
 kubectl scale deployment "$deployment" -n "$namespace" --replicas=0
 kubectl rollout status deployment "$deployment" -n "$namespace" --timeout=180s
+kubectl wait --for=delete pod -l "$selector" -n "$namespace" --timeout=180s || true
+remaining="$(kubectl get pods -l "$selector" -n "$namespace" -o name)"
+[[ -z "$remaining" ]] || { echo "Controller Pods are still present: $remaining" >&2; exit 1; }
 kubectl patch lease kognition-runtime-approval-binding-keys -n "$namespace" --type merge -p '{"spec":{"holderIdentity":""}}'
 kubectl scale deployment "$deployment" -n "$namespace" --replicas="$replicas"
 kubectl rollout status deployment "$deployment" -n "$namespace" --timeout=180s
