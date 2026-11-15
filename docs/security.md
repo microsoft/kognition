@@ -396,29 +396,45 @@ scale-down example below is insufficient by itself when those writers are
 enabled: establish verified quiescence of every writer before changing a holder.
 No timeout or Lease age proves an uncertain action was not executed.
 
+Each step must succeed before the next one runs. If scale-down or rollout
+fails, stop: do not clear the holder while a controller replica might still be
+writing.
+
 ```powershell
+$ErrorActionPreference = "Stop"
+function Invoke-Kubectl {
+    & kubectl @args
+    if ($LASTEXITCODE -ne 0) { throw "kubectl $($args -join ' ') failed with exit code $LASTEXITCODE" }
+}
+
 $namespace = "kognition-system"
 $deployment = "kognition-k8s-controller"
-$replicas = kubectl get deployment $deployment -n $namespace -o jsonpath='{.spec.replicas}'
-kubectl scale deployment $deployment -n $namespace --replicas=0
-kubectl rollout status deployment $deployment -n $namespace --timeout=180s
-kubectl patch lease kognition-runtime-approval-binding-keys -n $namespace --type merge -p '{"spec":{"holderIdentity":""}}'
-kubectl scale deployment $deployment -n $namespace --replicas=$replicas
-kubectl rollout status deployment $deployment -n $namespace --timeout=180s
+$replicas = (& kubectl get deployment $deployment -n $namespace -o jsonpath='{.spec.replicas}')
+if ($LASTEXITCODE -ne 0 -or $replicas -notmatch '^[1-9][0-9]*$') { throw "Could not read a nonzero replica count for $deployment" }
+Invoke-Kubectl scale deployment $deployment -n $namespace --replicas=0
+Invoke-Kubectl rollout status deployment $deployment -n $namespace --timeout=180s
+Invoke-Kubectl patch lease kognition-runtime-approval-binding-keys -n $namespace --type merge -p '{"spec":{"holderIdentity":""}}'
+Invoke-Kubectl scale deployment $deployment -n $namespace --replicas=$replicas
+Invoke-Kubectl rollout status deployment $deployment -n $namespace --timeout=180s
 ```
 
 **Bash (Linux/macOS):**
 
 ```bash
+set -euo pipefail
 namespace=kognition-system
 deployment=kognition-k8s-controller
-replicas="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.spec.replicas}')" || exit 1
+replicas="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.spec.replicas}')"
+[[ "$replicas" =~ ^[1-9][0-9]*$ ]] || { echo "Could not read a nonzero replica count for $deployment" >&2; exit 1; }
 kubectl scale deployment "$deployment" -n "$namespace" --replicas=0
 kubectl rollout status deployment "$deployment" -n "$namespace" --timeout=180s
 kubectl patch lease kognition-runtime-approval-binding-keys -n "$namespace" --type merge -p '{"spec":{"holderIdentity":""}}'
 kubectl scale deployment "$deployment" -n "$namespace" --replicas="$replicas"
 kubectl rollout status deployment "$deployment" -n "$namespace" --timeout=180s
 ```
+
+Run the Bash block in a script or subshell so `set -e` does not close your
+interactive terminal on failure.
 
 Do not delete the Lease or edit
 `kognition.dev/runtime-approval-binding-key-state`. Restore controller replicas
