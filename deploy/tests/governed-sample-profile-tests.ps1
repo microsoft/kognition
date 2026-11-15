@@ -355,6 +355,14 @@ AZURE_CLIENT_SECRET=fake-test-only
     $global:SampleProfileTestInstance.metadata.labels.Clear()
     Assert-Throws { & (Join-Path $repoRoot 'samples\agentinstance\apply.ps1') } '*not owned*'
 
+    # The governed S3 path must validate an explicit -Kubeconfig before touching any cluster.
+    $global:SampleProfileTestEvents.Clear()
+    $previousKubeconfig = $env:KUBECONFIG
+    $env:KUBECONFIG = 'ambient-kubeconfig-that-must-stay-untouched'
+    Assert-Throws { & (Join-Path $repoRoot 'samples\knowledge-base-blob-s3\apply.ps1') -Kubeconfig (Join-Path $scratch 'missing-kubeconfig') } '*Kubeconfig file not found*'
+    Assert-True ($env:KUBECONFIG -eq 'ambient-kubeconfig-that-must-stay-untouched') 'A refused governed S3 install restores the caller KUBECONFIG.'
+    Assert-True ($global:SampleProfileTestEvents.Count -eq 0) 'A missing explicit kubeconfig is refused before any kubectl call.'
+    $env:KUBECONFIG = $previousKubeconfig
     Write-Output 'PASS: governed profile validation, namespace/reference integrity, digest fixtures, governed backend/claims, bounded budgets, full-install propagation/refusal, paid reasoning canary exclusion with health/readiness and legacy probe preservation, automatic provider indexing without duplicate named runs, legacy/native reindex preservation, empty-render no-ops, source ordering/failure safeguards, and one-shot preservation.'
 } finally {
     Set-Location -LiteralPath $originalDirectory

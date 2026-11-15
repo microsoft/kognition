@@ -23,7 +23,20 @@ $ErrorActionPreference = "Stop"
 $sampleDir = $PSScriptRoot
 . (Join-Path $sampleDir '..\azure-settings.ps1')
 if (Get-AzureSampleProfile) {
-    Invoke-AzureSampleKnowledgeInstall -Source s3 -SampleDirectory $sampleDir
+    # The governed installer calls kubectl without --kubeconfig, so scope KUBECONFIG
+    # to the explicitly selected file for the duration of the call.
+    $previousKubeconfig = $env:KUBECONFIG
+    try {
+        if ($PSBoundParameters.ContainsKey('Kubeconfig')) {
+            if (-not $Kubeconfig -or -not (Test-Path -LiteralPath $Kubeconfig -PathType Leaf)) {
+                throw "Kubeconfig file not found: $Kubeconfig"
+            }
+            $env:KUBECONFIG = (Resolve-Path -LiteralPath $Kubeconfig).Path
+        }
+        Invoke-AzureSampleKnowledgeInstall -Source s3 -SampleDirectory $sampleDir
+    } finally {
+        $env:KUBECONFIG = $previousKubeconfig
+    }
     return
 }
 if (-not $Kubeconfig -or -not (Test-Path -LiteralPath $Kubeconfig -PathType Leaf)) {
