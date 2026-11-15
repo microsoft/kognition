@@ -5,7 +5,50 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { chromium } = require("@playwright/test");
-const { holdReadableText } = require("./reading");
+const { holdReadableText, holdReadableConfiguration, configurationReadingWindowSeconds,
+  verifyConfigurationReadingWindow } = require("./reading");
+
+const prompt = "You help fictional Cedar Labs with Orbital Mark 7. Reply only to the current request. Keep answers under 90 words.";
+
+test("configuration reviews budget time for the complete configured content", () => {
+  assert.equal(configurationReadingWindowSeconds(prompt), 13);
+  assert(configurationReadingWindowSeconds("configured ".repeat(120)) >= 63);
+});
+
+test("a long scene cannot substitute for a readable completed configuration window", () => {
+  assert.throws(() => verifyConfigurationReadingWindow({
+    configuredText: prompt, displayedText: prompt, fullyVisible: true,
+    visibleSeconds: 5.08, sceneDurationSeconds: 16.2,
+  }), /requires 13 seconds/);
+  assert.throws(() => verifyConfigurationReadingWindow({
+    configuredText: prompt, displayedText: "You help fictional", fullyVisible: true, visibleSeconds: 60,
+  }), /complete configured content/);
+  assert.throws(() => verifyConfigurationReadingWindow({
+    configuredText: prompt, displayedText: prompt, fullyVisible: false, visibleSeconds: 60,
+  }), /fully visible/);
+  const result = verifyConfigurationReadingWindow({
+    configuredText: prompt, displayedText: prompt, fullyVisible: true, visibleSeconds: 13,
+  });
+  assert.equal(result.requiredSeconds, 13);
+  assert.equal(result.textSHA256, crypto.createHash("sha256").update(prompt).digest("hex"));
+});
+
+test("configuration capture holds the finished editable value for its full reading budget", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 600 } });
+    await page.setContent('<textarea aria-label="Prompt content" style="width:1100px;height:120px"></textarea>');
+    const content = page.getByLabel("Prompt content");
+    await content.fill(prompt);
+    const result = await holdReadableConfiguration(page, content);
+    assert.equal(result.requiredSeconds, 13);
+    assert(result.visibleSeconds >= 13);
+    assert.equal(result.textSHA256, crypto.createHash("sha256").update(prompt).digest("hex"));
+    assert.equal(await content.inputValue(), prompt);
+  } finally {
+    await browser.close();
+  }
+});
 
 test("manifest reading uses the actual editable value, not empty textarea text content", async () => {
   const browser = await chromium.launch({ headless: true });

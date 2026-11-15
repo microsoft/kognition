@@ -49,6 +49,7 @@ async function authoringAPI(page, { mode = "standalone", namespace = "default", 
     }
     const kinds = {
       agents: "Agent", workflows: "Workflow",
+      tools: "Tool", toolgrants: "ToolGrant", knowledgebases: "KnowledgeBase",
       autonomyclasses: "AutonomyClass", memoryclaims: "MemoryClaim", secretrefs: "SecretRef", prompts: "Prompt",
       memoryclasses: "MemoryClass", modelinvocationprofiles: "ModelInvocationProfile", memoryrecords: "MemoryRecord",
       evaluationruns: "EvaluationRun", workflowruns: "WorkflowRun",
@@ -506,6 +507,107 @@ async function createResource(page, selector) {
   await page.locator("#btn-create").click();
   await page.locator(selector).click();
 }
+
+test("new resources open Builder instead of inheriting Preview or YAML, while cancelled creation preserves the current view", async ({ page }) => {
+  const agent = { apiVersion: "kognition.dev/v1alpha1", kind: "Agent",
+    metadata: { name: "support", namespace: "default" }, spec: { modelRef: { name: "model" } } };
+  await authoringAPI(page, { records: [agent] });
+  await openResource(page, "agents", "support");
+  await page.locator('[data-view="preview"]').click();
+  await expect(page.locator(".chat-panel")).toBeVisible();
+  await createResource(page, "#btn-new-tool");
+  await expect(page.locator("#builder-host")).toBeVisible();
+  await expect(page.locator("#preview-host")).toBeHidden();
+  await expect(builderField(page, "Name")).toHaveValue("");
+  await page.locator('[data-view="yaml"]').click();
+  page.once("dialog", dialog => dialog.dismiss());
+  await createResource(page, "#btn-new-agent");
+  await expect(page.locator("#yaml-area")).toBeVisible();
+  await expect(page.locator("#editor-kind-pill")).toHaveText("Tool");
+  page.once("dialog", dialog => dialog.accept());
+  await createResource(page, "#btn-new-agent");
+  await expect(page.locator("#builder-host")).toBeVisible();
+  await expect(page.locator("#yaml-area")).toBeHidden();
+});
+
+for (const [kind, plural, spec] of [
+  ["Agent", "agents", { modelRef: { name: "model" } }],
+  ["MemoryClaim", "memoryclaims", { memoryClassName: "default", type: "episodic", capacity: "16Mi", accessModes: ["ReadWrite"] }],
+  ["Tool", "tools", { protocol: "OpenAPI", endpoint: "https://calculator.example.test", className: "http" }],
+  ["ToolGrant", "toolgrants", { agentRef: { name: "support" }, toolRef: { name: "calculator" }, verbs: ["invoke"] }],
+]) {
+  test(`${kind} metadata has explained key/value controls and persists labels and annotations`, async ({ page }) => {
+    const resource = { apiVersion: "kognition.dev/v1alpha1", kind,
+      metadata: { name: "metadata-example", namespace: "default" }, spec };
+    const calls = await authoringAPI(page, { records: [resource] });
+    await openResource(page, plural, resource.metadata.name);
+    for (const [title, key, value] of [
+      ["Labels", "app.kubernetes.io/part-of", "tutorial"],
+      ["Annotations", "tutorial.kognition.dev/description", "Support assistant tutorial"],
+    ]) {
+      if (kind === "MemoryClaim") {
+        const box = page.locator("details.schema-object").filter({ has: page.locator("summary").filter({ hasText: new RegExp(`^${title}$`) }) });
+        await box.locator("summary").click();
+        await expect(box).toContainText(`No ${title.toLowerCase()} configured.`);
+        await expect(box.getByText("New entry key", { exact: true })).toBeVisible();
+        await box.getByRole("textbox", { name: `${title} entry key`, exact: true }).fill(key);
+        await box.getByRole("button", { name: "Add entry", exact: true }).click();
+        await page.locator(`[data-path="metadata.${title.toLowerCase()}.${key}"]`).fill(value);
+      } else {
+        const box = page.locator("#builder-host .field").filter({ has: page.locator("label").filter({ hasText: new RegExp(`^${title}$`) }) }).first();
+        await expect(box).toContainText(`No ${title.toLowerCase()} configured.`);
+        await box.getByRole("button", { name: "+ add entry", exact: true }).click();
+        await box.getByRole("textbox", { name: `${title} key 1`, exact: true }).fill(key);
+        await box.getByRole("textbox", { name: `${title} value 1`, exact: true }).fill(value);
+      }
+    }
+    await page.locator("#btn-deploy").click();
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0].body.metadata.labels).toEqual({ "app.kubernetes.io/part-of": "tutorial" });
+    expect(calls[0].body.metadata.annotations).toEqual({ "tutorial.kognition.dev/description": "Support assistant tutorial" });
+    await page.locator('[data-view="yaml"]').click();
+    await expect(page.locator("#yaml-area")).toHaveValue(/app.kubernetes.io\/part-of: tutorial/);
+    await expect(page.locator("#yaml-area")).toHaveValue(/tutorial.kognition.dev\/description: Support assistant tutorial/);
+  });
+}
+
+test("Tool schema is fetched only after deployment and real introspection errors remain visible", async ({ page }) => {
+  let fetches = 0;
+  const mutations = await authoringAPI(page);
+  await page.route("**/api/tools/*/schema?*", route => {
+    fetches++;
+    return route.fulfill({ status: 502, json: { error: "calculator endpoint unavailable" } });
+  });
+  await createResource(page, "#btn-new-tool");
+  await builderField(page, "Name").fill("calculator");
+  await builderField(page, "Endpoint").fill("https://calculator.example.test");
+  const schema = page.locator("#builder-host details.form-section").filter({ has: page.locator("summary").filter({ hasText: /^Schema$/ }) });
+  await schema.locator("summary").click();
+  await expect(schema).toContainText("Deploy this Tool");
+  await expect(schema.getByRole("button", { name: "Introspect", exact: true })).toBeDisabled();
+  expect(fetches).toBe(0);
+  await page.locator("#btn-deploy").click();
+  await expect.poll(() => mutations.length).toBe(1);
+  await expect.poll(() => fetches).toBe(1);
+  if (await schema.getAttribute("open") === null) await schema.locator("summary").click();
+  await expect(schema).toContainText("Schema fetch failed: calculator endpoint unavailable");
+});
+
+test("inline KnowledgeBase source data preserves paragraphs in the schema Builder", async ({ page }) => {
+  const resource = { apiVersion: "kognition.dev/v1alpha1", kind: "KnowledgeBase",
+    metadata: { name: "product-docs", namespace: "default" },
+    spec: { knowledgeBaseClassName: "inline", sources: [{ type: "inline", data: "Original passage." }] } };
+  const calls = await authoringAPI(page, { records: [resource] });
+  await openResource(page, "knowledgebases", resource.metadata.name);
+  await page.getByRole("button", { name: "All API fields", exact: true }).click();
+  await expandBuilderObjects(page);
+  const corpus = "# Orbital Mark 7\n\nBrazil South is not bookable yet.\nTarget: November 2026.";
+  await page.locator('[data-path="spec.sources.0.data"]').fill(corpus);
+  page.once("dialog", dialog => dialog.accept());
+  await page.locator("#btn-deploy").click();
+  await expect.poll(() => calls.length).toBe(1);
+  expect(calls[0].body.spec.sources[0].data).toBe(corpus);
+});
 
 test("ModelGrant builder creates a complete manifest without clipping", async ({ page }) => {
   let created;

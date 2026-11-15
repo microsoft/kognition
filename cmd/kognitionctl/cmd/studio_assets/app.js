@@ -631,7 +631,7 @@ function newAgent() {
   state.existsInCluster = false;
   state.dirty = true;
   closeInspector();
-  renderEditor();
+  switchView("builder");
   refreshSidebarActive();
 }
 
@@ -656,7 +656,7 @@ function newWorkflow() {
   state.canvasViewport = { left: 0, top: 0 };
   resetWorkflowHistory();
   closeInspector();
-  renderEditor();
+  switchView("builder");
   refreshSidebarActive();
 }
 
@@ -676,7 +676,7 @@ function newTool() {
   state.existsInCluster = false;
   state.dirty = true;
   closeInspector();
-  renderEditor();
+  switchView("builder");
   refreshSidebarActive();
 }
 
@@ -696,7 +696,7 @@ function newToolClass() {
   state.existsInCluster = false;
   state.dirty = true;
   closeInspector();
-  renderEditor();
+  switchView("builder");
   refreshSidebarActive();
 }
 
@@ -715,7 +715,7 @@ function newModelGrant() {
   state.existsInCluster = false;
   state.dirty = true;
   closeInspector();
-  renderEditor();
+  switchView("builder");
   refreshSidebarActive();
 }
 
@@ -735,7 +735,7 @@ function newMemoryGrant() {
   state.existsInCluster = false;
   state.dirty = true;
   closeInspector();
-  renderEditor();
+  switchView("builder");
   refreshSidebarActive();
 }
 
@@ -756,7 +756,7 @@ function newCrossNamespaceGrant() {
   state.existsInCluster = false;
   state.dirty = true;
   closeInspector();
-  renderEditor();
+  switchView("builder");
   refreshSidebarActive();
 }
 
@@ -776,7 +776,7 @@ function newToolGrant() {
   state.existsInCluster = false;
   state.dirty = true;
   closeInspector();
-  renderEditor();
+  switchView("builder");
   refreshSidebarActive();
 }
 
@@ -795,7 +795,7 @@ function newKnowledgeBase() {
   state.existsInCluster = false;
   state.dirty = true;
   closeInspector();
-  renderEditor();
+  switchView("builder");
   refreshSidebarActive();
 }
 
@@ -814,7 +814,7 @@ function newKnowledgeBaseClaim() {
   state.existsInCluster = false;
   state.dirty = true;
   closeInspector();
-  renderEditor();
+  switchView("builder");
   refreshSidebarActive();
 }
 
@@ -833,7 +833,7 @@ function newEvaluationDataset() {
   state.existsInCluster = false;
   state.dirty = true;
   closeInspector();
-  renderEditor();
+  switchView("builder");
   refreshSidebarActive();
 }
 
@@ -2414,13 +2414,21 @@ function kvField(label, map, onChange) {
   function refresh() {
     wrap.innerHTML = "";
     const entries = Object.entries(map);
+    if (!entries.length) {
+      const empty = document.createElement("div"); empty.className = "hint";
+      empty.textContent = `No ${label.toLowerCase()} configured. Entries are optional key/value pairs.`;
+      wrap.appendChild(empty);
+    }
     for (let i = 0; i < entries.length; i++) {
       const [k, v] = entries[i];
       let currentKey = k;
       const row = document.createElement("div"); row.className = "kv-row";
       const ki = document.createElement("input"); ki.type = "text"; ki.value = k; ki.placeholder = "key";
       const vi = document.createElement("input"); vi.type = "text"; vi.value = v; vi.placeholder = "value";
+      ki.setAttribute("aria-label", `${label} key ${i + 1}`);
+      vi.setAttribute("aria-label", `${label} value ${i + 1}`);
       const rm = document.createElement("button"); rm.type = "button"; rm.textContent = "✕";
+      rm.setAttribute("aria-label", `Remove ${label.toLowerCase()} entry ${i + 1}`);
       ki.addEventListener("input", () => {
         if (ki.value === currentKey) return;
         delete map[currentKey];
@@ -2430,7 +2438,7 @@ function kvField(label, map, onChange) {
       });
       vi.addEventListener("input", () => { map[ki.value] = vi.value; onChange({ ...map }); });
       rm.addEventListener("click", () => { delete map[currentKey]; onChange({ ...map }); refresh(); });
-      row.appendChild(ki); row.appendChild(vi); row.appendChild(rm);
+      row.appendChild(field("Key", ki)); row.appendChild(field("Value", vi)); row.appendChild(rm);
       wrap.appendChild(row);
     }
     const add = document.createElement("button"); add.type = "button"; add.className = "add-row"; add.textContent = "+ add entry";
@@ -4710,7 +4718,8 @@ function renderBuilderSchemaField(spec, setOrDel) {
   const proto = spec.protocol || "MCP";
   const draftName = state.draft.metadata.name;
   const draftNs = state.draft.metadata.namespace || "default";
-  const canFetch = Boolean(draftName && spec.endpoint);
+  const canFetch = Boolean(state.existsInCluster && draftName && spec.endpoint &&
+    state.draftKey === keyOf("tools", draftName, draftNs));
   const required = proto === "OpenAPI";
 
   const runFetch = (adoptSchema) => {
@@ -4760,7 +4769,7 @@ function renderBuilderSchemaField(spec, setOrDel) {
   const btn = document.createElement("button"); btn.type = "button"; btn.className = "action";
   btn.textContent = cache.loading ? "Fetching…" : (cache.fetchedAt > 0 ? "Refresh" : "Introspect");
   btn.disabled = cache.loading || !canFetch;
-  btn.title = canFetch ? "Re-fetch the schema from the endpoint" : "Set a name and endpoint above to enable introspection";
+  btn.title = canFetch ? "Re-fetch the schema from the endpoint" : "Deploy this Tool before fetching its schema";
   btn.addEventListener("click", () => runFetch(true));
   head.appendChild(btn);
   wrap.appendChild(head);
@@ -4776,7 +4785,7 @@ function renderBuilderSchemaField(spec, setOrDel) {
   // Status line below the editor: source badge, description, or hints.
   if (!canFetch) {
     const hint = document.createElement("div"); hint.className = "hint";
-    hint.textContent = "Set a name and endpoint above to auto-fetch the schema this tool advertises.";
+    hint.textContent = "Deploy this Tool with a name and endpoint first. Studio then fetches the schema from the saved Tool.";
     wrap.appendChild(hint);
   } else if (cache.loading && cache.fetchedAt === 0) {
     const hint = document.createElement("div"); hint.className = "hint";

@@ -8,6 +8,7 @@ const crypto = require("node:crypto");
 const { expect } = require("@playwright/test");
 const { RANCHER_TARGET, BASELINE_V3_TARGET, recordingTarget } = require("./live-authoring");
 const { verifyKubernetesRuntime } = require("./live-pilot");
+const { holdReadableConfiguration } = require("./reading");
 const { runProduction, parseContinuationOptions, readContinuation, PLURALS, verifyIntent,
   verifyStartedWorkflow, WORKFLOW_UI_V1 } = require("./live-production-session");
 
@@ -211,6 +212,13 @@ async function runInstructional(input) {
         purpose: PURPOSES[object.kind] || "defines permission rules for the assistant", seconds: session.seconds() });
     };
     const expand = () => expandBuilderObjects(page);
+    const reviewConfiguration = async (control, target) => {
+      const startSeconds = session.seconds();
+      const reading = await holdReadableConfiguration(page, control);
+      session.report.readingHolds.push({ target: `configuration-${target}`, kind: "configuration",
+        startSeconds, endSeconds: session.seconds(), ...reading });
+      session.persist();
+    };
     const set = async (key, value) => {
       await expand();
       const control = page.locator(`[data-path="${key}"]`);
@@ -218,6 +226,9 @@ async function runInstructional(input) {
       if (await control.evaluate(el => el.tagName) === "SELECT") await control.selectOption(String(value));
       else await type(control, value);
       session.report.builderActions.push({ path: key, seconds: session.seconds() });
+      if (key === "spec.content" || key === "spec.instructions.inline" || /^spec\.sources\.\d+\.data$/.test(key)) {
+        await reviewConfiguration(control, key);
+      }
     };
     const addArray = async (label, object) => {
       await expand();
@@ -559,6 +570,7 @@ async function runInstructional(input) {
         await inspector.getByLabel(/^Name\s*\*?$/).fill(step.name);
         await inspector.getByLabel(/^Agent\s*\*?$/).selectOption(agent.metadata.name);
         await type(inspector.getByLabel("Input (Go template)", { exact: true }), step.input);
+        await reviewConfiguration(inspector.getByLabel("Input (Go template)", { exact: true }), `workflow-${step.name}-input`);
         await inspector.getByLabel("Timeout", { exact: true }).fill(step.timeout);
       }
       await page.getByRole("button", { name: "Arrange steps automatically", exact: true }).click();
