@@ -1819,7 +1819,7 @@ func TestCRDPrinterColumns(t *testing.T) {
 		{"kognition.dev_agents.yaml", "Agent", []string{"Phase", "Ready", "Replicas", "Age"}},
 		{"kognition.dev_agentinstances.yaml", "AgentInstance", []string{"Agent", "Phase", "Age"}},
 		{"kognition.dev_toolgrants.yaml", "ToolGrant", []string{"Agent", "Tool", "Active", "Age"}},
-		{"kognition.dev_workflows.yaml", "Workflow", []string{"Entry", "Phase", "Age"}},
+		{"kognition.dev_workflows.yaml", "Workflow", []string{"Entry", "Age"}},
 		{"kognition.dev_workflowruns.yaml", "WorkflowRun", []string{"Workflow", "Phase", "Active", "Age"}},
 	}
 

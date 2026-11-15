@@ -206,6 +206,7 @@ type WorkflowStepRetry struct {
 
 // WorkflowStatus describes the observed state of a Workflow.
 type WorkflowStatus struct {
+	EntryPoints    []string             `json:"entryPoints,omitempty" yaml:"entryPoints,omitempty"`
 	Phase          Phase                `json:"phase,omitempty" yaml:"phase,omitempty"`
 	Conditions     []Condition          `json:"conditions,omitempty" yaml:"conditions,omitempty"`
 	CompletedSteps []string             `json:"completedSteps,omitempty" yaml:"completedSteps,omitempty"`

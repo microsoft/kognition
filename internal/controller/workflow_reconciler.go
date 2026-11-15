@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -220,8 +221,11 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req Request) (Result
 	originalAnnotations := cloneStringMap(wf.ObjectMeta.Annotations)
 	originalFinalizers := append([]string(nil), wf.ObjectMeta.Finalizers...)
 	changed := false
-	if !isEmptyWorkflowStatus(wf.Status) {
-		wf.Status = v1alpha1.WorkflowStatus{}
+	// The template status carries only the computed entry points; legacy
+	// execution state is cleared.
+	entryPoints := workflowEntryPoints(&wf.Spec)
+	if !isEmptyWorkflowStatus(wf.Status) || !slices.Equal(wf.Status.EntryPoints, entryPoints) {
+		wf.Status = v1alpha1.WorkflowStatus{EntryPoints: entryPoints}
 		changed = true
 	}
 	if finalizers, removed := lifecycle.RemoveFinalizer(wf.ObjectMeta.Finalizers, WorkflowFinalizer); removed {
@@ -269,8 +273,7 @@ func (r *WorkflowReconciler) ensureTemplateRevision(ctx context.Context, workflo
 }
 
 // isEmptyWorkflowStatus reports whether a WorkflowStatus carries no
-// execution state. Used to avoid a no-op update when confirming a
-// Workflow is in the template (empty-status) shape.
+// execution state. Entry points are template metadata and are ignored.
 func isEmptyWorkflowStatus(s v1alpha1.WorkflowStatus) bool {
 	return s.Phase == "" &&
 		len(s.Conditions) == 0 &&
@@ -278,6 +281,25 @@ func isEmptyWorkflowStatus(s v1alpha1.WorkflowStatus) bool {
 		s.ActiveStep == "" &&
 		len(s.ActiveSteps) == 0 &&
 		len(s.StepStatuses) == 0
+}
+
+// workflowEntryPoints returns spec.entryPoint when set, otherwise every step
+// that has no incoming edge, in declaration order.
+func workflowEntryPoints(spec *v1alpha1.WorkflowSpec) []string {
+	if spec.EntryPoint != "" {
+		return []string{spec.EntryPoint}
+	}
+	targets := make(map[string]struct{}, len(spec.Edges))
+	for _, edge := range spec.Edges {
+		targets[edge.To] = struct{}{}
+	}
+	var entries []string
+	for _, step := range spec.Steps {
+		if _, incoming := targets[step.Name]; !incoming {
+			entries = append(entries, step.Name)
+		}
+	}
+	return entries
 }
 
 func snapshotWorkflowStatus(status v1alpha1.WorkflowStatus) v1alpha1.WorkflowStatus {
@@ -407,6 +429,9 @@ func (r *WorkflowReconciler) persistWorkflowState(ctx context.Context, wf *v1alp
 }
 
 func mergeWorkflowStatus(latest *v1alpha1.WorkflowStatus, original, desired v1alpha1.WorkflowStatus) {
+	if !reflect.DeepEqual(desired.EntryPoints, original.EntryPoints) {
+		latest.EntryPoints = desired.EntryPoints
+	}
 	if desired.Phase != original.Phase {
 		latest.Phase = desired.Phase
 	}

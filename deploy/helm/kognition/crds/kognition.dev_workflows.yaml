@@ -18,11 +18,8 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.entryPoint
+    - jsonPath: .status.entryPoints
       name: Entry
-      type: string
-    - jsonPath: .status.phase
-      name: Phase
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -381,6 +378,13 @@ spec:
                   - status
                   - type
                   type: object
+                type: array
+              entryPoints:
+                description: |-
+                  EntryPoints lists the step names where execution starts: spec.entryPoint
+                  when set, otherwise every step without an incoming edge.
+                items:
+                  type: string
                 type: array
               phase:
                 description: Phase is the current lifecycle phase.

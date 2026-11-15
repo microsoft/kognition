@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -4689,6 +4690,9 @@ func TestWorkflowReconciler_TemplateOnlyReconcile(t *testing.T) {
 			t.Fatal("expected legacy WorkflowFinalizer to be removed")
 		}
 	}
+	if want := workflowEntryPoints(&stored.Spec); len(want) == 0 || !slices.Equal(stored.Status.EntryPoints, want) {
+		t.Fatalf("status.entryPoints = %v, want %v", stored.Status.EntryPoints, want)
+	}
 	if jobs := listWorkflowJobs(t, s, "default"); len(jobs) != 0 {
 		t.Fatalf("jobs = %d, want 0 (template must not dispatch)", len(jobs))
 	}
@@ -4700,6 +4704,43 @@ func TestWorkflowReconciler_TemplateOnlyReconcile(t *testing.T) {
 	}
 	if res.Requeue || res.RequeueAfter > 0 {
 		t.Fatal("expected second reconcile to be no-op")
+	}
+}
+
+func TestWorkflowEntryPoints(t *testing.T) {
+	steps := func(names ...string) []v1alpha1.WorkflowStep {
+		result := make([]v1alpha1.WorkflowStep, len(names))
+		for i, name := range names {
+			result[i] = v1alpha1.WorkflowStep{Name: name}
+		}
+		return result
+	}
+	edge := func(from, to string) v1alpha1.WorkflowEdge { return v1alpha1.WorkflowEdge{From: from, To: to} }
+	for name, test := range map[string]struct {
+		spec v1alpha1.WorkflowSpec
+		want []string
+	}{
+		"explicit entry point wins": {
+			spec: v1alpha1.WorkflowSpec{EntryPoint: "b", Steps: steps("a", "b"), Edges: []v1alpha1.WorkflowEdge{edge("a", "b")}},
+			want: []string{"b"},
+		},
+		"single root derived from edges": {
+			spec: v1alpha1.WorkflowSpec{Steps: steps("classifier", "tech", "billing"), Edges: []v1alpha1.WorkflowEdge{edge("classifier", "tech"), edge("classifier", "billing")}},
+			want: []string{"classifier"},
+		},
+		"parallel roots in declaration order": {
+			spec: v1alpha1.WorkflowSpec{Steps: steps("b", "a", "merge"), Edges: []v1alpha1.WorkflowEdge{edge("a", "merge"), edge("b", "merge")}},
+			want: []string{"b", "a"},
+		},
+		"fully cyclic graph has no derivable entry": {
+			spec: v1alpha1.WorkflowSpec{Steps: steps("a", "b"), Edges: []v1alpha1.WorkflowEdge{edge("a", "b"), edge("b", "a")}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := workflowEntryPoints(&test.spec); !slices.Equal(got, test.want) {
+				t.Fatalf("entry points = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 
