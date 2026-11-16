@@ -335,7 +335,8 @@ const StudioResources = (() => {
         }
       });
     } else {
-      const multiline = /content|instructions|template|rules|prompt|expression|^data$/i.test(String(path.at(-1)));
+      const multiline = /content|instructions|template|rules|prompt|expression|^data$/i.test(String(path.at(-1))) ||
+        (path.at(-2) === "instructions" && path.at(-1) === "inline");
       control = document.createElement(multiline ? "textarea" : "input");
       if (!multiline) control.type = "text";
       control.value = value ?? "";

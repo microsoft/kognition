@@ -609,6 +609,26 @@ test("inline KnowledgeBase source data preserves paragraphs in the schema Builde
   expect(calls[0].body.spec.sources[0].data).toBe(corpus);
 });
 
+test("long inline Agent instructions are a wrapping textarea in the schema Builder and keep their line breaks", async ({ page }) => {
+  const long = "You help fictional Cedar Labs with Orbital Mark 7. " + "Answer briefly and cite the approved passage. ".repeat(12);
+  const resource = { apiVersion: "kognition.dev/v1alpha1", kind: "Agent",
+    metadata: { name: "support", namespace: "default" },
+    spec: { modelRef: { name: "model" }, instructions: { inline: long } } };
+  const calls = await authoringAPI(page, { records: [resource] });
+  await openResource(page, "agents", resource.metadata.name);
+  await page.getByRole("button", { name: "All API fields", exact: true }).click();
+  await expandBuilderObjects(page);
+  const control = page.locator('[data-path="spec.instructions.inline"]');
+  await expect(control).toHaveJSProperty("tagName", "TEXTAREA");
+  expect(await control.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  const edited = `${long}\n\nNever reveal customer data.`;
+  await control.fill(edited);
+  page.once("dialog", dialog => dialog.accept());
+  await page.locator("#btn-deploy").click();
+  await expect.poll(() => calls.length).toBe(1);
+  expect(calls[0].body.spec.instructions.inline).toBe(edited);
+});
+
 test("ModelGrant builder creates a complete manifest without clipping", async ({ page }) => {
   let created;
   await page.route("**/api/**", async (route) => {
