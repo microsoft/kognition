@@ -12,7 +12,7 @@ The strict local command is:
 **Bash (Linux/macOS), with PowerShell 7 installed:**
 
 ```bash
-pwsh -NoProfile -File ./make.ps1 samples-full-install
+make samples-full-install
 ```
 
 Run this only after installation completes and the controller is ready, using an

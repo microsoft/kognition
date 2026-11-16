@@ -41,8 +41,8 @@ kubectl --kubeconfig $Kubeconfig get nodes
 **Bash (Linux/macOS):**
 
 ```bash
-Kubeconfig="$PWD/.local/cluster.kubeconfig"
-kubectl --kubeconfig "$Kubeconfig" get nodes
+kubeconfig="$PWD/.local/cluster.kubeconfig"
+kubectl --kubeconfig "$kubeconfig" get nodes
 ```
 
 ## 2. Package the chart and install its CRDs
@@ -63,8 +63,8 @@ python3 ./tools/distribution_notices.py charts
 helm package ./deploy/helm/kognition --destination ./.local/charts
 ```
 
-Set `$Chart` to the archive just produced. The example uses the current chart
-version and preserves the kubeconfig selected above:
+Set `$Chart` (PowerShell) or `chart` (Bash) to the archive just produced. The
+example uses the current chart version and preserves the kubeconfig selected above:
 
 ```powershell
 $Chart = '.\.local\charts\kognition-0.1.0.tgz'
@@ -74,8 +74,8 @@ helm show crds $Chart | kubectl --kubeconfig $Kubeconfig apply -f -
 **Bash (Linux/macOS):**
 
 ```bash
-Chart='./.local/charts/kognition-0.1.0.tgz'
-helm show crds "$Chart" | kubectl --kubeconfig "$Kubeconfig" apply -f -
+chart='./.local/charts/kognition-0.1.0.tgz'
+helm show crds "$chart" | kubectl --kubeconfig "$kubeconfig" apply -f -
 ```
 
 Install cert-manager through your cluster's normal dependency-management process
@@ -119,7 +119,7 @@ writer changes them during this operation:
 
 ```bash
 go run ./tools/kognition-install fresh \
-    --kubeconfig "$Kubeconfig" --chart "$Chart" \
+    --kubeconfig "$kubeconfig" --chart "$chart" \
     --values ./.local/values.yaml --namespace kognition-system \
     --workload-namespaces team-a --state-dir ./.local/kognition-install \
     --exclusive
@@ -145,8 +145,8 @@ With GNU Make:
 
 ```bash
 make quickstart \
-  "KUBECONFIG=$Kubeconfig" \
-  "CHART_PACKAGE=$Chart" \
+  "KUBECONFIG=$kubeconfig" \
+  "CHART_PACKAGE=$chart" \
   INSTALL_VALUES=.local/values.yaml \
   WORKLOAD_NAMESPACES=team-a \
   INSTALL_EXCLUSIVE=true
@@ -171,8 +171,8 @@ kubectl --kubeconfig $Kubeconfig -n kognition-system rollout status `
 **Bash (Linux/macOS):**
 
 ```bash
-kubectl --kubeconfig "$Kubeconfig" -n kognition-system get deployments,statefulsets,jobs
-kubectl --kubeconfig "$Kubeconfig" -n kognition-system rollout status \
+kubectl --kubeconfig "$kubeconfig" -n kognition-system get deployments,statefulsets,jobs
+kubectl --kubeconfig "$kubeconfig" -n kognition-system rollout status \
     deployment/kognition-k8s-controller --timeout=120s
 ```
 

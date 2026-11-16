@@ -47,7 +47,7 @@ $image = '<approved-registry>/s3-fixture@sha256:<reviewed-manifest-digest>'
 
 ```bash
 source .venv/bin/activate
-python -c "import boto3"
+python3 -c "import boto3"
 image='<approved-registry>/s3-fixture@sha256:<reviewed-manifest-digest>'
 pwsh -NoProfile -File ./samples/knowledge-base-blob-s3/apply.ps1 \
   -Kubeconfig "$KUBECONFIG" -FixtureImage "$image"

@@ -122,14 +122,14 @@ test('installation entry points stay generic and preserve the selected AKS targe
   const aks = readFileSync(path.join(docsDirectory, 'getting-started', 'aks.md'), 'utf8');
   assert.equal((aks.match(/^\$Kubeconfig\s*=/gm) ?? []).length, 1);
   assert.equal((aks.match(/^\$Context\s*=/gm) ?? []).length, 1);
-  assert.equal((aks.match(/^Kubeconfig=/gm) ?? []).length, 1);
-  assert.equal((aks.match(/^Context=/gm) ?? []).length, 1);
+  assert.equal((aks.match(/^kubeconfig=/gm) ?? []).length, 1);
+  assert.equal((aks.match(/^context=/gm) ?? []).length, 1);
   assert.match(aks, /helm show crds \$Chart \| kubectl --kubeconfig \$Kubeconfig --context \$Context apply -f -/);
-  assert.ok(aks.includes('helm show crds "$Chart" | kubectl --kubeconfig "$Kubeconfig" --context "$Context" apply -f -'));
+  assert.ok(aks.includes('helm show crds "$chart" | kubectl --kubeconfig "$kubeconfig" --context "$context" apply -f -'));
   const bashInstallation = commandBlocks(aks).find(({ language, code }) =>
     language === 'bash' && code.includes('Install-RuntimeBase.ps1'));
   assert.ok(bashInstallation);
-  assert.ok(bashInstallation.code.includes('-Kubeconfig "$Kubeconfig" -Context "$Context" -ChartPackage "$Chart"'));
+  assert.ok(bashInstallation.code.includes('-Kubeconfig "$kubeconfig" -Context "$context" -ChartPackage "$chart"'));
   const bootstrap = readFileSync(path.join(docsDirectory, 'bootstrapping.md'), 'utf8');
   assert.match(bootstrap, /^### Configure an Azure tenant$/m);
   const verification = readFileSync(path.join(docsDirectory, 'features', 'knowledge-provider-execution', 'bootstrap-verification-contract.md'), 'utf8');

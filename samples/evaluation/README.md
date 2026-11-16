@@ -42,7 +42,7 @@ Install all samples:
 **Bash (Linux/macOS), with PowerShell 7 installed:**
 
 ```bash
-pwsh -NoProfile -File ./make.ps1 samples-install
+make samples-install
 ```
 
 Install only this sample after its target agent exists:
@@ -55,8 +55,8 @@ Install only this sample after its target agent exists:
 **Bash (Linux/macOS):**
 
 ```bash
-pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=simple-agent
-pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=evaluation
+make samples-install SAMPLE=simple-agent
+make samples-install SAMPLE=evaluation
 ```
 
 The full sample install path applies `simple-agent` before `evaluation`, so the target
