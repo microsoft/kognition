@@ -34,7 +34,10 @@ const unescapeCSS = (value) => value
   })
   .replace(/\\(.)/gs, '$1');
 
-// Returns the first external target of an @import or url() in a stylesheet, skipping comments and strings.
+// CSS image functions that accept a bare string as a URL, not only url().
+const imageFunctions = new Set(['image', 'image-set', '-webkit-image-set', '-webkit-image', 'cross-fade', '-webkit-cross-fade']);
+
+// Returns the first external target of an @import, url() or image-function string in a stylesheet, skipping comments.
 export function externalCSSReference(css) {
   const ident = /[a-z0-9_-]|\\(?:[0-9a-f]{1,6}[ \t\n\r\f]?|[^\n])|[^\u0000-\u007f]/iy;
   const quoted = (start) => {
@@ -48,6 +51,8 @@ export function externalCSSReference(css) {
     return isExternalReference(url) ? url : undefined;
   };
   let importing = false;
+  let depth = 0;
+  const imageDepths = [];
   for (let i = 0; i < css.length;) {
     const char = css[i];
     if (css.startsWith('/*', i)) {
@@ -55,7 +60,8 @@ export function externalCSSReference(css) {
       i = end < 0 ? css.length : end + 2;
     } else if (char === '"' || char === "'") {
       const { value, end } = quoted(i);
-      if (importing && external(value)) return value;
+      const target = external(value);
+      if (target && (importing || (imageDepths.length && !/^data:/i.test(target)))) return value;
       importing = false;
       i = end;
     } else if (char === '@') {
@@ -76,6 +82,9 @@ export function externalCSSReference(css) {
         end = ident.lastIndex;
       }
       end = Math.max(end, i + 1);
+      if (css[end] === '(' && imageFunctions.has(unescapeCSS(css.slice(i, end)).toLowerCase())) {
+        imageDepths.push(depth + 1);
+      }
       if (css[end] === '(' && unescapeCSS(css.slice(i, end)).toLowerCase() === 'url') {
         let start = end + 1;
         while (/\s/.test(css[start] ?? '')) start++;
@@ -96,10 +105,49 @@ export function externalCSSReference(css) {
       i = end;
     } else {
       if (char === ';' || char === '{') importing = false;
+      if (char === '(') depth++;
+      if (char === ')') {
+        if (imageDepths.at(-1) === depth) imageDepths.pop();
+        depth = Math.max(0, depth - 1);
+      }
       i++;
     }
   }
   return undefined;
+}
+
+const loadingRels = new Set(['stylesheet', 'modulepreload', 'preload', 'prefetch', 'prerender']);
+// Elements whose attributes load a document, script or image from the given URL.
+const loadingAttributes = {
+  script: ['src'], iframe: ['src'], frame: ['src'], embed: ['src'], object: ['data'], base: ['href'],
+  image: ['href', 'xlink:href'], use: ['href', 'xlink:href'], feimage: ['href', 'xlink:href'],
+};
+const cssAttributes = new Set(['fill', 'stroke', 'filter', 'mask', 'clip-path', 'marker-start', 'marker-mid', 'marker-end', 'cursor', 'style']);
+
+// Rejects markup that pulls in external or unattributed content: loaders, <base>, srcdoc and CSS in attributes.
+function assertNoExternalContent($, relative) {
+  for (const element of $('*').toArray()) {
+    const name = (element.name ?? '').toLowerCase();
+    const attribs = element.attribs ?? {};
+    const attribute = (wanted) => Object.entries(attribs).find(([key]) => key.toLowerCase() === wanted)?.[1];
+    if (name === 'iframe' && attribute('srcdoc') !== undefined) {
+      throw new Error(`Inline iframe document has no source-package evidence: ${relative}`);
+    }
+    const rels = (attribute('rel') ?? '').toLowerCase().split(/\s+/);
+    const loads = name === 'link' && rels.some((rel) => loadingRels.has(rel)) ? ['href'] : loadingAttributes[name] ?? [];
+    for (const wanted of loads) {
+      const target = attribute(wanted);
+      const inlineImage = ['image', 'feimage'].includes(name) && /^[\u0000-\u0020]*data:/i.test(target ?? '');
+      if (target !== undefined && !inlineImage && isExternalReference(target)) {
+        throw new Error(`External executable content is outside static publication evidence: ${relative}`);
+      }
+    }
+    for (const [key, value] of Object.entries(attribs)) {
+      if (cssAttributes.has(key.toLowerCase()) && externalCSSReference(value)) {
+        throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
+      }
+    }
+  }
 }
 
 function astroFiles(directory) {
@@ -210,8 +258,16 @@ export function createPublishedManifest({ projectRoot, directory, outputs, clien
     const relative = slash(path.relative(directory, file));
     if (generatedNotices.has(relative)) continue;
     const content = readFileSync(file);
-    if (/\.svg$/i.test(relative) && /<script\b|\bon[a-z]+\s*=|javascript:/i.test(content.toString('utf8'))) {
-      throw new Error(`Active SVG content has no executable source provenance: ${relative}`);
+    if (/\.svg$/i.test(relative)) {
+      const text = content.toString('utf8');
+      if (/<script\b|\bon[a-z]+\s*=|javascript:/i.test(text)) {
+        throw new Error(`Active SVG content has no executable source provenance: ${relative}`);
+      }
+      const $svg = load(text, { xmlMode: true });
+      assertNoExternalContent($svg, relative);
+      if ($svg('style').toArray().some((element) => externalCSSReference($svg(element).text()))) {
+        throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
+      }
     }
     if (/\.css$/i.test(relative) && externalCSSReference(content.toString('utf8'))) {
       throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
@@ -229,12 +285,7 @@ export function createPublishedManifest({ projectRoot, directory, outputs, clien
         const body = $(element).text();
         if (body.trim()) sources.push(...inlineScriptSources(body, relative));
       }
-      for (const element of $('script[src], link[rel=stylesheet][href]').toArray()) {
-        const target = $(element).attr('src') ?? $(element).attr('href');
-        if (target && isExternalReference(target)) {
-          throw new Error(`External executable content is outside static publication evidence: ${relative}`);
-        }
-      }
+      assertNoExternalContent($, relative);
       for (const element of $('*').toArray()) {
         for (const [name, value] of Object.entries(element.attribs ?? {})) {
           if (/^on/i.test(name) || /^[\u0000-\u0020]*javascript:/i.test(value.replace(/[\t\n\r]/g, ''))) {

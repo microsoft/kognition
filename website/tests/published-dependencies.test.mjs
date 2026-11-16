@@ -205,6 +205,97 @@ test('external script and stylesheet references are rejected however the URL is 
   createPublishedManifest(inputs);
 });
 
+test('external loaders, <base>, srcdoc and alternate or preloaded resources are rejected, local ones are not', (t) => {
+  const { directory, inputs } = fixture(t);
+  const base = '<script src="/_astro/app.js"></script>';
+  for (const html of [
+    '<base href="https://cdn.example.test/">',
+    '<BASE HREF=" //cdn.example.test/">',
+    '<iframe src="https://cdn.example.test/"></iframe>',
+    '<object data="https://cdn.example.test/a.swf"></object>',
+    '<embed src="//cdn.example.test/a.swf">',
+    '<link rel="modulepreload" href="https://cdn.example.test/a.js">',
+    '<link rel="preload" as="script" href="https://cdn.example.test/a.js">',
+    '<link rel="alternate stylesheet" href="https://cdn.example.test/a.css">',
+    '<link rel="Stylesheet" href="https://cdn.example.test/a.css">',
+    '<svg><image href="https://cdn.example.test/a.png"/></svg>',
+    '<svg><use xlink:href="https://cdn.example.test/a.svg#x"/></svg>',
+  ]) {
+    writeFileSync(path.join(directory, 'index.html'), base + html);
+    assert.throws(() => createPublishedManifest(inputs), /External executable content/, html);
+  }
+  for (const html of [
+    '<iframe srcdoc="<script>alert(1)</script>"></iframe>',
+    '<iframe srcdoc="<p>hi</p>"></iframe>',
+  ]) {
+    writeFileSync(path.join(directory, 'index.html'), base + html);
+    assert.throws(() => createPublishedManifest(inputs), /Inline iframe document/, html);
+  }
+  for (const html of [
+    '<svg><circle fill="url(https://cdn.example.test/a.svg#g)"/></svg>',
+    '<svg><rect filter="url(//cdn.example.test/a.svg#f)"/></svg>',
+  ]) {
+    writeFileSync(path.join(directory, 'index.html'), base + html);
+    assert.throws(() => createPublishedManifest(inputs), /External stylesheet content/, html);
+  }
+  writeFileSync(path.join(directory, 'index.html'), `${base}
+    <base href="/kognition/"><iframe src="/embed/"></iframe><object data="/a.pdf"></object>
+    <link rel="canonical" href="https://kognition.example.test/guide/">
+    <link rel="alternate" type="application/rss+xml" href="https://kognition.example.test/rss.xml">
+    <link rel="preload" as="style" href="/_astro/common.css"><link rel="modulepreload" href="/_astro/app.js">
+    <svg><use href="#icon"/><circle fill="url(#gradient)"/><image href="/a.png"/></svg>
+    <a href="https://github.com/microsoft/kognition">source</a>`);
+  createPublishedManifest(inputs);
+});
+
+test('image functions with bare-string URLs are external stylesheet references like url()', (t) => {
+  const { directory, inputs } = fixture(t);
+  const css = path.join(directory, '_astro', 'common.css');
+  for (const body of [
+    'a{background:image-set("https://cdn.example.test/a.png" 1x)}',
+    "a{background:-webkit-image-set('//cdn.example.test/a.png' 1x, 'https://cdn.example.test/b.png' 2x)}",
+    'a{background:IMAGE-SET("/local.png" 1x, "https://cdn.example.test/b.png" 2x)}',
+    'a{background:image("https://cdn.example.test/a.png")}',
+    'a{background:image-set(url(https://cdn.example.test/a.png) 1x)}',
+    'a{background:cross-fade("https://cdn.example.test/a.png", "/b.png", 50%)}',
+    'a{background:image-set(linear-gradient(red, blue) 1x, "\\68ttps://cdn.example.test/a.png" 2x)}',
+  ]) {
+    writeFileSync(css, body);
+    assert.throws(() => createPublishedManifest(inputs), /External stylesheet content/, body);
+  }
+  for (const body of [
+    'a{background:image-set("/a.png" 1x, "./b.png" 2x, "data:image/png;base64,AAAA" 3x)}',
+    'a::after{content:"https://cdn.example.test/a.png"}',
+    'a{background:image-set("/a.png" 1x)} b::after{content:"https://cdn.example.test/a.png"}',
+    'a{font-family:image,sans-serif;content:"https://cdn.example.test/"}',
+    'a{background:image("/a.png") ; content:"https://cdn.example.test/"}',
+  ]) {
+    writeFileSync(css, body);
+    createPublishedManifest(inputs);
+  }
+});
+
+test('standalone SVG files cannot import external CSS or load external images', (t) => {
+  const { directory, inputs } = fixture(t);
+  const svg = path.join(directory, 'logo.svg');
+  for (const [body, message] of [
+    ['<svg xmlns="http://www.w3.org/2000/svg"><style>@import url(https://cdn.example.test/a.css);</style></svg>', /External stylesheet content/],
+    ['<svg xmlns="http://www.w3.org/2000/svg"><style><![CDATA[@import "https://cdn.example.test/a.css";]]></style></svg>', /External stylesheet content/],
+    ['<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:url(https://cdn.example.test/a.svg#g)"/></svg>', /External stylesheet content/],
+    ['<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(https://cdn.example.test/a.svg#g)"/></svg>', /External stylesheet content/],
+    ['<svg xmlns="http://www.w3.org/2000/svg"><image href="https://cdn.example.test/a.png"/></svg>', /External executable content/],
+    ['<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="//cdn.example.test/a.png"/></svg>', /External executable content/],
+    ['<svg xmlns="http://www.w3.org/2000/svg"><feImage href="https://cdn.example.test/a.png"/></svg>', /External executable content/],
+    ['<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>', /Active SVG content/],
+  ]) {
+    writeFileSync(svg, body);
+    assert.throws(() => createPublishedManifest(inputs), message, body);
+  }
+  writeFileSync(svg, '<svg xmlns="http://www.w3.org/2000/svg"><style>.a{fill:url(#g)}</style><use href="#a"/>' +
+    '<image href="data:image/png;base64,AAAA"/><a href="https://github.com/microsoft/kognition"><rect/></a></svg>');
+  createPublishedManifest(inputs);
+});
+
 test('copied scripts, unaccounted executable output and unknown generated search code block the build', (t) => {
   for (const mode of ['public-script', 'unaccounted-code', 'search-code', 'native', 'active-svg', 'external-code']) {
     const { root, directory, inputs } = fixture(t);
