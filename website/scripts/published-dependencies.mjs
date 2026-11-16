@@ -35,7 +35,7 @@ const unescapeCSS = (value) => value
   .replace(/\\(.)/gs, '$1');
 
 // CSS image functions that accept a bare string as a URL, not only url().
-const imageFunctions = new Set(['image', 'image-set', '-webkit-image-set', '-webkit-image', 'cross-fade', '-webkit-cross-fade']);
+const imageFunctions = new Set(['image', 'image-set', '-webkit-image-set', '-webkit-image', 'cross-fade', '-webkit-cross-fade', 'src']);
 
 // Returns the first external target of an @import, url() or image-function string in a stylesheet, skipping comments.
 export function externalCSSReference(css) {
@@ -118,9 +118,11 @@ export function externalCSSReference(css) {
 
 const loadingRels = new Set(['stylesheet', 'modulepreload', 'preload', 'prefetch', 'prerender']);
 // Elements whose attributes load a document, script or image from the given URL.
+const svgReference = ['href', 'xlink:href'];
 const loadingAttributes = {
-  script: ['src'], iframe: ['src'], frame: ['src'], embed: ['src'], object: ['data'], base: ['href'],
-  image: ['href', 'xlink:href'], use: ['href', 'xlink:href'], feimage: ['href', 'xlink:href'],
+  script: ['src', ...svgReference], iframe: ['src'], frame: ['src'], embed: ['src'], object: ['data'], base: ['href'],
+  image: svgReference, use: svgReference, feimage: svgReference, lineargradient: svgReference, radialgradient: svgReference,
+  pattern: svgReference, filter: svgReference, textpath: svgReference, mpath: svgReference, tref: svgReference,
 };
 const cssAttributes = new Set(['fill', 'stroke', 'filter', 'mask', 'clip-path', 'marker-start', 'marker-mid', 'marker-end', 'cursor', 'style']);
 
@@ -264,6 +266,11 @@ export function createPublishedManifest({ projectRoot, directory, outputs, clien
         throw new Error(`Active SVG content has no executable source provenance: ${relative}`);
       }
       const $svg = load(text, { xmlMode: true });
+      for (const [, , href] of text.matchAll(/<\?xml-stylesheet\b[^>]*?\bhref\s*=\s*(["'])(.*?)\1/gis)) {
+        if (isExternalReference(href)) {
+          throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
+        }
+      }
       assertNoExternalContent($svg, relative);
       if ($svg('style').toArray().some((element) => externalCSSReference($svg(element).text()))) {
         throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
@@ -278,7 +285,8 @@ export function createPublishedManifest({ projectRoot, directory, outputs, clien
     if (/\.html$/i.test(relative)) {
       origin = 'rendered-page';
       sources = [...renderer, ...expressive];
-      const $ = load(content.toString('utf8'));
+      // Parse <noscript> content as markup: with scripting disabled the browser loads it.
+      const $ = load(content.toString('utf8'), { scriptingEnabled: false });
       for (const element of $('script:not([src])').toArray()) {
         const type = ($(element).attr('type') ?? '').trim().toLowerCase();
         if (dataScriptTypes.has(type)) continue;

@@ -296,6 +296,44 @@ test('standalone SVG files cannot import external CSS or load external images', 
   createPublishedManifest(inputs);
 });
 
+test('SVG script and template references, noscript content and xml-stylesheet are treated as loaders', (t) => {
+  const { directory, inputs } = fixture(t);
+  const base = '<script src="/_astro/app.js"></script>';
+  for (const html of [
+    '<svg><script href="https://cdn.example.test/a.js"></script></svg>',
+    '<svg><script xlink:href="//cdn.example.test/a.js"></script></svg>',
+    '<svg><linearGradient href="https://cdn.example.test/a.svg#g"/></svg>',
+    '<svg><pattern href="https://cdn.example.test/a.svg#p"/></svg>',
+    '<svg><text><textPath href="https://cdn.example.test/a.svg#p">t</textPath></text></svg>',
+    '<noscript><link rel="stylesheet" href="https://cdn.example.test/a.css"></noscript>',
+    '<noscript><iframe src="https://cdn.example.test/"></iframe></noscript>',
+    '<template><script src="https://cdn.example.test/a.js"></script></template>',
+  ]) {
+    writeFileSync(path.join(directory, 'index.html'), base + html);
+    assert.throws(() => createPublishedManifest(inputs), /External executable content/, html);
+  }
+  writeFileSync(path.join(directory, 'index.html'),
+    `${base}<noscript><style>.js-only{display:none}</style></noscript><template><a href="https://github.com/">x</a></template>` +
+    '<svg><linearGradient href="#g"/><script href="/_astro/app.js"></script></svg>');
+  createPublishedManifest(inputs);
+
+  const svg = path.join(directory, 'logo.svg');
+  writeFileSync(path.join(directory, 'index.html'), base);
+  writeFileSync(svg, '<?xml version="1.0"?><?xml-stylesheet href="https://cdn.example.test/a.css" type="text/css"?><svg xmlns="http://www.w3.org/2000/svg"/>');
+  assert.throws(() => createPublishedManifest(inputs), /External stylesheet content/);
+  writeFileSync(svg, "<?xml-stylesheet type='text/css' href='//cdn.example.test/a.css'?><svg xmlns='http://www.w3.org/2000/svg'/>");
+  assert.throws(() => createPublishedManifest(inputs), /External stylesheet content/);
+  writeFileSync(svg, '<?xml-stylesheet href="local.css" type="text/css"?><svg xmlns="http://www.w3.org/2000/svg"/>');
+  createPublishedManifest(inputs);
+
+  writeFileSync(svg, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+  const css = path.join(directory, '_astro', 'common.css');
+  writeFileSync(css, 'a{background:src("https://cdn.example.test/a.png")}');
+  assert.throws(() => createPublishedManifest(inputs), /External stylesheet content/);
+  writeFileSync(css, '@font-face{font-family:f;src:local("x"),url(/f.woff2) format("woff2")}');
+  createPublishedManifest(inputs);
+});
+
 test('copied scripts, unaccounted executable output and unknown generated search code block the build', (t) => {
   for (const mode of ['public-script', 'unaccounted-code', 'search-code', 'native', 'active-svg', 'external-code']) {
     const { root, directory, inputs } = fixture(t);
