@@ -12,8 +12,11 @@ The strict local command is:
 **Bash (Linux/macOS), with PowerShell 7 installed:**
 
 ```bash
-make samples-full-install
+pwsh -NoProfile -File ./make.ps1 samples-full-install
 ```
+
+Use `make.ps1` directly, not `make samples-full-install`: the Make target runs the
+bundle without forwarding `NAMESPACE`, `RELEASE`, `AGENT_NAMESPACE` or `SAMPLE_PROFILE`.
 
 Run this only after installation completes and the controller is ready, using an
 explicit kubeconfig and enrolled workload namespaces. Existing-release upgrades
