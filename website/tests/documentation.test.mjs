@@ -164,6 +164,8 @@ test('PR validation has no deploy permissions and publication requires explicit 
   const workflow = parse(readFileSync(new URL('../../.github/workflows/pages.yml', import.meta.url), 'utf8'));
   assert.deepEqual(workflow.permissions, { contents: 'read' });
   assert.equal(workflow.env.ASTRO_TELEMETRY_DISABLED, '1');
+  assert.equal(workflow.env.DOCS_SITE_URL, 'https://microsoft.github.io');
+  assert.equal(workflow.env.DOCS_BASE_PATH, '/kognition/');
   assert.equal(workflow.jobs.build.permissions, undefined);
   const checkout = workflow.jobs.build.steps.find((step) => step.uses?.startsWith('actions/checkout@'));
   assert.equal(checkout.with['persist-credentials'], false);

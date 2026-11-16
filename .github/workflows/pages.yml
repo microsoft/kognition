@@ -38,8 +38,8 @@ concurrency:
 
 env:
   ASTRO_TELEMETRY_DISABLED: "1"
-  DOCS_SITE_URL: ${{ vars.DOCS_SITE_URL || 'https://microsoft.github.io' }}
-  DOCS_BASE_PATH: ${{ vars.DOCS_BASE_PATH || '/kognition/' }}
+  DOCS_SITE_URL: https://microsoft.github.io
+  DOCS_BASE_PATH: /kognition/
 
 jobs:
   build:
