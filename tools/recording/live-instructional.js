@@ -479,7 +479,9 @@ async function runInstructional(input) {
       await begin(desired.kb, false); await guidedIdentity(desired.kb);
       await field("Knowledge base class").selectOption("story-inline");
       await page.getByRole("button", { name: "+ Add source", exact: true }).click();
-      await type(field("Inline data"), CORPUS); kb = await reviewDeploy(desired.kb);
+      await type(field("Inline data"), CORPUS);
+      await reviewConfiguration(field("Inline data"), "spec.sources.0.data");
+      kb = await reviewDeploy(desired.kb);
       kb = await session.wait("inline KnowledgeBase ready", async () => {
         const current = await session.get("knowledgebases", kb.metadata.name);
         return current.status?.phase === "Ready" ? current : false;
