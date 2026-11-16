@@ -32,8 +32,8 @@ func TestReleaseGoToolchainIncludesSecurityFixes(test *testing.T) {
 				pattern = `(?m)^go ([0-9]+\.[0-9]+\.[0-9]+)$`
 			}
 			match := regexp.MustCompile(pattern).FindStringSubmatch(string(body))
-			if len(match) != 2 || !version.IsValid("go"+match[1]) || version.Compare("go"+match[1], "go1.26.10") < 0 {
-				test.Fatal("release toolchain must include the Go 1.26.10 security fixes")
+			if len(match) != 2 || !version.IsValid("go"+match[1]) || version.Compare("go"+match[1], "go1.26.11") < 0 {
+				test.Fatal("release toolchain must include the Go 1.26.11 security fixes")
 			}
 		})
 	}
