@@ -36,6 +36,7 @@ deployment boundaries and current limitations.
 
 | Your goal | Start here |
 | --- | --- |
+| Browse everything online | [Documentation site](https://microsoft.github.io/kognition). |
 | Explore a local control plane | [Local development](docs/getting-started/local.md). |
 | Prepare a Kubernetes installation | [Kubernetes setup](docs/getting-started/kubernetes.md). |
 | Run an agent on a prepared installation | [First agent](docs/getting-started/first-agent.md). |
@@ -50,7 +51,8 @@ or [AKS setup](docs/getting-started/aks.md); configure providers and samples aft
 
 ## Documentation
 
-Start at the **[documentation home](docs/README.md)**.
+Read the published site at **<https://microsoft.github.io/kognition>**, or start
+at the **[documentation home](docs/README.md)** in this repository.
 
 - [Resource model](docs/concepts/resource-model.md): configuration, execution,
   authorization and observed state.
