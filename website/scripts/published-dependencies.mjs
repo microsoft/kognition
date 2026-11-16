@@ -171,6 +171,25 @@ function attributeEntries(element) {
 const styleSheets = ($) => $('*').toArray().filter((element) => localName(element) === 'style')
   .map((element) => $(element).text());
 
+const xmlReferences = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
+const decodeXMLReferences = (value) => value.replace(/&(?:#x([0-9a-f]+)|#(\d+)|(lt|gt|amp|quot|apos));/gi, (match, hex, decimal, named) => {
+  if (named) return xmlReferences[named.toLowerCase()];
+  const code = Number.parseInt(hex ?? decimal, hex ? 16 : 10);
+  return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
+});
+
+// href values of every <?xml-stylesheet?> instruction. The data is split into quoted pseudoattributes first,
+// so href text inside another value, or a longer name such as data-href, is never mistaken for the real one.
+function xmlStylesheetTargets(text) {
+  const targets = [];
+  for (const [, data] of text.matchAll(/<\?xml-stylesheet(?=[\s?])([\s\S]*?)\?>/gi)) {
+    for (const [, name, double, single] of data.matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+      if (name === 'href') targets.push(decodeXMLReferences(double ?? single));
+    }
+  }
+  return targets;
+}
+
 // Rejects markup that pulls in external or unattributed content: loaders, <base>, srcdoc and CSS in attributes.
 function assertNoExternalContent($, relative) {
   for (const element of $('*').toArray()) {
@@ -179,6 +198,10 @@ function assertNoExternalContent($, relative) {
     const values = (wanted) => attributes.filter(([key]) => key === wanted).map(([, value]) => value);
     if (name === 'iframe' && values('srcdoc').length) {
       throw new Error(`Inline iframe document has no source-package evidence: ${relative}`);
+    }
+    // xml:base re-roots every relative URL below it, so an external one makes any local-looking loader external.
+    if (values('xml:base').some(isExternalReference)) {
+      throw new Error(`External executable content is outside static publication evidence: ${relative}`);
     }
     const rels = values('rel').flatMap((rel) => rel.toLowerCase().split(/\s+/));
     const loads = name === 'link' && rels.some((rel) => loadingRels.has(rel)) ? ['href'] : loadingAttributes[name] ?? [];
@@ -312,7 +335,7 @@ export function createPublishedManifest({ projectRoot, directory, outputs, clien
         throw new Error(`Active SVG content has no executable source provenance: ${relative}`);
       }
       const $svg = load(text, { xmlMode: true });
-      for (const [, , href] of text.matchAll(/<\?xml-stylesheet\b[^>]*?\bhref\s*=\s*(["'])(.*?)\1/gis)) {
+      for (const href of xmlStylesheetTargets(text)) {
         if (isExternalReference(href)) {
           throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
         }

@@ -357,6 +357,55 @@ test('namespace-prefixed SVG elements and attributes are matched by namespace, n
   createPublishedManifest(inputs);
 });
 
+test('an externally rooted xml:base makes every relative loader external, a local one does not', (t) => {
+  const { directory, inputs } = fixture(t);
+  const svg = path.join(directory, 'logo.svg');
+  const ns = 'xmlns="http://www.w3.org/2000/svg"';
+  for (const body of [
+    `<svg ${ns} xml:base="https://cdn.example.test/"><image href="unattributed.png"/></svg>`,
+    `<svg ${ns} xml:base="//cdn.example.test/"><image href="unattributed.png"/></svg>`,
+    `<svg ${ns}><g xml:base="\\\\cdn.example.test\\"><use href="a.svg#x"/></g></svg>`,
+    `<svg ${ns}><g xml:base=" https://cdn.example.test/"><image href="a.png"/></g></svg>`,
+  ]) {
+    writeFileSync(svg, body);
+    assert.throws(() => createPublishedManifest(inputs), /External executable content/, body);
+  }
+  writeFileSync(path.join(directory, 'index.html'),
+    '<script src="/_astro/app.js"></script><svg xml:base="https://cdn.example.test/"><image href="x.png"/></svg>');
+  assert.throws(() => createPublishedManifest(inputs), /External executable content/);
+  writeFileSync(path.join(directory, 'index.html'), '<script src="/_astro/app.js"></script>');
+  for (const base of ['/assets/', 'icons/', '../icons/']) {
+    writeFileSync(svg, `<svg ${ns} xml:base="${base}"><image href="a.png"/></svg>`);
+    createPublishedManifest(inputs);
+  }
+});
+
+test('xml-stylesheet is parsed as pseudoattributes: only the exact href is inspected, with references decoded', (t) => {
+  const { directory, inputs } = fixture(t);
+  const svg = path.join(directory, 'logo.svg');
+  const tail = '<svg xmlns="http://www.w3.org/2000/svg"/>';
+  for (const pi of [
+    `<?xml-stylesheet title="href='local.css'" href="https://cdn.example.test/a.css" type="text/css"?>`,
+    `<?xml-stylesheet data-href="local.css" href="https://cdn.example.test/a.css" type="text/css"?>`,
+    `<?xml-stylesheet title="a>b" href="https://cdn.example.test/a.css"?>`,
+    `<?xml-stylesheet\ntype="text/css"\nhref = "https://cdn.example.test/a.css"?>`,
+    `<?xml-stylesheet href="&#104;ttps://cdn.example.test/a.css"?>`,
+    `<?xml-stylesheet href='&#x2F;/cdn.example.test/a.css'?>`,
+    `<?xml-stylesheet title="x" href="local.css" href="https://cdn.example.test/a.css"?>`,
+  ]) {
+    writeFileSync(svg, pi + tail);
+    assert.throws(() => createPublishedManifest(inputs), /External stylesheet content/, pi);
+  }
+  for (const pi of [
+    `<?xml-stylesheet data-href="https://cdn.example.test/a.css" href="local.css" type="text/css"?>`,
+    `<?xml-stylesheet title="href='https://cdn.example.test/a.css'" href="local.css"?>`,
+    `<?xml-stylesheet href="/styles/a.css?x=1&amp;y=2" type="text/css"?>`,
+  ]) {
+    writeFileSync(svg, pi + tail);
+    createPublishedManifest(inputs);
+  }
+});
+
 test('HTML is checked under both scripting-enabled and scripting-disabled parsing', (t) => {
   const { directory, inputs } = fixture(t);
   const base = '<script src="/_astro/app.js"></script>';
