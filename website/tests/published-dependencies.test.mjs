@@ -380,6 +380,48 @@ test('an externally rooted xml:base makes every relative loader external, a loca
   }
 });
 
+test('SVG animation cannot assign an external URL to a loader or CSS attribute', (t) => {
+  const { directory, inputs } = fixture(t);
+  const svg = path.join(directory, 'logo.svg');
+  const html = path.join(directory, 'index.html');
+  const ns = 'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"';
+  const external = 'https://cdn.example.test/a.png';
+  const rejected = [
+    `<set attributeName="href" to="${external}" begin="0s"/>`,
+    `<set attributeName="xlink:href" to="${external}"/>`,
+    `<set attributeName=" href " to=" ${external}"/>`,
+    `<set attributeName="HREF" to="//cdn.example.test/a.png"/>`,
+    `<animate attributeName="href" values="/a.png;${external}" dur="1s"/>`,
+    `<animate attributeName="href" from="/a.png" to="${external}" dur="1s"/>`,
+    `<animate attributeName="href" by="${external}" dur="1s"/>`,
+    `<animate attributeName="x:href" xmlns:x="http://www.w3.org/1999/xlink" to="${external}" dur="1s"/>`,
+    `<set attributeName="fill" to="url(${external})"/>`,
+    `<animate attributeName="style" values="fill:red;fill:url('${external}')" dur="1s"/>`,
+    `<set attributeName="xml:base" to="https://cdn.example.test/"/>`,
+  ];
+  for (const animation of rejected) {
+    const body = `<svg ${ns}><image href="/local.png">${animation}</image></svg>`;
+    writeFileSync(svg, body);
+    assert.throws(() => createPublishedManifest(inputs), /External (executable|stylesheet) content/, body);
+    writeFileSync(html, `<script src="/_astro/app.js"></script>${body}`);
+    assert.throws(() => createPublishedManifest(inputs), /External (executable|stylesheet) content/, body);
+    writeFileSync(html, '<script src="/_astro/app.js"></script>');
+  }
+  for (const animation of [
+    '<set attributeName="href" to="/local.png"/>',
+    '<set attributeName="xlink:href" to="#symbol"/>',
+    '<animate attributeName="href" values="a.png;b.png" dur="1s"/>',
+    '<animate attributeName="opacity" from="0" to="1" dur="1s"/>',
+    '<animate attributeName="fill" values="red;url(#gradient)" dur="1s"/>',
+    `<set attributeName="data-source" to="${external}"/>`,
+    `<animate attributeName="d" values="M0 0;M1 1" dur="1s"/>`,
+    '<animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="1s"/>',
+  ]) {
+    writeFileSync(svg, `<svg ${ns}><image href="/local.png">${animation}</image></svg>`);
+    createPublishedManifest(inputs);
+  }
+});
+
 test('xml-stylesheet is parsed as pseudoattributes: only the exact href is inspected, with references decoded', (t) => {
   const { directory, inputs } = fixture(t);
   const svg = path.join(directory, 'logo.svg');

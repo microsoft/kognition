@@ -156,17 +156,17 @@ function localName(element) {
   return name.toLowerCase();
 }
 
-// Attribute names with prefixes resolved: any prefix bound to XLink becomes xlink:, one bound to SVG or XHTML is dropped.
-function attributeEntries(element) {
-  const bindings = namespaceBindings(element);
-  return Object.entries(element.attribs ?? {}).map(([key, value]) => {
-    const split = key.indexOf(':');
-    const namespace = split > 0 ? bindings[key.slice(0, split)] : undefined;
-    const local = key.slice(split + 1).toLowerCase();
-    if (namespace === xlinkNamespace) return [`xlink:${local}`, value];
-    return [[svgNamespace, xhtmlNamespace].includes(namespace) ? local : key.toLowerCase(), value];
-  });
+// Attribute name with its prefix resolved: any prefix bound to XLink becomes xlink:, one bound to SVG or XHTML is dropped.
+function resolveAttributeName(element, key) {
+  const split = key.indexOf(':');
+  const namespace = split > 0 ? namespaceBindings(element)[key.slice(0, split)] : undefined;
+  const local = key.slice(split + 1).toLowerCase();
+  if (namespace === xlinkNamespace) return `xlink:${local}`;
+  return [svgNamespace, xhtmlNamespace].includes(namespace) ? local : key.toLowerCase();
 }
+
+const attributeEntries = (element) => Object.entries(element.attribs ?? {})
+  .map(([key, value]) => [resolveAttributeName(element, key), value]);
 
 const styleSheets = ($) => $('*').toArray().filter((element) => localName(element) === 'style')
   .map((element) => $(element).text());
@@ -206,6 +206,17 @@ function assertNoExternalContent($, relative) {
     // xml:base re-roots every relative URL below it, so an external one makes any local-looking loader external.
     if (values('xml:base').some(isExternalReference)) {
       throw new Error(`External executable content is outside static publication evidence: ${relative}`);
+    }
+    if (['set', 'animate'].includes(name)) {
+      const assigned = resolveAttributeName(element, (values('attributename')[0] ?? '').trim());
+      const animated = ['to', 'from', 'by', 'values'].flatMap((key) => values(key).flatMap((value) => [value, ...value.split(';')]));
+      if (['xml:base', 'href', 'xlink:href'].includes(assigned)) {
+        if (animated.some(isExternalReference)) {
+          throw new Error(`External executable content is outside static publication evidence: ${relative}`);
+        }
+      } else if (cssAttributes.has(assigned) && animated.some(externalCSSReference)) {
+        throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
+      }
     }
     const rels = values('rel').flatMap((rel) => rel.toLowerCase().split(/\s+/));
     const loads = name === 'link' && rels.some((rel) => loadingRels.has(rel)) ? ['href'] : loadingAttributes[name] ?? [];
