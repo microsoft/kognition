@@ -334,6 +334,45 @@ test('SVG script and template references, noscript content and xml-stylesheet ar
   createPublishedManifest(inputs);
 });
 
+test('namespace-prefixed SVG elements and attributes are matched by namespace, not by prefix', (t) => {
+  const { directory, inputs } = fixture(t);
+  const svg = path.join(directory, 'logo.svg');
+  const svgNS = 'xmlns:s="http://www.w3.org/2000/svg"';
+  const xlinkNS = 'xmlns:q="http://www.w3.org/1999/xlink"';
+  for (const [body, message] of [
+    [`<s:svg ${svgNS}><s:image href="https://cdn.example.test/a.png"/></s:svg>`, /External executable content/],
+    [`<s:svg ${svgNS} ${xlinkNS}><s:image q:href="//cdn.example.test/a.png"/></s:svg>`, /External executable content/],
+    [`<svg xmlns="http://www.w3.org/2000/svg" ${xlinkNS}><image q:href="https://cdn.example.test/a.png"/></svg>`, /External executable content/],
+    [`<svg xmlns="http://www.w3.org/2000/svg"><g ${svgNS}><s:use href="https://cdn.example.test/a.svg#a"/></g></svg>`, /External executable content/],
+    [`<svg xmlns="http://www.w3.org/2000/svg"><h:iframe xmlns:h="http://www.w3.org/1999/xhtml" src="https://cdn.example.test/"/></svg>`, /External executable content/],
+    [`<s:svg ${svgNS}><s:style>@import url(https://cdn.example.test/a.css);</s:style></s:svg>`, /External stylesheet content/],
+    [`<s:svg ${svgNS}><s:rect s:fill="x" style="fill:url(https://cdn.example.test/a.svg#g)"/></s:svg>`, /External stylesheet content/],
+    [`<s:svg ${svgNS}><s:script>alert(1)</s:script></s:svg>`, /Active SVG content/],
+  ]) {
+    writeFileSync(svg, body);
+    assert.throws(() => createPublishedManifest(inputs), message, body);
+  }
+  writeFileSync(svg, `<s:svg ${svgNS} ${xlinkNS}><s:style>.a{fill:url(#g)}</s:style><s:use q:href="#a"/>` +
+    '<s:image href="data:image/png;base64,AAAA"/><a:foo xmlns:a="urn:example:other" href="https://github.com/"/></s:svg>');
+  createPublishedManifest(inputs);
+});
+
+test('HTML is checked under both scripting-enabled and scripting-disabled parsing', (t) => {
+  const { directory, inputs } = fixture(t);
+  const base = '<script src="/_astro/app.js"></script>';
+  const hidden = [
+    '<noscript><style></noscript><script src="https://cdn.example.test/a.js"></script></style></noscript>',
+    '<noscript><style></noscript><link rel="stylesheet" href="https://cdn.example.test/a.css"></style></noscript>',
+    '<noscript><p title="</noscript><img onerror=alert(1) src=x>"></noscript>',
+  ];
+  for (const html of hidden) {
+    writeFileSync(path.join(directory, 'index.html'), base + html);
+    assert.throws(() => createPublishedManifest(inputs), /External|Executable HTML|no source-package evidence/, html);
+  }
+  writeFileSync(path.join(directory, 'index.html'), `${base}<noscript><style>.js-only{display:none}</style></noscript>`);
+  createPublishedManifest(inputs);
+});
+
 test('copied scripts, unaccounted executable output and unknown generated search code block the build', (t) => {
   for (const mode of ['public-script', 'unaccounted-code', 'search-code', 'native', 'active-svg', 'external-code']) {
     const { root, directory, inputs } = fixture(t);
