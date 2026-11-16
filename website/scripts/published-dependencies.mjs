@@ -178,11 +178,15 @@ const decodeXMLReferences = (value) => value.replace(/&(?:#x([0-9a-f]+)|#(\d+)|(
   return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
 });
 
-// href values of every <?xml-stylesheet?> instruction. The data is split into quoted pseudoattributes first,
-// so href text inside another value, or a longer name such as data-href, is never mistaken for the real one.
+// href values of every <?xml-stylesheet?> instruction. Markup is tokenized in document order so comments, CDATA
+// sections and other instructions are skipped as units, not scanned for look-alike text. The instruction data
+// is split into quoted pseudoattributes, so href text inside another value, or a longer name such as data-href,
+// is never mistaken for the real one.
 function xmlStylesheetTargets(text) {
   const targets = [];
-  for (const [, data] of text.matchAll(/<\?xml-stylesheet(?=[\s?])([\s\S]*?)\?>/gi)) {
+  const token = /<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?(?:\]\]>|$)|<\?([^\s?]+)([\s\S]*?)(?:\?>|$)/g;
+  for (const [, target, data] of text.matchAll(token)) {
+    if (target?.toLowerCase() !== 'xml-stylesheet') continue;
     for (const [, name, double, single] of data.matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
       if (name === 'href') targets.push(decodeXMLReferences(double ?? single));
     }

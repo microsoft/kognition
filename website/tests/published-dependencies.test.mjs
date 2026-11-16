@@ -406,6 +406,33 @@ test('xml-stylesheet is parsed as pseudoattributes: only the exact href is inspe
   }
 });
 
+test('xml-stylesheet text inside comments, CDATA and other inert markup is not an instruction', (t) => {
+  const { directory, inputs } = fixture(t);
+  const svg = path.join(directory, 'logo.svg');
+  const ns = 'xmlns="http://www.w3.org/2000/svg"';
+  const external = '<?xml-stylesheet href="https://cdn.example.test/a.css"?>';
+  for (const body of [
+    `<!-- ${external} --><svg ${ns}/>`,
+    `<svg ${ns}><desc><![CDATA[${external}]]></desc></svg>`,
+    `<svg ${ns}><!-- ${external} --><desc>x</desc></svg>`,
+    `<?other data="${external.slice(0, 20)}"?><svg ${ns}/>`,
+    `<!-- a --><?xml-stylesheet href="local.css"?><!-- ${external} --><svg ${ns}/>`,
+  ]) {
+    writeFileSync(svg, body);
+    createPublishedManifest(inputs);
+  }
+  for (const body of [
+    `<!-- x --> ${external}<svg ${ns}/>`,
+    `<![CDATA[ x ]]>${external}<svg ${ns}/>`,
+    `<!-- ${external} -->${external}<svg ${ns}/>`,
+    `<?xml-stylesheet title="<!--" href="https://cdn.example.test/a.css"?><svg ${ns}/>`,
+    `<svg ${ns}><desc>${external}</desc></svg>`,
+  ]) {
+    writeFileSync(svg, body);
+    assert.throws(() => createPublishedManifest(inputs), /External stylesheet content/, body);
+  }
+});
+
 test('HTML is checked under both scripting-enabled and scripting-disabled parsing', (t) => {
   const { directory, inputs } = fixture(t);
   const base = '<script src="/_astro/app.js"></script>';
