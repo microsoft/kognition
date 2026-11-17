@@ -11,6 +11,7 @@ current product contract or release readiness.
 | --- | --- |
 | [Refactoring](refactoring/repository-refactor-plan.md) | Repository-boundary plan, dependency/test baselines and the companion test-ownership inventory |
 | [Feature work](features/) | Implementation plans, security reviews, acceptance reports, finding dispositions and backlog tracking, grouped by feature |
+| [Workflow collaboration](features/workflow-collaboration/plan.md) | Proposed Workflow-first A2A collaboration, four execution strategies, cross-namespace authority, delivery phases and acceptance gates |
 | [Review records](reviews/) | Historical implementation/backlog reviews and closure ledgers |
 
 These files remain versioned so contributors can follow implementation decisions
