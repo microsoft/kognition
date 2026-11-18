@@ -153,6 +153,22 @@ test("long Builder instructions retain natural typing speed with sufficient boun
   assert(long.timeout <= 120000);
 });
 
+test("every long configuration entered in the instructional scenes is held for reading before it is deployed", () => {
+  const source = fs.readFileSync(path.join(__dirname, "live-instructional.js"), "utf8");
+  const scene = id => {
+    const start = source.indexOf(`sc("${id}"`);
+    assert(start >= 0, `${id} scene exists`);
+    return source.slice(start, source.indexOf("await sc(", start + 1));
+  };
+  const kb = scene("K01");
+  const typed = kb.indexOf('type(field("Inline data"), CORPUS)');
+  const held = kb.indexOf('reviewConfiguration(field("Inline data"), "spec.sources.0.data")');
+  const deployed = kb.indexOf("reviewDeploy(desired.kb)");
+  assert(typed >= 0 && held > typed && deployed > held, "K01 reads the inline corpus before switching to YAML");
+  const workflow = source.slice(source.indexOf("Input (Go template)"));
+  assert(/reviewConfiguration\(inspector\.getByLabel\("Input \(Go template\)"/.test(workflow));
+});
+
 test("a failed action cannot hide the scripted approval watcher's actual failure", () => {
   const action = new Error("stored result absent");
   const decision = new Error("exact decision rejected");
