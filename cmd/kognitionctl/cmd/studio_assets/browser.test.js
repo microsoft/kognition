@@ -593,6 +593,36 @@ test("Tool schema is fetched only after deployment and real introspection errors
   await expect(schema).toContainText("Schema fetch failed: calculator endpoint unavailable");
 });
 
+test("a new OpenAPI Tool can supply its required schema in YAML before deployment", async ({ page }) => {
+  const mutations = await authoringAPI(page);
+  let fetches = 0;
+  const schema = { type: "object", properties: { expression: { type: "string" } } };
+  await page.route("**/api/tools/*/schema?*", route => {
+    fetches++;
+    return route.fulfill({ json: { source: "live", inputSchema: schema } });
+  });
+  await createResource(page, "#btn-new-tool");
+  await builderField(page, "Name").fill("calculator");
+  const endpoint = "https://calculator.example.test";
+  await builderField(page, "Endpoint").fill(endpoint);
+  await builderField(page, "Protocol").selectOption("OpenAPI");
+  const edit = page.getByRole("button", { name: "Edit schema in YAML", exact: true });
+  await expect(edit).toBeVisible();
+  await expect(page.getByRole("button", { name: "Introspect", exact: true })).toBeDisabled();
+  await edit.click();
+  const yaml = page.locator("#yaml-area");
+  await expect(yaml).toHaveValue(/protocol: OpenAPI/);
+  await yaml.fill(JSON.stringify({ kind: "Tool", metadata: { name: "calculator", namespace: "default" },
+    spec: { protocol: "OpenAPI", endpoint, schema } }));
+  await page.getByRole("button", { name: "Apply YAML", exact: true }).click();
+  await expect(page.locator("#status")).toHaveText("YAML applied to builder");
+  expect(fetches).toBe(0);
+  await page.locator("#btn-deploy").click();
+  await expect.poll(() => fetches).toBe(1);
+  expect(mutations).toHaveLength(1);
+  expect(mutations[0]).toMatchObject({ method: "POST", plural: "tools", body: { spec: { protocol: "OpenAPI", schema } } });
+});
+
 test("inline KnowledgeBase source data preserves paragraphs in the schema Builder", async ({ page }) => {
   const resource = { apiVersion: "kognition.dev/v1alpha1", kind: "KnowledgeBase",
     metadata: { name: "product-docs", namespace: "default" },

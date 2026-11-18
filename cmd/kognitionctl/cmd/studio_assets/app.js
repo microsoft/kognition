@@ -1698,7 +1698,10 @@ function renderToolBuilder(host) {
   // ---- Protocol & Class ----
   host.appendChild(section("Protocol & Class", "How agents invoke this tool.", (body) => {
     body.appendChild(fieldGrid([
-      selectField("Protocol", spec.protocol || "MCP", ["MCP", "OpenAPI", "native", "browser", "shell"], (v) => setOrDel(spec, "protocol", v === "MCP" ? undefined : v), true),
+      selectField("Protocol", spec.protocol || "MCP", ["MCP", "OpenAPI", "native", "browser", "shell"], (v) => {
+        setOrDel(spec, "protocol", v === "MCP" ? undefined : v);
+        renderEditor();
+      }, true),
       refSelect("Tool class", spec.className || "", state.lists.toolclasses || [], (v) => setOrDel(spec, "className", v), true),
     ]));
     body.appendChild(textareaField("Description", spec.description || "", (v) => setOrDel(spec, "description", v), "Human-readable docs shown to operators."));
@@ -1715,7 +1718,7 @@ function renderToolBuilder(host) {
   }));
 
   // ---- Schema ----
-  host.appendChild(section("Schema", "Read-only view of the schema this tool advertises. Introspected from the endpoint — the tool's actual behavior can't be changed from here.", (body) => {
+  host.appendChild(section("Schema", "Read-only view of the declared or introspected schema. Live introspection is available after deployment.", (body) => {
     body.appendChild(renderBuilderSchemaField(spec, setOrDel));
   }, (spec.protocol || "MCP") === "OpenAPI"));
 
@@ -4785,8 +4788,16 @@ function renderBuilderSchemaField(spec, setOrDel) {
   // Status line below the editor: source badge, description, or hints.
   if (!canFetch) {
     const hint = document.createElement("div"); hint.className = "hint";
-    hint.textContent = "Deploy this Tool with a name and endpoint first. Studio then fetches the schema from the saved Tool.";
+    hint.textContent = required
+      ? "OpenAPI Tools require a schema before deployment. Add spec.schema in YAML and click Apply YAML, then deploy. Studio can introspect the saved Tool afterward."
+      : "Deploy this Tool with a name and endpoint first. Studio then fetches the schema from the saved Tool.";
     wrap.appendChild(hint);
+    if (required) {
+      const edit = document.createElement("button"); edit.type = "button"; edit.className = "action";
+      edit.textContent = "Edit schema in YAML";
+      edit.addEventListener("click", () => switchView("yaml"));
+      wrap.appendChild(edit);
+    }
   } else if (cache.loading && cache.fetchedAt === 0) {
     const hint = document.createElement("div"); hint.className = "hint";
     hint.textContent = "Fetching schema from endpoint…";

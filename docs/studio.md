@@ -42,6 +42,9 @@ authorization and installation controls.
 - Existing Agent, Workflow, Tool, grant, knowledge and evaluation builders remain
   available. **All API fields** switches to structured controls derived from the
   canonical resource types and shipped CRD schemas; **Guided builder** returns.
+- When creating an OpenAPI Tool, open **Schema** in the guided builder and select
+  **Edit schema in YAML**. Add `spec.schema`, select **Apply YAML**, then deploy.
+  Live schema introspection is available after deployment.
 - Objects expand into nested controls. Arrays have explicit add/remove actions;
   maps have named entries. Domain text and arbitrary JSON payloads retain
   text/code inputs.
