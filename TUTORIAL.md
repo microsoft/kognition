@@ -1355,8 +1355,8 @@ kubectl get evaluationrun hello-agent-quality-g2 -n default -o yaml
 **Bash (Linux/macOS), with PowerShell 7 installed for the sample helpers:**
 
 ```bash
-pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=simple-agent
-pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=evaluation
+make samples-install SAMPLE=simple-agent
+make samples-install SAMPLE=evaluation
 kubectl get evaluationruns.kognition.dev -n default
 kubectl get evaluationrun hello-agent-quality-g2 -n default -o yaml
 ```

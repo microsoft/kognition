@@ -46,15 +46,15 @@ kubectl --kubeconfig $Kubeconfig --context $Context get nodes
 
 ```bash
 mkdir -p .local
-ResourceGroup='<resource-group>'
-ClusterName='<aks-cluster>'
-Kubeconfig="$PWD/.local/aks.kubeconfig"
-Context='kognition-aks'
+resource_group='<resource-group>'
+cluster_name='<aks-cluster>'
+kubeconfig="$PWD/.local/aks.kubeconfig"
+context='kognition-aks'
 
-az aks get-credentials --resource-group "$ResourceGroup" --name "$ClusterName" \
-    --file "$Kubeconfig" --context "$Context"
-kubelogin convert-kubeconfig --kubeconfig "$Kubeconfig" -l azurecli
-kubectl --kubeconfig "$Kubeconfig" --context "$Context" get nodes
+az aks get-credentials --resource-group "$resource_group" --name "$cluster_name" \
+    --file "$kubeconfig" --context "$context"
+kubelogin convert-kubeconfig --kubeconfig "$kubeconfig" -l azurecli
+kubectl --kubeconfig "$kubeconfig" --context "$context" get nodes
 ```
 
 Use the Azure CLI account and subscription that own the selected cluster.
@@ -74,10 +74,10 @@ kubectl --kubeconfig $Kubeconfig --context $Context api-resources --api-group=ci
 **Bash (Linux/macOS):**
 
 ```bash
-az aks show --resource-group "$ResourceGroup" --name "$ClusterName" \
+az aks show --resource-group "$resource_group" --name "$cluster_name" \
     --query '{plugin:networkProfile.networkPlugin,dataplane:networkProfile.networkDataplane}' \
     --output table
-kubectl --kubeconfig "$Kubeconfig" --context "$Context" api-resources --api-group=cilium.io
+kubectl --kubeconfig "$kubeconfig" --context "$context" api-resources --api-group=cilium.io
 ```
 
 The profile must provide Cilium network and cluster-wide network policies.
@@ -109,8 +109,8 @@ helm show crds $Chart | kubectl --kubeconfig $Kubeconfig --context $Context appl
 mkdir -p .local/charts
 python3 ./tools/distribution_notices.py charts
 helm package ./deploy/helm/kognition --destination ./.local/charts
-Chart='./.local/charts/kognition-0.1.0.tgz'
-helm show crds "$Chart" | kubectl --kubeconfig "$Kubeconfig" --context "$Context" apply -f -
+chart='./.local/charts/kognition-0.1.0.tgz'
+helm show crds "$chart" | kubectl --kubeconfig "$kubeconfig" --context "$context" apply -f -
 ```
 
 Use the archive version emitted by `helm package`. See
@@ -139,15 +139,15 @@ $ControllerDigest = 'sha256:<controller-image-digest>'
 **Bash (Linux/macOS):**
 
 ```bash
-Registry='<registry>.azurecr.io'
-ImageTag='<release-image-tag>'
-ControllerDigest='sha256:<controller-image-digest>'
+registry='<registry>.azurecr.io'
+image_tag='<release-image-tag>'
+controller_digest='sha256:<controller-image-digest>'
 
 pwsh -NoProfile -File ./deploy/aks/Install-RuntimeBase.ps1 \
-    -Kubeconfig "$Kubeconfig" -Context "$Context" -ChartPackage "$Chart" \
+    -Kubeconfig "$kubeconfig" -Context "$context" -ChartPackage "$chart" \
     -Namespace kognition-system -WorkloadNamespace team-a \
-    -ImageRegistry "$Registry" -ImageTag "$ImageTag" \
-    -ControllerImageDigest "$ControllerDigest" \
+    -ImageRegistry "$registry" -ImageTag "$image_tag" \
+    -ControllerImageDigest "$controller_digest" \
     -StateDirectory ./.local/aks-kognition-install -Exclusive
 ```
 
@@ -169,8 +169,8 @@ kubectl --kubeconfig $Kubeconfig --context $Context -n kognition-system rollout 
 **Bash (Linux/macOS):**
 
 ```bash
-kubectl --kubeconfig "$Kubeconfig" --context "$Context" -n kognition-system get pods
-kubectl --kubeconfig "$Kubeconfig" --context "$Context" -n kognition-system rollout status \
+kubectl --kubeconfig "$kubeconfig" --context "$context" -n kognition-system get pods
+kubectl --kubeconfig "$kubeconfig" --context "$context" -n kognition-system rollout status \
     deployment/kognition-k8s-controller --timeout=120s
 ```
 
