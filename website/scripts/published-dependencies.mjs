@@ -219,7 +219,8 @@ function assertNoExternalContent($, relative) {
       }
     }
     const rels = values('rel').flatMap((rel) => rel.toLowerCase().split(/\s+/));
-    const loads = name === 'link' && rels.some((rel) => loadingRels.has(rel)) ? ['href'] : loadingAttributes[name] ?? [];
+    const loads = name === 'link' && rels.some((rel) => loadingRels.has(rel)) ? ['href']
+      : (Object.hasOwn(loadingAttributes, name) ? loadingAttributes[name] : []);
     for (const wanted of loads) {
       for (const target of values(wanted)) {
         const inlineImage = ['image', 'feimage'].includes(name) && /^[\u0000-\u0020]*data:/i.test(target);

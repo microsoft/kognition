@@ -248,6 +248,16 @@ test('external loaders, <base>, srcdoc and alternate or preloaded resources are 
   createPublishedManifest(inputs);
 });
 
+test('unrecognized element names do not block publication', (t) => {
+  const { directory, inputs } = fixture(t);
+  writeFileSync(path.join(directory, 'index.html'), '<script src="/_astro/app.js"></script><constructor>Local content</constructor>');
+  writeFileSync(path.join(directory, 'icon.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg"><metadata><constructor xmlns="urn:example:metadata"/></metadata></svg>');
+  const manifest = createPublishedManifest(inputs);
+  assert.ok(manifest.files.some((file) => file.path === 'index.html' && file.origin === 'rendered-page'));
+  assert.ok(manifest.files.some((file) => file.path === 'icon.svg' && file.origin === 'first-party-static'));
+});
+
 test('image functions with bare-string URLs are external stylesheet references like url()', (t) => {
   const { directory, inputs } = fixture(t);
   const css = path.join(directory, '_astro', 'common.css');
