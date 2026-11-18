@@ -34,7 +34,10 @@ const unescapeCSS = (value) => value
   })
   .replace(/\\(.)/gs, '$1');
 
-// Returns the first external target of an @import or url() in a stylesheet, skipping comments and strings.
+// CSS image functions that accept a bare string as a URL, not only url().
+const imageFunctions = new Set(['image', 'image-set', '-webkit-image-set', '-webkit-image', 'cross-fade', '-webkit-cross-fade', 'src']);
+
+// Returns the first external target of an @import, url() or image-function string in a stylesheet, skipping comments.
 export function externalCSSReference(css) {
   const ident = /[a-z0-9_-]|\\(?:[0-9a-f]{1,6}[ \t\n\r\f]?|[^\n])|[^\u0000-\u007f]/iy;
   const quoted = (start) => {
@@ -48,6 +51,8 @@ export function externalCSSReference(css) {
     return isExternalReference(url) ? url : undefined;
   };
   let importing = false;
+  let depth = 0;
+  const imageDepths = [];
   for (let i = 0; i < css.length;) {
     const char = css[i];
     if (css.startsWith('/*', i)) {
@@ -55,7 +60,8 @@ export function externalCSSReference(css) {
       i = end < 0 ? css.length : end + 2;
     } else if (char === '"' || char === "'") {
       const { value, end } = quoted(i);
-      if (importing && external(value)) return value;
+      const target = external(value);
+      if (target && (importing || (imageDepths.length && !/^data:/i.test(target)))) return value;
       importing = false;
       i = end;
     } else if (char === '@') {
@@ -76,6 +82,9 @@ export function externalCSSReference(css) {
         end = ident.lastIndex;
       }
       end = Math.max(end, i + 1);
+      if (css[end] === '(' && imageFunctions.has(unescapeCSS(css.slice(i, end)).toLowerCase())) {
+        imageDepths.push(depth + 1);
+      }
       if (css[end] === '(' && unescapeCSS(css.slice(i, end)).toLowerCase() === 'url') {
         let start = end + 1;
         while (/\s/.test(css[start] ?? '')) start++;
@@ -96,10 +105,136 @@ export function externalCSSReference(css) {
       i = end;
     } else {
       if (char === ';' || char === '{') importing = false;
+      if (char === '(') depth++;
+      if (char === ')') {
+        if (imageDepths.at(-1) === depth) imageDepths.pop();
+        depth = Math.max(0, depth - 1);
+      }
       i++;
     }
   }
   return undefined;
+}
+
+const loadingRels = new Set(['stylesheet', 'modulepreload', 'preload', 'prefetch', 'prerender']);
+// Elements whose attributes load a document, script or image from the given URL.
+const svgReference = ['href', 'xlink:href'];
+const loadingAttributes = {
+  script: ['src', ...svgReference], iframe: ['src'], frame: ['src'], embed: ['src'], object: ['data'], base: ['href'],
+  image: svgReference, use: svgReference, feimage: svgReference, lineargradient: svgReference, radialgradient: svgReference,
+  pattern: svgReference, filter: svgReference, textpath: svgReference, mpath: svgReference, tref: svgReference,
+};
+const cssAttributes = new Set(['fill', 'stroke', 'filter', 'mask', 'clip-path', 'marker-start', 'marker-mid', 'marker-end', 'cursor', 'style']);
+
+const svgNamespace = 'http://www.w3.org/2000/svg';
+const xhtmlNamespace = 'http://www.w3.org/1999/xhtml';
+const xlinkNamespace = 'http://www.w3.org/1999/xlink';
+const bindingsByElement = new WeakMap();
+
+// xmlns bindings in scope for an element, inherited from its ancestors. The xlink prefix is bound by default
+// because HTML parsing never declares it.
+function namespaceBindings(element) {
+  if (!element) return { xlink: xlinkNamespace };
+  const cached = bindingsByElement.get(element);
+  if (cached) return cached;
+  const bindings = { ...namespaceBindings(element.parent) };
+  for (const [key, value] of Object.entries(element.attribs ?? {})) {
+    if (key === 'xmlns') bindings[''] = value;
+    else if (key.startsWith('xmlns:')) bindings[key.slice('xmlns:'.length)] = value;
+  }
+  bindingsByElement.set(element, bindings);
+  return bindings;
+}
+
+// Element name without a prefix bound to SVG or XHTML, so <s:image> is matched as <image>.
+function localName(element) {
+  const name = element.name ?? '';
+  const split = name.indexOf(':');
+  if (split > 0 && [svgNamespace, xhtmlNamespace].includes(namespaceBindings(element)[name.slice(0, split)])) {
+    return name.slice(split + 1).toLowerCase();
+  }
+  return name.toLowerCase();
+}
+
+// Attribute name with its prefix resolved: any prefix bound to XLink becomes xlink:, one bound to SVG or XHTML is dropped.
+function resolveAttributeName(element, key) {
+  const split = key.indexOf(':');
+  const namespace = split > 0 ? namespaceBindings(element)[key.slice(0, split)] : undefined;
+  const local = key.slice(split + 1).toLowerCase();
+  if (namespace === xlinkNamespace) return `xlink:${local}`;
+  return [svgNamespace, xhtmlNamespace].includes(namespace) ? local : key.toLowerCase();
+}
+
+const attributeEntries = (element) => Object.entries(element.attribs ?? {})
+  .map(([key, value]) => [resolveAttributeName(element, key), value]);
+
+const styleSheets = ($) => $('*').toArray().filter((element) => localName(element) === 'style')
+  .map((element) => $(element).text());
+
+const xmlReferences = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
+const decodeXMLReferences = (value) => value.replace(/&(?:#x([0-9a-f]+)|#(\d+)|(lt|gt|amp|quot|apos));/gi, (match, hex, decimal, named) => {
+  if (named) return xmlReferences[named.toLowerCase()];
+  const code = Number.parseInt(hex ?? decimal, hex ? 16 : 10);
+  return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
+});
+
+// href values of every <?xml-stylesheet?> instruction. Markup is tokenized in document order so comments, CDATA
+// sections and other instructions are skipped as units, not scanned for look-alike text. The instruction data
+// is split into quoted pseudoattributes, so href text inside another value, or a longer name such as data-href,
+// is never mistaken for the real one.
+function xmlStylesheetTargets(text) {
+  const targets = [];
+  const token = /<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?(?:\]\]>|$)|<\?([^\s?]+)([\s\S]*?)(?:\?>|$)/g;
+  for (const [, target, data] of text.matchAll(token)) {
+    if (target?.toLowerCase() !== 'xml-stylesheet') continue;
+    for (const [, name, double, single] of data.matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+      if (name === 'href') targets.push(decodeXMLReferences(double ?? single));
+    }
+  }
+  return targets;
+}
+
+// Rejects markup that pulls in external or unattributed content: loaders, <base>, srcdoc and CSS in attributes.
+function assertNoExternalContent($, relative) {
+  for (const element of $('*').toArray()) {
+    const name = localName(element);
+    const attributes = attributeEntries(element);
+    const values = (wanted) => attributes.filter(([key]) => key === wanted).map(([, value]) => value);
+    if (name === 'iframe' && values('srcdoc').length) {
+      throw new Error(`Inline iframe document has no source-package evidence: ${relative}`);
+    }
+    // xml:base re-roots every relative URL below it, so an external one makes any local-looking loader external.
+    if (values('xml:base').some(isExternalReference)) {
+      throw new Error(`External executable content is outside static publication evidence: ${relative}`);
+    }
+    if (['set', 'animate'].includes(name)) {
+      const assigned = resolveAttributeName(element, (values('attributename')[0] ?? '').trim());
+      const animated = ['to', 'from', 'by', 'values'].flatMap((key) => values(key).flatMap((value) => [value, ...value.split(';')]));
+      if (['xml:base', 'href', 'xlink:href'].includes(assigned)) {
+        if (animated.some(isExternalReference)) {
+          throw new Error(`External executable content is outside static publication evidence: ${relative}`);
+        }
+      } else if (cssAttributes.has(assigned) && animated.some(externalCSSReference)) {
+        throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
+      }
+    }
+    const rels = values('rel').flatMap((rel) => rel.toLowerCase().split(/\s+/));
+    const loads = name === 'link' && rels.some((rel) => loadingRels.has(rel)) ? ['href']
+      : (Object.hasOwn(loadingAttributes, name) ? loadingAttributes[name] : []);
+    for (const wanted of loads) {
+      for (const target of values(wanted)) {
+        const inlineImage = ['image', 'feimage'].includes(name) && /^[\u0000-\u0020]*data:/i.test(target);
+        if (!inlineImage && isExternalReference(target)) {
+          throw new Error(`External executable content is outside static publication evidence: ${relative}`);
+        }
+      }
+    }
+    for (const [key, value] of attributes) {
+      if (cssAttributes.has(key) && externalCSSReference(value)) {
+        throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
+      }
+    }
+  }
 }
 
 function astroFiles(directory) {
@@ -210,8 +345,21 @@ export function createPublishedManifest({ projectRoot, directory, outputs, clien
     const relative = slash(path.relative(directory, file));
     if (generatedNotices.has(relative)) continue;
     const content = readFileSync(file);
-    if (/\.svg$/i.test(relative) && /<script\b|\bon[a-z]+\s*=|javascript:/i.test(content.toString('utf8'))) {
-      throw new Error(`Active SVG content has no executable source provenance: ${relative}`);
+    if (/\.svg$/i.test(relative)) {
+      const text = content.toString('utf8');
+      if (/<(?:[\w.-]+:)?script\b|\bon[a-z]+\s*=|javascript:/i.test(text)) {
+        throw new Error(`Active SVG content has no executable source provenance: ${relative}`);
+      }
+      const $svg = load(text, { xmlMode: true });
+      for (const href of xmlStylesheetTargets(text)) {
+        if (isExternalReference(href)) {
+          throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
+        }
+      }
+      assertNoExternalContent($svg, relative);
+      if (styleSheets($svg).some((css) => externalCSSReference(css))) {
+        throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
+      }
     }
     if (/\.css$/i.test(relative) && externalCSSReference(content.toString('utf8'))) {
       throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
@@ -222,30 +370,28 @@ export function createPublishedManifest({ projectRoot, directory, outputs, clien
     if (/\.html$/i.test(relative)) {
       origin = 'rendered-page';
       sources = [...renderer, ...expressive];
-      const $ = load(content.toString('utf8'));
-      for (const element of $('script:not([src])').toArray()) {
-        const type = ($(element).attr('type') ?? '').trim().toLowerCase();
-        if (dataScriptTypes.has(type)) continue;
-        const body = $(element).text();
-        if (body.trim()) sources.push(...inlineScriptSources(body, relative));
-      }
-      for (const element of $('script[src], link[rel=stylesheet][href]').toArray()) {
-        const target = $(element).attr('src') ?? $(element).attr('href');
-        if (target && isExternalReference(target)) {
-          throw new Error(`External executable content is outside static publication evidence: ${relative}`);
+      // Browsers parse <noscript> as markup or as raw text depending on scripting, so each parse must pass on its own.
+      const html = content.toString('utf8');
+      for (const scriptingEnabled of [true, false]) {
+        const $ = load(html, { scriptingEnabled });
+        for (const element of $('script:not([src])').toArray()) {
+          const type = ($(element).attr('type') ?? '').trim().toLowerCase();
+          if (dataScriptTypes.has(type)) continue;
+          const body = $(element).text();
+          if (body.trim()) sources.push(...inlineScriptSources(body, relative));
         }
-      }
-      for (const element of $('*').toArray()) {
-        for (const [name, value] of Object.entries(element.attribs ?? {})) {
-          if (/^on/i.test(name) || /^[\u0000-\u0020]*javascript:/i.test(value.replace(/[\t\n\r]/g, ''))) {
-            throw new Error(`Executable HTML attribute has no source-package evidence: ${relative}: <${element.name} ${name}>`);
+        assertNoExternalContent($, relative);
+        for (const element of $('*').toArray()) {
+          for (const [name, value] of Object.entries(element.attribs ?? {})) {
+            if (/^on/i.test(name) || /^[\u0000-\u0020]*javascript:/i.test(value.replace(/[\t\n\r]/g, ''))) {
+              throw new Error(`Executable HTML attribute has no source-package evidence: ${relative}: <${element.name} ${name}>`);
+            }
           }
         }
-      }
-      const inlineStyles = [...$('style').toArray().map((element) => $(element).text()),
-        ...$('[style]').toArray().map((element) => $(element).attr('style'))];
-      if (inlineStyles.some((css) => externalCSSReference(css))) {
-        throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
+        const inlineStyles = [...styleSheets($), ...$('[style]').toArray().map((element) => $(element).attr('style'))];
+        if (inlineStyles.some((css) => externalCSSReference(css))) {
+          throw new Error(`External stylesheet content is outside static publication evidence: ${relative}`);
+        }
       }
     } else if (output?.kind === 'chunk') {
       origin = 'vite-client';
