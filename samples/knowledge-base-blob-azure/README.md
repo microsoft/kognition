@@ -58,8 +58,8 @@ $env:VIRTUAL_ENV = (Resolve-Path ./.venv).Path
 
 ```bash
 source .venv/bin/activate
-python -c "import azure.storage.blob"
-pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=knowledge-base-blob-azure
+python3 -c "import azure.storage.blob"
+make samples-install SAMPLE=knowledge-base-blob-azure
 ```
 
 Create the environment with `python3 -m venv .venv` if needed and install the

@@ -5,7 +5,50 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { chromium } = require("@playwright/test");
-const { holdReadableText } = require("./reading");
+const { holdReadableText, holdReadableConfiguration, configurationReadingWindowSeconds,
+  verifyConfigurationReadingWindow, firstUnexposedOffset } = require("./reading");
+
+const prompt = "You help fictional Cedar Labs with Orbital Mark 7. Reply only to the current request. Keep answers under 90 words.";
+
+test("configuration reviews budget time for the complete configured content", () => {
+  assert.equal(configurationReadingWindowSeconds(prompt), 13);
+  assert(configurationReadingWindowSeconds("configured ".repeat(120)) >= 63);
+});
+
+test("a long scene cannot substitute for a readable completed configuration window", () => {
+  assert.throws(() => verifyConfigurationReadingWindow({
+    configuredText: prompt, displayedText: prompt, fullyVisible: true,
+    visibleSeconds: 5.08, sceneDurationSeconds: 16.2,
+  }), /requires 13 seconds/);
+  assert.throws(() => verifyConfigurationReadingWindow({
+    configuredText: prompt, displayedText: "You help fictional", fullyVisible: true, visibleSeconds: 60,
+  }), /complete configured content/);
+  assert.throws(() => verifyConfigurationReadingWindow({
+    configuredText: prompt, displayedText: prompt, fullyVisible: false, visibleSeconds: 60,
+  }), /fully visible/);
+  const result = verifyConfigurationReadingWindow({
+    configuredText: prompt, displayedText: prompt, fullyVisible: true, visibleSeconds: 13,
+  });
+  assert.equal(result.requiredSeconds, 13);
+  assert.equal(result.textSHA256, crypto.createHash("sha256").update(prompt).digest("hex"));
+});
+
+test("configuration capture holds the finished editable value for its full reading budget", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 600 } });
+    await page.setContent('<textarea aria-label="Prompt content" style="width:1100px;height:120px"></textarea>');
+    const content = page.getByLabel("Prompt content");
+    await content.fill(prompt);
+    const result = await holdReadableConfiguration(page, content);
+    assert.equal(result.requiredSeconds, 13);
+    assert(result.visibleSeconds >= 13);
+    assert.equal(result.textSHA256, crypto.createHash("sha256").update(prompt).digest("hex"));
+    assert.equal(await content.inputValue(), prompt);
+  } finally {
+    await browser.close();
+  }
+});
 
 test("manifest reading uses the actual editable value, not empty textarea text content", async () => {
   const browser = await chromium.launch({ headless: true });
@@ -23,6 +66,70 @@ test("manifest reading uses the actual editable value, not empty textarea text c
   } finally {
     await browser.close();
   }
+});
+
+test("a textarea taller than its clipping pane still exposes every line", async t => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const nested of [false, true]) {
+      await t.test(nested ? "nested panes" : "single pane", async () => {
+        const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
+        try {
+          const lines = Array.from({ length: 30 }, (_, index) => `Line ${String(index).padStart(2, "0")}`);
+          await page.setContent(`
+            <style>
+              body { margin: 0; }
+              .pane { height: 120px; overflow-y: auto; }
+              .outer { height: 200px; overflow-y: auto; }
+              textarea { display: block; width: 400px; height: 400px; margin: 0; padding: 0; border: 0;
+                font: 16px/20px monospace; }
+            </style>
+            ${nested ? '<div class="outer"><div style="height:30px"></div>' : ""}
+            <div class="pane"><textarea aria-label="Config"></textarea></div>
+            ${nested ? "</div>" : ""}
+          `);
+          const config = page.getByLabel("Config");
+          await config.fill(lines.join("\n"));
+          await page.evaluate(() => {
+            const area = document.querySelector("textarea");
+            window.seenLines = new Set();
+            window.seenTimer = setInterval(() => {
+              const rect = area.getBoundingClientRect();
+              let top = 0;
+              let bottom = innerHeight;
+              for (let node = area.parentElement; node; node = node.parentElement) {
+                if (!/auto|scroll|hidden/.test(getComputedStyle(node).overflowY)) continue;
+                const box = node.getBoundingClientRect();
+                top = Math.max(top, box.top);
+                bottom = Math.min(bottom, box.bottom);
+              }
+              for (let line = 0; line < 30; line++) {
+                const lineTop = rect.top + line * 20 - area.scrollTop;
+                if (lineTop >= top - 1 && lineTop + 20 <= bottom + 1) window.seenLines.add(line);
+              }
+            }, 20);
+          });
+          const result = await holdReadableText(page, config);
+          const seen = await page.evaluate(() => {
+            clearInterval(window.seenTimer);
+            return [...window.seenLines];
+          });
+          assert.ok(result.segments > 1);
+          assert.deepEqual(seen.sort((a, b) => a - b), Array.from({ length: 30 }, (_, index) => index));
+        } finally {
+          await page.close();
+        }
+      });
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a reading hold that leaves content hidden is reported instead of succeeding", () => {
+  assert.equal(firstUnexposedOffset([{ from: 0, to: 100 }, { from: 80, to: 300 }], 300), null);
+  assert.equal(firstUnexposedOffset([{ from: 0, to: 100 }, { from: 200, to: 300 }], 300), 100);
+  assert.equal(firstUnexposedOffset([{ from: 0, to: 120 }], 400), 120);
 });
 
 test("reading exposes the beginning and end of clipped answers before returning", async t => {

@@ -32,8 +32,8 @@ func TestReleaseGoToolchainIncludesSecurityFixes(test *testing.T) {
 				pattern = `(?m)^go ([0-9]+\.[0-9]+\.[0-9]+)$`
 			}
 			match := regexp.MustCompile(pattern).FindStringSubmatch(string(body))
-			if len(match) != 2 || !version.IsValid("go"+match[1]) || version.Compare("go"+match[1], "go1.26.10") < 0 {
-				test.Fatal("release toolchain must include the Go 1.26.10 security fixes")
+			if len(match) != 2 || !version.IsValid("go"+match[1]) || version.Compare("go"+match[1], "go1.26.11") < 0 {
+				test.Fatal("release toolchain must include the Go 1.26.11 security fixes")
 			}
 		})
 	}
@@ -106,6 +106,50 @@ func TestPythonReleaseFeedsRequireTLSWithoutPersistingConfiguration(test *testin
 				}
 			}
 		})
+	}
+}
+
+func TestWorkflowActionsArePinnedToFullLengthCommitSHAs(test *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		test.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.y*ml"))
+	if err != nil || len(files) == 0 {
+		test.Fatalf("no workflows found: %v", err)
+	}
+	pinned := regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}$`)
+	for _, file := range files {
+		contents, err := os.ReadFile(file)
+		if err != nil {
+			test.Fatal(err)
+		}
+		var workflow struct {
+			Jobs map[string]struct {
+				Uses  string `json:"uses"`
+				Steps []struct {
+					Uses string `json:"uses"`
+				} `json:"steps"`
+			} `json:"jobs"`
+		}
+		if err := yaml.Unmarshal(contents, &workflow); err != nil {
+			test.Fatalf("%s: %v", filepath.Base(file), err)
+		}
+		for name, job := range workflow.Jobs {
+			references := []string{job.Uses}
+			for _, step := range job.Steps {
+				references = append(references, step.Uses)
+			}
+			for _, reference := range references {
+				// Local actions and docker:// images are not resolved through a mutable tag on GitHub.
+				if reference == "" || strings.HasPrefix(reference, "./") {
+					continue
+				}
+				if !pinned.MatchString(reference) {
+					test.Errorf("%s job %s uses mutable action reference %q; pin it to a full-length commit SHA", filepath.Base(file), name, reference)
+				}
+			}
+		}
 	}
 }
 
@@ -252,7 +296,7 @@ func TestReleasePublishesChartImagesAndRuntimeProfiles(test *testing.T) {
 	for _, jobName := range []string{"images", "runtime-agent-image"} {
 		found := false
 		for _, step := range workflow.Jobs[jobName].Steps {
-			if step.Uses != "docker/build-push-action@v6" {
+			if !strings.HasPrefix(step.Uses, "docker/build-push-action@") {
 				continue
 			}
 			found = true
@@ -279,7 +323,7 @@ func TestReleasePublishesChartImagesAndRuntimeProfiles(test *testing.T) {
 	for _, jobName := range []string{"runtime-agent-image", "runtime-ingester-image"} {
 		found := false
 		for _, step := range workflow.Jobs[jobName].Steps {
-			if step.Uses == "docker/build-push-action@v6" &&
+			if strings.HasPrefix(step.Uses, "docker/build-push-action@") &&
 				(step.With["context"] != "." || !strings.Contains(step.With["build-args"], "KOGNITION_NOTICE_STRICT=true")) {
 				test.Errorf("%s must include root legal inputs and fail incomplete attribution before publishing", jobName)
 			}

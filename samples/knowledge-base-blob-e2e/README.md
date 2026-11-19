@@ -83,8 +83,8 @@ Run this profile from a runner that can reach the Storage account data plane:
 **Bash (Linux/macOS), with PowerShell 7 installed:**
 
 ```bash
-pwsh -NoProfile -File ./make.ps1 samples-provision-azure
-pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=knowledge-base-blob-e2e
+make samples-provision-azure
+make samples-install SAMPLE=knowledge-base-blob-e2e
 ```
 
 The provisioning target creates an isolated test Storage account, uploads the
@@ -169,7 +169,7 @@ resources:
 **Bash (Linux/macOS):**
 
 ```bash
-pwsh -NoProfile -File ./make.ps1 samples-install SAMPLE=knowledge-base-blob-e2e
+make samples-install SAMPLE=knowledge-base-blob-e2e
 ```
 
 Wait for the pipeline to finish:

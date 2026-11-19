@@ -282,6 +282,7 @@ const StudioResources = (() => {
           row.appendChild(input(s.items || {}, [...path, index], true));
           const remove = document.createElement("button");
           remove.type = "button";
+          remove.className = "action";
           remove.textContent = `Remove ${label} item ${index + 1}`;
           remove.addEventListener("click", () => { const next = [...get(path)]; next.splice(index, 1); set(path, next); render(); });
           row.appendChild(remove);
@@ -290,6 +291,7 @@ const StudioResources = (() => {
       };
       const add = document.createElement("button");
       add.type = "button";
+      add.className = "action";
       add.textContent = `Add ${label} item`;
       add.addEventListener("click", () => { set(path, [...(get(path) || []), empty(s.items || {})]); render(); });
       box.appendChild(add);
@@ -333,7 +335,8 @@ const StudioResources = (() => {
         }
       });
     } else {
-      const multiline = /content|instructions|template|rules|prompt|expression/i.test(String(path.at(-1)));
+      const multiline = /content|instructions|template|rules|prompt|expression|^data$/i.test(String(path.at(-1))) ||
+        (path.at(-2) === "instructions" && path.at(-1) === "inline");
       control = document.createElement(multiline ? "textarea" : "input");
       if (!multiline) control.type = "text";
       control.value = value ?? "";
@@ -408,12 +411,20 @@ const StudioResources = (() => {
   }
 
   function mapFields(body, itemSchema, path) {
-    for (const key of Object.keys(get(path) || {})) {
+    const keys = Object.keys(get(path) || {});
+    if (!keys.length) {
+      const hint = document.createElement("div");
+      hint.className = "hint";
+      hint.textContent = `No ${title(String(path.at(-1))).toLowerCase()} configured. Add a key, then enter its value.`;
+      body.appendChild(hint);
+    }
+    for (const key of keys) {
       const row = document.createElement("div");
       row.className = "schema-item";
       row.appendChild(input(itemSchema, [...path, key]));
       const remove = document.createElement("button");
       remove.type = "button";
+      remove.className = "action";
       remove.textContent = `Remove ${key}`;
       remove.addEventListener("click", () => { set([...path, key], undefined); body.replaceChildren(); mapFields(body, itemSchema, path); });
       row.appendChild(remove);
@@ -424,8 +435,11 @@ const StudioResources = (() => {
     const key = document.createElement("input");
     key.type = "text";
     key.setAttribute("aria-label", `${title(String(path.at(-1)))} entry key`);
+    key.placeholder = path.at(-1) === "labels" ? "e.g. app.kubernetes.io/part-of" :
+      path.at(-1) === "annotations" ? "e.g. tutorial.kognition.dev/description" : "Enter a unique key";
     const add = document.createElement("button");
     add.type = "button";
+    add.className = "action";
     add.textContent = "Add entry";
     add.addEventListener("click", () => {
       const name = key.value.trim();
@@ -439,7 +453,7 @@ const StudioResources = (() => {
       body.replaceChildren();
       mapFields(body, itemSchema, path);
     });
-    row.append(key, add);
+    row.append(field("New entry key", key), add);
     body.appendChild(row);
   }
 
