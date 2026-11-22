@@ -772,6 +772,10 @@ kbIngester:
   # ServiceAccount the ingester Pod runs as. Leave empty to use the KB
   # namespace's `default` ServiceAccount.
   serviceAccount: ""
+  # Directory where workload identity token files (AZURE_FEDERATED_TOKEN_FILE)
+  # must reside for ingestion tasks. Configured via KOGNITION_ALLOWED_TOKEN_FILE_DIR
+  # on the ingester container (defaults to /var/run/secrets).
+  allowedTokenFileDir: "/var/run/secrets"
   resources:
     requests:
       cpu: 100m

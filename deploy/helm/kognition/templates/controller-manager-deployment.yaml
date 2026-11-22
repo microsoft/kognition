@@ -101,6 +101,10 @@ spec:
           env:
             - name: KOGNITION_INGEST_LISTEN
               value: 127.0.0.1:8082
+            {{- if .Values.kbIngester.allowedTokenFileDir }}
+            - name: KOGNITION_ALLOWED_TOKEN_FILE_DIR
+              value: {{ .Values.kbIngester.allowedTokenFileDir | quote }}
+            {{- end }}
           readinessProbe:
             exec:
               command: ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/healthz', timeout=2)"]

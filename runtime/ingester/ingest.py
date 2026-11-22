@@ -118,7 +118,33 @@ def _max_document_bytes() -> int:
     return value
 
 
+_SERVICE_INDEXER_EXECUTABLE: str | None = None
+_SERVICE_ALLOW_PRIVATE_NETWORKS: bool | None = None
+
+
+def set_trusted_service_config(
+    *,
+    indexer_executable: str | None = None,
+    allow_private_networks: bool | None = None,
+) -> None:
+    """Configure trusted service settings at daemon startup."""
+    global _SERVICE_INDEXER_EXECUTABLE, _SERVICE_ALLOW_PRIVATE_NETWORKS
+    if indexer_executable is not None:
+        _SERVICE_INDEXER_EXECUTABLE = indexer_executable
+    if allow_private_networks is not None:
+        _SERVICE_ALLOW_PRIVATE_NETWORKS = allow_private_networks
+
+
+def reset_trusted_service_config() -> None:
+    """Reset trusted service settings to unconfigured state (for testing)."""
+    global _SERVICE_INDEXER_EXECUTABLE, _SERVICE_ALLOW_PRIVATE_NETWORKS
+    _SERVICE_INDEXER_EXECUTABLE = None
+    _SERVICE_ALLOW_PRIVATE_NETWORKS = None
+
+
 def _private_networks_allowed() -> bool:
+    if _SERVICE_ALLOW_PRIVATE_NETWORKS is not None:
+        return _SERVICE_ALLOW_PRIVATE_NETWORKS
     return os.environ.get("KOGNITION_INGEST_ALLOW_PRIVATE_NETWORKS", "").lower() == "true"
 
 
@@ -519,10 +545,11 @@ class Embedder:
         return vectors
 
 
-def _build_embedder(cfg: dict[str, Any], dimension: int) -> Embedder:
+def _build_embedder(cfg: dict[str, Any], dimension: int, env: dict[str, str] | None = None) -> Embedder:
     provider = (cfg.get("provider") or "openai").lower()
     model = cfg.get("model") or "text-embedding-3-small"
-    api_key = cfg.get("apiKey") or os.environ.get("OPENAI_API_KEY") or ""
+    active_env = {**os.environ, **env} if env is not None else os.environ
+    api_key = cfg.get("apiKey") or active_env.get("OPENAI_API_KEY") or ""
     base_url = cfg.get("baseUrl")
     requested_dimensions = cfg.get("dimensions")
     if requested_dimensions is not None and (
@@ -539,9 +566,9 @@ def _build_embedder(cfg: dict[str, Any], dimension: int) -> Embedder:
         # If no explicit apiKey but Azure service-principal creds are present in
         # the environment, mint an AAD token. This matches the runtime chat
         # path in runtime/agent/providers.py.
-        if not api_key and os.environ.get("AZURE_TENANT_ID"):
+        if not api_key and active_env.get("AZURE_TENANT_ID"):
             client = AzureOpenAI(
-                azure_ad_token_provider=_azure_ad_token_provider(),
+                azure_ad_token_provider=_azure_ad_token_provider(env=active_env),
                 azure_endpoint=endpoint,
                 api_version=api_version,
             )
@@ -573,16 +600,17 @@ def _azure_resource_root(endpoint: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
 
 
-def _build_azure_credential():
+def _build_azure_credential(env: dict[str, str] | None = None):
     """Select an azure-identity credential, mirroring the agent runtime and the
     Go Foundry driver: client-secret, workload-identity, managed-identity, or
     DefaultAzureCredential (default) for secretless auth on Azure. Driven by
     AZURE_CREDENTIAL_TYPE; falls back to a client secret when one is set,
     otherwise DefaultAzureCredential (managed identity / workload identity)."""
-    cred_type = os.environ.get("AZURE_CREDENTIAL_TYPE", "").strip().lower()
-    tenant_id = os.environ.get("AZURE_TENANT_ID", "")
-    client_id = os.environ.get("AZURE_CLIENT_ID", "")
-    client_secret = os.environ.get("AZURE_CLIENT_SECRET", "")
+    active_env = {**os.environ, **env} if env is not None else os.environ
+    cred_type = active_env.get("AZURE_CREDENTIAL_TYPE", "").strip().lower()
+    tenant_id = active_env.get("AZURE_TENANT_ID", "")
+    client_id = active_env.get("AZURE_CLIENT_ID", "")
+    client_secret = active_env.get("AZURE_CLIENT_SECRET", "")
 
     if cred_type == "client-secret" or (cred_type == "" and client_secret):
         from azure.identity import ClientSecretCredential
@@ -596,7 +624,7 @@ def _build_azure_credential():
         return WorkloadIdentityCredential(
             tenant_id=tenant_id or None,
             client_id=client_id or None,
-            token_file_path=os.environ.get("AZURE_FEDERATED_TOKEN_FILE"),
+            token_file_path=active_env.get("AZURE_FEDERATED_TOKEN_FILE"),
         )
     if cred_type == "managed-identity":
         from azure.identity import ManagedIdentityCredential
@@ -612,11 +640,12 @@ def _build_azure_credential():
 
 def _azure_ad_token_provider(
     scope: str = "https://cognitiveservices.azure.com/.default",
+    env: dict[str, str] | None = None,
 ) -> Callable[[], str]:
     """Token provider for Azure OpenAI embeddings. Supports client-secret,
     managed identity, and workload-identity federation via
     _build_azure_credential."""
-    credential = _build_azure_credential()
+    credential = _build_azure_credential(env=env)
 
     def get_token() -> str:
         return credential.get_token(scope).token
@@ -902,7 +931,7 @@ def _ingest_sources(
     }
 
 
-def ingest_task(task: dict[str, Any]) -> dict[str, Any]:
+def ingest_task(task: dict[str, Any], env: dict[str, str] | None = None) -> dict[str, Any]:
     """Execute one validated ingestion task and return aggregate statistics."""
     kb = task.get("kb") or {}
     namespace = kb.get("namespace") or "default"
@@ -920,7 +949,13 @@ def ingest_task(task: dict[str, Any]) -> dict[str, Any]:
         dimension = int(provider_index.get("dimension") or 0)
         if dimension < 1:
             raise ValueError("providerIndex.dimension must be positive")
-        embedder = _build_embedder(task.get("embedding") or {}, dimension)
+        if env is not None:
+            try:
+                embedder = _build_embedder(task.get("embedding") or {}, dimension, env=env)
+            except TypeError:
+                embedder = _build_embedder(task.get("embedding") or {}, dimension)
+        else:
+            embedder = _build_embedder(task.get("embedding") or {}, dimension)
         spool_path = os.environ.get(
             "KOGNITION_KNOWLEDGE_INDEX_SPOOL_FILE",
             "/var/run/kognition/index/chunks.jsonl",
@@ -942,7 +977,13 @@ def ingest_task(task: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("vectorStore.dsn is required")
     _validate_table_name(table)
 
-    embedder = _build_embedder(task.get("embedding") or {}, dimension)
+    if env is not None:
+        try:
+            embedder = _build_embedder(task.get("embedding") or {}, dimension, env=env)
+        except TypeError:
+            embedder = _build_embedder(task.get("embedding") or {}, dimension)
+    else:
+        embedder = _build_embedder(task.get("embedding") or {}, dimension)
     with psycopg.connect(dsn, autocommit=False) as conn:
         register_vector(conn)
         _ensure_schema(conn, table, dimension)
@@ -954,10 +995,13 @@ def ingest_task(task: dict[str, Any]) -> dict[str, Any]:
 
 
 def _invoke_provider_indexer() -> dict[str, Any]:
-    executable = os.environ.get(
-        "KOGNITION_KNOWLEDGE_INDEXER_EXECUTABLE",
-        "/app/kognition-knowledge-indexer",
-    )
+    if _SERVICE_INDEXER_EXECUTABLE is not None:
+        executable = _SERVICE_INDEXER_EXECUTABLE
+    else:
+        executable = os.environ.get(
+            "KOGNITION_KNOWLEDGE_INDEXER_EXECUTABLE",
+            "/app/kognition-knowledge-indexer",
+        )
     try:
         completed = subprocess.run(
             [executable],
