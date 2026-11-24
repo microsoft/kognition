@@ -56,7 +56,8 @@ func modelRejection(body []byte) (string, bool) {
 	if json.Unmarshal(body, &envelope) != nil {
 		return "", false
 	}
-	lowered := strings.ToLower(envelope.Message)
+	// Normalize typographic apostrophes, which some responses use ("isn’t").
+	lowered := strings.ReplaceAll(strings.ToLower(envelope.Message), "’", "'")
 	for _, marker := range modelRejectionMarkers {
 		if strings.Contains(lowered, marker) {
 			detail := envelope.Message
