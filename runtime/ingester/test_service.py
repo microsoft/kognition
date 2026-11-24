@@ -149,8 +149,9 @@ def test_registry_scopes_task_environment(monkeypatch):
     monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
 
     def execute(_payload, *args, **kwargs):
-        assert os.environ["AZURE_CLIENT_ID"] == "task-client"
-        assert os.environ["AZURE_CLIENT_SECRET"] == "task-secret"
+        assert kwargs["env"] == {"AZURE_CLIENT_ID": "task-client", "AZURE_CLIENT_SECRET": "task-secret"}
+        assert os.environ["AZURE_CLIENT_ID"] == "service-default"
+        assert "AZURE_CLIENT_SECRET" not in os.environ
         return {"documents": 0, "chunks": 0, "sourceDigest": "sha256:env"}
 
     monkeypatch.setattr(service.ingest, "ingest_task", execute)
@@ -327,8 +328,9 @@ def test_http_allows_legitimate_azure_environment(monkeypatch):
     observed = {}
 
     def execute(_payload, *args, **kwargs):
-        observed["client_id"] = os.environ.get("AZURE_CLIENT_ID")
-        observed["client_secret"] = os.environ.get("AZURE_CLIENT_SECRET")
+        observed["client_id"] = kwargs["env"].get("AZURE_CLIENT_ID")
+        observed["client_secret"] = kwargs["env"].get("AZURE_CLIENT_SECRET")
+        observed["process_secret"] = os.environ.get("AZURE_CLIENT_SECRET")
         return {"documents": 2, "chunks": 4, "sourceDigest": "sha256:legit"}
 
     monkeypatch.setattr(service.ingest, "ingest_task", execute)
@@ -366,6 +368,7 @@ def test_http_allows_legitimate_azure_environment(monkeypatch):
         assert status["state"] == "succeeded"
         assert observed["client_id"] == "azure-client-123"
         assert observed["client_secret"] == "azure-secret-456"
+        assert observed["process_secret"] is None
         assert "AZURE_CLIENT_ID" not in os.environ
         assert "AZURE_CLIENT_SECRET" not in os.environ
     finally:
@@ -380,11 +383,11 @@ def test_concurrent_tasks_do_not_leak_environment(monkeypatch):
 
     def execute(payload, *args, **kwargs):
         task_name = payload["kb"]["name"]
-        client_id = os.environ.get("AZURE_CLIENT_ID")
+        client_id = kwargs["env"]["AZURE_CLIENT_ID"]
         # Sleep to ensure execution windows overlap across threads
         time.sleep(0.05)
-        # Ensure under execution lock no other task has leaked its environment
-        assert os.environ.get("AZURE_CLIENT_ID") == client_id
+        # Neither task may expose its identity through the shared process environment
+        assert "AZURE_CLIENT_ID" not in os.environ
         observed[task_name] = client_id
         return {"documents": 1, "chunks": 1, "sourceDigest": f"sha256:{task_name}"}
 

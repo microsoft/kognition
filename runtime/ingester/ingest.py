@@ -712,7 +712,13 @@ def _build_azure_credential(env: dict[str, str] | None = None):
 
     from azure.identity import DefaultAzureCredential
 
-    return DefaultAzureCredential()
+    # Pass the task identity explicitly; the SDK would otherwise read only the daemon environment.
+    identity = {
+        "managed_identity_client_id": client_id,
+        "workload_identity_client_id": client_id,
+        "workload_identity_tenant_id": tenant_id,
+    }
+    return DefaultAzureCredential(**{name: value for name, value in identity.items() if value})
 
 
 def _azure_ad_token_provider(

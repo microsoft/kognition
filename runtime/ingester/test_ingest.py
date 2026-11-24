@@ -1184,6 +1184,23 @@ def test_ingester_credential_workload_identity(monkeypatch):
     assert cred.kwargs["token_file_path"] == "/t"
 
 
+def test_ingester_default_credential_receives_task_identity_explicitly(monkeypatch):
+    _patch_azure(monkeypatch)
+    _clear_azure_env(monkeypatch)
+
+    cred = ingest._build_azure_credential(
+        env={"AZURE_CREDENTIAL_TYPE": "default", "AZURE_CLIENT_ID": "c", "AZURE_TENANT_ID": "t"}
+    )
+
+    assert cred.kind == "default"
+    assert cred.kwargs == {
+        "managed_identity_client_id": "c",
+        "workload_identity_client_id": "c",
+        "workload_identity_tenant_id": "t",
+    }
+    assert "AZURE_CLIENT_ID" not in os.environ
+
+
 def test_ingester_credential_managed_identity(monkeypatch):
     _patch_azure(monkeypatch)
     _clear_azure_env(monkeypatch)

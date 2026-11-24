@@ -216,17 +216,9 @@ class TaskRegistry:
             if name in _ALLOWED_ENV_VARS and isinstance(value, str)
         }
         try:
+            # Tasks share the provider spool file, so they run one at a time.
             with _execution_lock:
-                previous = {name: os.environ.get(name) for name in safe_environment}
-                try:
-                    os.environ.update(safe_environment)
-                    summary = ingest.ingest_task(payload, env=safe_environment)
-                finally:
-                    for name, value in previous.items():
-                        if value is None:
-                            os.environ.pop(name, None)
-                        else:
-                            os.environ[name] = value
+                summary = ingest.ingest_task(payload, env=safe_environment)
             with self._lock:
                 status.state = "succeeded"
                 status.documents = int(summary.get("documents") or 0)
