@@ -16,6 +16,8 @@ import (
 
 	"github.com/kognition-ai/kognition/internal/apiserver"
 	"github.com/kognition-ai/kognition/internal/cpi"
+	"github.com/kognition-ai/kognition/internal/modelhealth"
+	"github.com/kognition-ai/kognition/internal/store"
 )
 
 type lifecycleServerStub struct {
@@ -235,6 +237,45 @@ func TestRunAPIServerCommand(t *testing.T) {
 			t.Fatalf("runAPIServerCommand: %v", err)
 		}
 	})
+}
+
+func TestStartModelHealthReporterPublishesAndStopWaitsForTheFinalPublish(t *testing.T) {
+	tracker := modelhealth.NewTracker()
+	sink := &publishRecorder{}
+	reporter := modelhealth.NewReporter(tracker, sink, "apiserver-test", zap.NewNop())
+
+	stop := startModelHealthReporter(context.Background(), reporter)
+	tracker.RecordCall(cpi.CallOutcome{Provider: "anthropic", Operation: cpi.OperationComplete, Model: "claude", Endpoint: "https://api.example"})
+	stop()
+
+	// stop() returns only after the final publish, so the outcome recorded just
+	// before shutdown must already be in the store.
+	published := sink.last()
+	if len(published) != 1 || published[0].Calls != 1 {
+		t.Fatalf("final publish = %+v, want the outcome recorded before stop()", published)
+	}
+}
+
+type publishRecorder struct {
+	mu      sync.Mutex
+	records []store.ModelCallHealth
+}
+
+func (p *publishRecorder) ReplaceModelCallHealth(_ context.Context, _ string, records []store.ModelCallHealth) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.records = records
+	return nil
+}
+
+func (p *publishRecorder) ListModelCallHealth(context.Context, time.Duration) ([]store.ModelCallHealth, error) {
+	return nil, nil
+}
+
+func (p *publishRecorder) last() []store.ModelCallHealth {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.records
 }
 
 func TestNewProductionRuntime(t *testing.T) {

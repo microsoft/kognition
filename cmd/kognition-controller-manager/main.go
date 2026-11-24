@@ -27,6 +27,7 @@ import (
 	"github.com/kognition-ai/kognition/internal/ingestion"
 	"github.com/kognition-ai/kognition/internal/invocation"
 	"github.com/kognition-ai/kognition/internal/modelgateway"
+	"github.com/kognition-ai/kognition/internal/modelhealth"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/opa"
 	"github.com/kognition-ai/kognition/internal/runtime"
@@ -150,6 +151,40 @@ func shutdownTracePipeline(pipeline *observability.TracePipeline, logger *zap.Lo
 	}
 }
 
+// passiveModelHealth wires passive model health into the controller manager: it
+// records the outcomes of the manager's own model calls, publishes them, and
+// reconciles Models whose real traffic no longer matches their status. It exists
+// only when the store can share health between processes; the methods of a nil
+// value do nothing.
+type passiveModelHealth struct {
+	sink    store.ModelCallHealthStore
+	tracker *modelhealth.Tracker
+}
+
+func newPassiveModelHealth(st store.Store) *passiveModelHealth {
+	sink, ok := st.(store.ModelCallHealthStore)
+	if !ok {
+		return nil
+	}
+	return &passiveModelHealth{sink: sink, tracker: modelhealth.NewTracker()}
+}
+
+// recorder adds the passive health tracker to base, which may be nil.
+func (p *passiveModelHealth) recorder(base cpi.CallRecorder) cpi.CallRecorder {
+	if p == nil {
+		return base
+	}
+	return cpi.Recorders(base, p.tracker)
+}
+
+func (p *passiveModelHealth) register(mgr *controller.Manager, st store.Store, modelController *controller.Controller, logger *zap.Logger) {
+	if p == nil {
+		return
+	}
+	mgr.AddRunnable(modelhealth.NewReporter(p.tracker, p.sink, modelhealth.NewReporterID(), logger))
+	mgr.AddRunnable(controller.NewModelHealthWatcher(st, p.sink, modelController.OnUpdate, logger))
+}
+
 // newCPIRegistry registers the built-in model drivers and reports their call
 // outcomes to recorder, which may be nil.
 func newCPIRegistry(recorder cpi.CallRecorder) *cpi.Registry {
@@ -228,7 +263,8 @@ func newControllerManagerWithWorkloadIdentity(st store.Store, logger *zap.Logger
 	}
 
 	// Register the AgentInstance reconciler.
-	registry := newCPIRegistry(cpiRecorder)
+	passiveHealth := newPassiveModelHealth(st)
+	registry := newCPIRegistry(passiveHealth.recorder(cpiRecorder))
 
 	cpiDispatcher := controller.NewCPIDispatcher(st, registry, logger.Named("cpi-dispatcher"))
 	if usageWriter != nil {
@@ -501,12 +537,13 @@ func newControllerManagerWithWorkloadIdentity(st store.Store, logger *zap.Logger
 
 	// Register the Model reconciler.
 	modelReconciler := controller.NewModelReconciler(st, registry, logger.Named("model-reconciler"))
-	mgr.Register(controller.ControllerConfig{
+	modelController := mgr.Register(controller.ControllerConfig{
 		Name:       "model-controller",
 		Kind:       "Model",
 		Reconciler: modelReconciler,
 		Workers:    2,
 	})
+	passiveHealth.register(mgr, st, modelController, logger)
 
 	// Register the ModelClass reconciler.
 	modelClassReconciler := controller.NewModelClassReconciler(st, registry, logger.Named("model-class-reconciler"))

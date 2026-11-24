@@ -30,6 +30,7 @@ import (
 	"github.com/kognition-ai/kognition/internal/cpi/drivers/openai"
 	"github.com/kognition-ai/kognition/internal/invocation"
 	"github.com/kognition-ai/kognition/internal/modelgateway"
+	"github.com/kognition-ai/kognition/internal/modelhealth"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/opa"
 	"github.com/kognition-ai/kognition/internal/runtime"
@@ -136,7 +137,8 @@ func newProductionRuntime(ctx context.Context, logger *zap.Logger, registry *cpi
 	}
 	st := newPostgresStore(pool, logger.Named("store"))
 	metricsRegistry := prometheus.NewRegistry()
-	registry.Observe(observability.NewCPICallMetrics(metricsRegistry))
+	callTracker := modelhealth.NewTracker()
+	registry.Observe(cpi.Recorders(observability.NewCPICallMetrics(metricsRegistry), callTracker))
 	usageWriter := observability.NewModelUsageMetrics(metricsRegistry).Wrap(st)
 	auditStore := observability.NewTrustDecisionMetrics(metricsRegistry).Wrap(st)
 	bindingKeys, err := runtimeapproval.BindingKeyStoreFromJSON(os.Getenv(runtimeapproval.BindingKeysEnvironmentVariable))
@@ -202,17 +204,38 @@ func newProductionRuntime(ctx context.Context, logger *zap.Logger, registry *cpi
 		apiserver.WithAuditLog(observability.NewCognitiveAuditLog(auditStore)),
 	)
 	options = append(options, apiserver.WithChatTracing(tracePipeline.Tracer, tracePipeline.Collector))
+	stopReporter := func() {}
 	return &apiServerRuntime{
 		server:   newAPIServer(serverConfigFromEnv(), st, logger.Named("apiserver"), options...),
 		listener: st,
 		initialize: func(ctx context.Context) error {
-			return st.ActivateRuntimeApprovalBindingKeys(ctx, bindingKeys)
+			if err := st.ActivateRuntimeApprovalBindingKeys(ctx, bindingKeys); err != nil {
+				return err
+			}
+			stopReporter = startModelHealthReporter(ctx, modelhealth.NewReporter(callTracker, st, modelhealth.NewReporterID(), logger))
+			return nil
 		},
 		closePool: func() {
+			stopReporter()
 			shutdownTracePipeline(tracePipeline, logger)
 			pool.Close()
 		},
 	}, nil
+}
+
+// startModelHealthReporter publishes passive model health in the background until
+// the returned function is called, which waits for the final publish.
+func startModelHealthReporter(ctx context.Context, reporter *modelhealth.Reporter) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = reporter.Start(ctx)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 func serverConfigFromEnv() apiserver.Config {
