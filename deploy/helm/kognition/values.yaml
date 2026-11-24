@@ -772,6 +772,25 @@ kbIngester:
   # ServiceAccount the ingester Pod runs as. Leave empty to use the KB
   # namespace's `default` ServiceAccount.
   serviceAccount: ""
+  # Directory where workload identity token files (AZURE_FEDERATED_TOKEN_FILE)
+  # must reside for ingestion tasks. Configured via KOGNITION_ALLOWED_TOKEN_FILE_DIR
+  # on the ingester container (defaults to /var/run/secrets).
+  allowedTokenFileDir: "/var/run/secrets"
+  # Embedding endpoint hostnames that may receive the ingester's own OpenAI key
+  # or Azure AD token (KOGNITION_INGEST_TRUSTED_EMBEDDING_HOSTS). api.openai.com
+  # and Azure OpenAI hosts are always trusted; Models that bring their own
+  # credentialRef key never need an entry.
+  trustedEmbeddingHosts: []
+  # Limit the ingester's Azure AD token to the hosts listed above instead of every
+  # Azure OpenAI host (KOGNITION_INGEST_STRICT_AZURE_HOSTS). Enable when KnowledgeBase
+  # authors are less trusted than the operator.
+  strictAzureHosts: false
+  # Authenticate controller-to-ingester calls with a bearer token. Point existingSecret
+  # at a Secret holding a token of at least 32 characters under `key`; the chart
+  # injects it into both containers. The loopback-only sidecar works without it.
+  auth:
+    existingSecret: ""
+    key: token
   resources:
     requests:
       cpu: 100m

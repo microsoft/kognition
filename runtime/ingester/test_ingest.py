@@ -241,12 +241,11 @@ def test_fetch_blob_without_provider_is_unsupported():
 
 
 def _install_http_transport(monkeypatch, handler):
-    real_client = httpx.Client
-    transport = httpx.MockTransport(handler)
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    # Replace only the network hop so the pinned transport still runs.
     monkeypatch.setattr(
-        ingest.httpx,
-        "Client",
-        lambda **kwargs: real_client(transport=transport, **kwargs),
+        httpx.HTTPTransport, "handle_request", lambda self, request: handler(request)
     )
     monkeypatch.setattr(
         ingest.socket,
@@ -417,11 +416,208 @@ def test_fetch_git_bounds_files_and_cleans_temporary_clone(monkeypatch):
             )
         )
 
-    assert commands[0][0:6] == [
-        "git", "clone", "--depth", "1", "--branch", "release/v1"
+    command = commands[0]
+    assert command[command.index("clone") + 1 : command.index("--")] == [
+        "--depth", "1", "--branch", "release/v1"
     ]
-    assert commands[0][6] == "--"
+    assert command[command.index("--") + 1] == "https://example.test/repo.git"
     assert all(not os.path.exists(path) for path in clone_directories)
+
+
+def test_git_clone_command_restricts_protocols_redirects_and_symlinks():
+    command = ingest._git_clone_command("main", "https://example.test/repo.git", "/tmp/dest")
+
+    options = [command[i + 1] for i, part in enumerate(command) if part == "-c"]
+    assert command.index("clone") > max(i for i, part in enumerate(command) if part == "-c")
+    assert {
+        "protocol.allow=never",
+        "protocol.https.allow=always",
+        "http.followRedirects=false",
+        "core.symlinks=false",
+    } <= set(options)
+    assert command[-3:] == ["--", "https://example.test/repo.git", "/tmp/dest"]
+
+
+def test_fetch_git_runs_clone_with_scrubbed_environment(monkeypatch):
+    import subprocess
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-daemon")
+    seen = {}
+
+    def fake_run(command, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(command, 0)
+
+    _allow_public_git_host(monkeypatch)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert list(ingest._fetch_git({"url": "https://example.test/repo.git"})) == []
+    assert "OPENAI_API_KEY" not in seen["env"]
+    assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_git_environment_withholds_daemon_credentials(monkeypatch, tmp_path):
+    for name, value in {
+        "OPENAI_API_KEY": "sk-daemon",
+        "AZURE_CLIENT_SECRET": "azure-daemon",
+        "PGPASSWORD": "pg-daemon",
+        "GIT_ASKPASS": "/bin/steal",
+        "HTTPS_PROXY": "http://proxy.internal:3128",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    environment = ingest._git_environment(str(tmp_path))
+
+    assert environment["HTTPS_PROXY"] == "http://proxy.internal:3128"
+    assert environment["HOME"] == str(tmp_path)
+    assert environment["GIT_TERMINAL_PROMPT"] == "0"
+    assert environment["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert environment["GIT_CONFIG_GLOBAL"] == os.devnull
+    for name in ("OPENAI_API_KEY", "AZURE_CLIENT_SECRET", "PGPASSWORD", "GIT_ASKPASS"):
+        assert name not in environment
+
+
+def _allow_public_git_host(monkeypatch):
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+
+
+def _fake_git_clone(monkeypatch, populate):
+    import subprocess
+
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        populate(command[-1])
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return commands
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["../outside", "docs/../../outside", "..\\outside", "docs\\..\\..\\outside", ".."],
+)
+def test_fetch_git_rejects_path_that_leaves_the_repository(monkeypatch, path):
+    _allow_public_git_host(monkeypatch)
+    commands = _fake_git_clone(monkeypatch, lambda directory: None)
+
+    with pytest.raises(ValueError, match="inside the repository"):
+        list(ingest._fetch_git({"url": "https://example.test/repo.git", "path": path}))
+
+    assert commands == []
+
+
+def test_fetch_git_does_not_read_symlinked_files_outside_the_clone(monkeypatch, tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOP-SECRET-VALUE", encoding="utf-8")
+
+    def populate(directory):
+        with open(os.path.join(directory, "notes.md"), "w", encoding="utf-8") as notes:
+            notes.write("public notes")
+        try:
+            os.symlink(secret, os.path.join(directory, "stolen.md"))
+        except (OSError, NotImplementedError):
+            pytest.skip("symbolic links are not available")
+
+    _allow_public_git_host(monkeypatch)
+    _fake_git_clone(monkeypatch, populate)
+
+    documents = list(ingest._fetch_git({"url": "https://example.test/repo.git"}))
+
+    assert [text for text, _ in documents] == ["public notes"]
+    assert all("stolen.md" not in citation for _, citation in documents)
+
+
+def test_fetch_git_rejects_symlinked_subpath_outside_the_clone(monkeypatch, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "doc.md").write_text("TOP-SECRET-VALUE", encoding="utf-8")
+
+    def populate(directory):
+        try:
+            os.symlink(outside, os.path.join(directory, "docs"), target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symbolic links are not available")
+
+    _allow_public_git_host(monkeypatch)
+    _fake_git_clone(monkeypatch, populate)
+
+    with pytest.raises(ValueError, match="inside the repository"):
+        list(ingest._fetch_git({"url": "https://example.test/repo.git", "path": "docs"}))
+
+
+def test_fetch_git_skips_files_reported_as_links(monkeypatch):
+    def populate(directory):
+        for name, text in (("notes.md", "public notes"), ("linked.md", "TOP-SECRET-VALUE")):
+            with open(os.path.join(directory, name), "w", encoding="utf-8") as doc:
+                doc.write(text)
+
+    real_islink = os.path.islink
+    monkeypatch.setattr(
+        ingest.os.path, "islink", lambda p: os.path.basename(p) == "linked.md" or real_islink(p)
+    )
+    _allow_public_git_host(monkeypatch)
+    _fake_git_clone(monkeypatch, populate)
+
+    documents = list(ingest._fetch_git({"url": "https://example.test/repo.git"}))
+
+    assert [text for text, _ in documents] == ["public notes"]
+
+
+def test_fetch_git_rejects_subpath_that_resolves_outside_the_clone(monkeypatch, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "doc.md").write_text("TOP-SECRET-VALUE", encoding="utf-8")
+
+    def populate(directory):
+        os.makedirs(os.path.join(directory, "docs"))
+
+    real_realpath = os.path.realpath
+    monkeypatch.setattr(
+        ingest.os.path,
+        "realpath",
+        lambda p, *a, **k: str(outside) if os.path.basename(p) == "docs" else real_realpath(p, *a, **k),
+    )
+    _allow_public_git_host(monkeypatch)
+    _fake_git_clone(monkeypatch, populate)
+
+    with pytest.raises(ValueError, match="inside the repository"):
+        list(ingest._fetch_git({"url": "https://example.test/repo.git", "path": "docs"}))
+
+
+def test_is_within_treats_unrelated_or_mixed_paths_as_outside(tmp_path):
+    root = os.path.realpath(tmp_path)
+
+    assert ingest._is_within(os.path.join(root, "a", "b"), root)
+    assert ingest._is_within(root, root)
+    assert not ingest._is_within(os.path.dirname(root), root)
+    assert not ingest._is_within("relative", root)
+
+
+def test_fetch_git_reads_documents_below_a_valid_subpath(monkeypatch):
+    def populate(directory):
+        os.makedirs(os.path.join(directory, "docs", "guide"))
+        with open(os.path.join(directory, "docs", "guide", "a.md"), "w", encoding="utf-8") as doc:
+            doc.write("guide text")
+
+    _allow_public_git_host(monkeypatch)
+    _fake_git_clone(monkeypatch, populate)
+
+    documents = list(
+        ingest._fetch_git({"url": "https://example.test/repo.git", "path": "/docs/"})
+    )
+
+    assert [(text, citation.rsplit("#", 1)[1]) for text, citation in documents] == [
+        ("guide text", os.path.join("docs", "guide", "a.md"))
+    ]
 
 
 # --------------------------- _fetch_s3_blob (faked boto3) --------------------
@@ -749,7 +945,7 @@ def test_ingest_task_provider_mode_completes_spool_before_secure_transport(
     monkeypatch.setattr(
         ingest,
         "_build_embedder",
-        lambda config, dimension: object(),
+        lambda config, dimension, env=None: object(),
     )
     summary = {
         "documents": 1,
@@ -792,7 +988,9 @@ def test_ingest_task_provider_mode_aborts_partial_spool_on_failure(
 ):
     spool = tmp_path / "chunks.jsonl"
     monkeypatch.setenv("KOGNITION_KNOWLEDGE_INDEX_SPOOL_FILE", str(spool))
-    monkeypatch.setattr(ingest, "_build_embedder", lambda config, dimension: object())
+    monkeypatch.setattr(
+        ingest, "_build_embedder", lambda config, dimension, env=None: object()
+    )
     monkeypatch.setattr(
         ingest,
         "_ingest_sources",
@@ -806,6 +1004,32 @@ def test_ingest_task_provider_mode_aborts_partial_spool_on_failure(
 
     assert not spool.exists()
     assert not list(tmp_path.glob(".kognition-spool-*"))
+
+
+@pytest.mark.parametrize(
+    "task",
+    [
+        {"kb": {"name": "kb"}, "providerIndex": {"dimension": 3}},
+        {"kb": {"name": "kb"}, "vectorStore": {"dsn": "postgres://unused"}},
+    ],
+    ids=["provider-index", "vector-store"],
+)
+def test_ingest_task_propagates_embedder_type_error_without_retry(
+    monkeypatch, tmp_path, task
+):
+    monkeypatch.setenv("KOGNITION_KNOWLEDGE_INDEX_SPOOL_FILE", str(tmp_path / "chunks.jsonl"))
+    calls = []
+
+    def build(config, dimension, env=None):
+        calls.append(env)
+        raise TypeError("credential construction failed")
+
+    monkeypatch.setattr(ingest, "_build_embedder", build)
+
+    with pytest.raises(TypeError, match="credential construction failed"):
+        ingest.ingest_task(task, env={"AZURE_CREDENTIAL_TYPE": "managed-identity"})
+
+    assert calls == [{"AZURE_CREDENTIAL_TYPE": "managed-identity"}]
 
 
 def test_ingest_task_rejects_multiple_index_backends():
@@ -843,6 +1067,220 @@ def test_build_embedder_honors_provider_and_model():
     assert emb.provider == "azure_openai"
     assert emb.model == "text-embedding-3-large"
     assert emb.dimension == 3072
+
+
+@pytest.fixture
+def embedding_env(monkeypatch):
+    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "AZURE_TENANT_ID", "AZURE_CLIENT_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
+    )
+    ingest.reset_trusted_service_config()
+    yield monkeypatch
+    ingest.reset_trusted_service_config()
+
+
+def test_embedder_sends_daemon_openai_key_only_to_default_endpoint(embedding_env):
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+
+    default = ingest._build_embedder({}, 3)
+    explicit = ingest._build_embedder({"baseUrl": "https://api.openai.com/v1"}, 3)
+
+    assert default.client.api_key == "sk-daemon"
+    assert explicit.client.api_key == "sk-daemon"
+
+
+def test_embedder_withholds_daemon_openai_key_from_other_endpoints(embedding_env):
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+
+    with pytest.raises(ValueError, match="requires an API key"):
+        ingest._build_embedder({"baseUrl": "https://attacker.example/v1"}, 3)
+
+
+def test_embedder_still_uses_payload_key_for_custom_endpoint(embedding_env):
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+
+    emb = ingest._build_embedder(
+        {"baseUrl": "https://llm.example/v1", "apiKey": "sk-model-secret"}, 3
+    )
+
+    assert emb.client.api_key == "sk-model-secret"
+
+
+def test_embedder_uses_daemon_key_for_operator_trusted_host(embedding_env):
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+    ingest.set_trusted_service_config(trusted_embedding_hosts=["llm.internal.example"])
+
+    emb = ingest._build_embedder({"baseUrl": "https://llm.internal.example/v1"}, 3)
+
+    assert emb.client.api_key == "sk-daemon"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://attacker.example",
+        "https://evilopenai.azure.com",
+        "https://acct.openai.azure.com.attacker.example",
+        "https://attacker.example/acct.openai.azure.com",
+    ],
+)
+def test_embedder_never_mints_azure_token_for_untrusted_endpoint(embedding_env, base_url):
+    minted = []
+    embedding_env.setattr(
+        ingest,
+        "_azure_ad_token_provider",
+        lambda *a, **k: minted.append(1) or (lambda: "token"),
+    )
+
+    with pytest.raises(ValueError, match="Azure AD credentials"):
+        ingest._build_embedder(
+            {"provider": "azure_openai", "baseUrl": base_url},
+            3,
+            env={"AZURE_TENANT_ID": "tenant"},
+        )
+
+    assert minted == []
+
+
+def test_embedder_mints_azure_token_for_azure_openai_endpoint(embedding_env):
+    seen = []
+    embedding_env.setattr(
+        ingest,
+        "_azure_ad_token_provider",
+        lambda *a, **k: seen.append(k.get("env")) or (lambda: "token"),
+    )
+
+    emb = ingest._build_embedder(
+        {"provider": "azure_openai", "baseUrl": "https://acct.openai.azure.com/openai"},
+        3,
+        env={"AZURE_TENANT_ID": "tenant"},
+    )
+
+    assert emb.provider == "azure_openai"
+    assert len(seen) == 1
+
+
+def test_embedder_never_sends_daemon_openai_key_to_azure_suffix_host(embedding_env):
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+    embedding_env.setattr(ingest, "_azure_ad_token_provider", lambda *a, **k: (lambda: "token"))
+
+    emb = ingest._build_embedder(
+        {"provider": "azure_openai", "baseUrl": "https://acct.openai.azure.com/openai"},
+        3,
+        env={"AZURE_TENANT_ID": "tenant"},
+    )
+
+    assert emb.client.api_key != "sk-daemon"
+
+    with pytest.raises(ValueError, match="requires an API key"):
+        ingest._build_embedder(
+            {"provider": "azure_openai", "baseUrl": "https://acct.openai.azure.com/openai"}, 3
+        )
+
+
+def test_strict_azure_hosts_limit_token_to_operator_listed_hosts(embedding_env):
+    minted = []
+    embedding_env.setattr(
+        ingest,
+        "_azure_ad_token_provider",
+        lambda *a, **k: minted.append(1) or (lambda: "token"),
+    )
+    cfg = {"provider": "azure_openai", "baseUrl": "https://acct.openai.azure.com/openai"}
+    env = {"AZURE_TENANT_ID": "tenant"}
+
+    ingest.set_trusted_service_config(strict_azure_hosts=True)
+    with pytest.raises(ValueError, match="Azure AD credentials"):
+        ingest._build_embedder(cfg, 3, env=env)
+    assert minted == []
+
+    ingest.set_trusted_service_config(
+        strict_azure_hosts=True, trusted_embedding_hosts=["acct.openai.azure.com"]
+    )
+    assert ingest._build_embedder(cfg, 3, env=env).provider == "azure_openai"
+    assert minted == [1]
+
+
+def test_strict_azure_hosts_do_not_affect_payload_keys_or_default_openai(embedding_env):
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+    ingest.set_trusted_service_config(strict_azure_hosts=True)
+
+    azure = ingest._build_embedder(
+        {"provider": "azure_openai", "baseUrl": "https://acct.openai.azure.com", "apiKey": "k"}, 3
+    )
+    openai = ingest._build_embedder({}, 3)
+
+    assert azure.client.api_key == "k"
+    assert openai.client.api_key == "sk-daemon"
+
+
+def test_embedder_allows_payload_key_on_non_azure_host_for_azure_provider(embedding_env):
+    emb = ingest._build_embedder(
+        {"provider": "azure_openai", "baseUrl": "https://gateway.example", "apiKey": "k"}, 3
+    )
+
+    assert emb.provider == "azure_openai"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://169.254.169.254/latest",
+        "https://169.254.169.254/latest",
+        "https://127.0.0.1:8443/v1",
+        "https://user:pass@attacker.example/v1",
+        "file:///etc/passwd",
+    ],
+)
+def test_embedder_rejects_unsafe_endpoints(embedding_env, base_url):
+    with pytest.raises(ValueError):
+        ingest._build_embedder({"baseUrl": base_url, "apiKey": "k"}, 3)
+
+
+def test_embedder_rejects_endpoint_resolving_to_private_address(embedding_env):
+    embedding_env.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))],
+    )
+
+    with pytest.raises(ValueError, match="publicly routable"):
+        ingest._build_embedder({"baseUrl": "https://rebind.example/v1", "apiKey": "k"}, 3)
+
+
+def test_embedder_allows_private_endpoint_when_operator_trusts_the_host(embedding_env):
+    embedding_env.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))],
+    )
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+    ingest.set_trusted_service_config(trusted_embedding_hosts=["vllm.internal.example"])
+
+    emb = ingest._build_embedder({"baseUrl": "https://vllm.internal.example/v1"}, 3)
+
+    assert emb.provider == "openai"
+
+
+def test_embedder_does_not_follow_redirects(embedding_env):
+    openai = ingest._build_embedder({"baseUrl": "https://llm.example/v1", "apiKey": "k"}, 3)
+    azure = ingest._build_embedder(
+        {"provider": "azure_openai", "baseUrl": "https://acct.openai.azure.com", "apiKey": "k"}, 3
+    )
+
+    assert openai.client._client.follow_redirects is False
+    assert azure.client._client.follow_redirects is False
+
+
+def test_deterministic_embedder_ignores_endpoint(embedding_env):
+    emb = ingest._build_embedder(
+        {"provider": "deterministic", "baseUrl": "https://169.254.169.254"}, 3
+    )
+
+    assert emb.provider == "deterministic"
 
 
 # --------------------------- _build_azure_credential -------------------------
@@ -900,8 +1338,201 @@ def test_ingester_credential_workload_identity(monkeypatch):
     assert cred.kwargs["token_file_path"] == "/t"
 
 
+def test_ingester_default_credential_receives_task_identity_explicitly(monkeypatch):
+    _patch_azure(monkeypatch)
+    _clear_azure_env(monkeypatch)
+
+    cred = ingest._build_azure_credential(
+        env={"AZURE_CREDENTIAL_TYPE": "default", "AZURE_CLIENT_ID": "c", "AZURE_TENANT_ID": "t"}
+    )
+
+    assert cred.kind == "default"
+    assert cred.kwargs == {
+        "managed_identity_client_id": "c",
+        "workload_identity_client_id": "c",
+        "workload_identity_tenant_id": "t",
+    }
+    assert "AZURE_CLIENT_ID" not in os.environ
+
+
 def test_ingester_credential_managed_identity(monkeypatch):
     _patch_azure(monkeypatch)
     _clear_azure_env(monkeypatch)
     monkeypatch.setenv("AZURE_CREDENTIAL_TYPE", "managed-identity")
     assert ingest._build_azure_credential().kind == "managed-identity"
+
+
+# --------------------------- DNS-rebinding pinning ---------------------------
+
+
+@pytest.fixture
+def pinned_env(monkeypatch):
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    ingest.reset_trusted_service_config()
+    monkeypatch.setattr(ingest, "_private_networks_allowed", lambda: False)
+    sent = []
+
+    def fake_handle(self, request):
+        sent.append(request)
+        return httpx.Response(200, request=request, content=b"ok")
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", fake_handle)
+    yield monkeypatch, sent
+    ingest.reset_trusted_service_config()
+
+
+def _resolve_to(monkeypatch, *addresses):
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 443)) for a in addresses],
+    )
+
+
+def test_pinned_client_connects_to_validated_address_and_keeps_hostname(pinned_env):
+    monkeypatch, sent = pinned_env
+    _resolve_to(monkeypatch, "93.184.216.34")
+
+    with ingest._pinned_http_client() as client:
+        client.get("https://docs.example/page")
+
+    assert sent[0].url.host == "93.184.216.34"
+    assert sent[0].headers["host"] == "docs.example"
+    assert sent[0].extensions["sni_hostname"] == "docs.example"
+
+
+def test_pinned_client_resolves_again_for_every_request(pinned_env):
+    monkeypatch, sent = pinned_env
+    answers = [["93.184.216.34"], ["10.0.0.5"]]
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 443)) for a in answers.pop(0)],
+    )
+
+    with ingest._pinned_http_client() as client:
+        client.get("https://rebind.example/")
+        with pytest.raises(ValueError, match="publicly routable"):
+            client.get("https://rebind.example/")
+
+    assert len(sent) == 1
+
+
+def test_pinned_client_rejects_mixed_public_and_private_answers(pinned_env):
+    monkeypatch, sent = pinned_env
+    _resolve_to(monkeypatch, "93.184.216.34", "169.254.169.254")
+
+    with ingest._pinned_http_client() as client, pytest.raises(ValueError, match="publicly routable"):
+        client.get("https://mixed.example/")
+
+    assert sent == []
+
+
+def test_pinned_client_leaves_literal_public_addresses_unchanged(pinned_env):
+    _, sent = pinned_env
+
+    with ingest._pinned_http_client() as client:
+        client.get("https://93.184.216.34/")
+        with pytest.raises(ValueError, match="publicly routable"):
+            client.get("https://169.254.169.254/")
+
+    assert [r.url.host for r in sent] == ["93.184.216.34"]
+    assert "sni_hostname" not in sent[0].extensions
+
+
+def test_pinned_client_exempts_only_listed_hosts_and_private_network_opt_in(pinned_env):
+    monkeypatch, sent = pinned_env
+    _resolve_to(monkeypatch, "10.0.0.5")
+
+    with ingest._pinned_http_client(exempt_hosts=lambda: frozenset({"vllm.internal"})) as client:
+        client.get("https://vllm.internal/")
+        with pytest.raises(ValueError, match="publicly routable"):
+            client.get("https://other.internal/")
+    assert sent[0].url.host == "vllm.internal"
+
+    monkeypatch.setattr(ingest, "_private_networks_allowed", lambda: True)
+    with ingest._pinned_http_client() as client:
+        client.get("https://other.internal/")
+    assert sent[1].url.host == "other.internal"
+
+
+def test_pinned_client_uses_default_handling_behind_a_proxy(pinned_env):
+    monkeypatch, _ = pinned_env
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.internal:3128")
+
+    with ingest._pinned_http_client() as client:
+        assert not isinstance(client._transport, ingest._PinnedTransport)
+        assert client.follow_redirects is False
+
+
+def test_fetch_url_connects_to_the_validated_address(pinned_env):
+    monkeypatch, sent = pinned_env
+    _resolve_to(monkeypatch, "93.184.216.34")
+
+    documents = list(ingest._fetch_url({"uri": "https://docs.example/page.txt"}))
+
+    assert documents == [("ok", "https://docs.example/page.txt")]
+    assert sent[0].url.host == "93.184.216.34"
+
+
+def test_embedding_clients_are_pinned_and_exempt_only_operator_hosts(embedding_env):
+    embedding_env.delenv("HTTPS_PROXY", raising=False)
+    embedding_env.delenv("https_proxy", raising=False)
+    embedding_env.delenv("ALL_PROXY", raising=False)
+    embedding_env.delenv("HTTP_PROXY", raising=False)
+    embedding_env.delenv("http_proxy", raising=False)
+    ingest.set_trusted_service_config(trusted_embedding_hosts=["vllm.internal.example"])
+
+    emb = ingest._build_embedder({"baseUrl": "https://llm.example/v1", "apiKey": "k"}, 3)
+    transport = emb.client._client._transport
+
+    assert isinstance(transport, ingest._PinnedTransport)
+    assert transport._exempt_hosts() == frozenset({"vllm.internal.example"})
+
+
+def test_fetch_url_follows_relative_redirect_on_original_hostname(pinned_env):
+    monkeypatch, sent = pinned_env
+    _resolve_to(monkeypatch, "93.184.216.34")
+
+    def fake_handle(self, request):
+        sent.append(request)
+        if request.url.path == "/old":
+            return httpx.Response(302, headers={"location": "/new"}, request=request)
+        return httpx.Response(200, request=request, content=b"moved")
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", fake_handle)
+
+    documents = list(ingest._fetch_url({"uri": "https://docs.example/old"}))
+
+    assert documents == [("moved", "https://docs.example/old")]
+    assert [r.headers["host"] for r in sent] == ["docs.example", "docs.example"]
+    assert [r.url.host for r in sent] == ["93.184.216.34", "93.184.216.34"]
+
+def test_pinned_client_brackets_ipv6_answers(pinned_env):
+    monkeypatch, sent = pinned_env
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2606:2800:220:1::1", 443, 0, 0))],
+    )
+
+    with ingest._pinned_http_client() as client:
+        client.get("https://docs.example:8443/page")
+
+    assert str(sent[0].url) == "https://[2606:2800:220:1::1]:8443/page"
+    assert sent[0].headers["host"] == "docs.example:8443"
+
+
+def test_fetch_url_never_reuses_connections_across_redirect_hostnames(monkeypatch):
+    captured = {}
+
+    def fake_client(**kwargs):
+        captured.update(kwargs)
+        return httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=b"ok")))
+
+    monkeypatch.setattr(ingest, "_pinned_http_client", fake_client)
+    monkeypatch.setattr(ingest, "_validate_remote_url", lambda *_a, **_k: None)
+
+    assert list(ingest._fetch_url({"uri": "https://docs.example/a.txt"}))
+    assert captured["limits"].max_keepalive_connections == 0
