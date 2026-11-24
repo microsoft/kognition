@@ -28,6 +28,7 @@
 {{- $workflowExecutorEnabled := dig "enabled" false $workflowExecutor }}
 {{- $collaboration := include "kognition.workflowCollaboration" . | fromJson }}
 {{- $collaborationEnabled := dig "enabled" false $collaboration }}
+{{- $externalAgents := include "kognition.externalAgents" . | fromJson }}
 {{- if $workflowExecutorEnabled }}
 {{- if or (not .Values.webhook.enabled) (ne .Values.webhook.failurePolicy "Fail") (lt (int .Values.k8sController.replicaCount) 1) }}
 {{- fail "workflowExecutor requires fail-closed admission and k8sController.replicaCount >= 1 (the controller starts at replicaCount after checked activation)" }}
@@ -107,6 +108,12 @@ spec:
             {{- if $collaborationEnabled }}
             - name: KOGNITION_WORKFLOW_COLLABORATION_ENABLED
               value: "true"
+            {{- if $externalAgents.enabled }}
+            - name: KOGNITION_EXTERNAL_AGENTS_ENABLED
+              value: "true"
+            - name: KOGNITION_EXTERNAL_AGENT_ALLOWLIST
+              value: {{ $externalAgents.egressAllowList | join "," | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if $pluginHostEnabled }}

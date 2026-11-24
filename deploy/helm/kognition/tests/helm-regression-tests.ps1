@@ -193,6 +193,28 @@ foreach ($invalid in @(
 )) {
     Assert-HelmTemplateFails -SetValues ($collaborationValues + $invalid) -Pattern @("collaboration", "Additional property") -TestName "Collaboration rejects $invalid"
 }
+Assert-NotContains $collaboration "KOGNITION_EXTERNAL_AGENTS_ENABLED" "ExternalAgent is off unless explicitly enabled"
+Assert-NotContains $collaboration "KOGNITION_EXTERNAL_AGENT_ALLOWLIST" "ExternalAgent allow-list is not rendered unless enabled"
+$externalAgentValues = $collaborationValues + @(
+    "networkPolicy.enabled=true",
+    "k8sController.workflowExecutor.collaboration.externalAgents.enabled=true",
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[0]=agents.partner.example:8443",
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[1]=*.partners.example:443"
+)
+$externalAgents = Invoke-HelmTemplate -SetValues $externalAgentValues
+Assert-Contains $externalAgents "KOGNITION_EXTERNAL_AGENTS_ENABLED" "ExternalAgent switch is rendered when enabled"
+Assert-Contains $externalAgents 'value: "agents.partner.example:8443,*.partners.example:443"' "Controller and webhooks receive the identical allow-list"
+Assert-RegexMatch $externalAgents '(?s)name: test-release-kognition-k8s-controller\r?\n(?:(?!\r?\n---).)*?except:\s+- 10\.0\.0\.0/8(?:(?!\r?\n---).)*?port: 8443' "Controller egress on non-HTTPS allow-listed ports excludes private ranges"
+Assert-RegexMatch $externalAgents '(?s)KOGNITION_EXTERNAL_AGENTS_ENABLED.*?KOGNITION_EXTERNAL_AGENTS_ENABLED' "Admission webhooks receive the ExternalAgent switch as well as the controller"
+foreach ($invalid in @(
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[0]=https://agents.partner.example:8443",
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[0]=agents.partner.example",
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[0]=agents.partner.example:70000",
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[0]=localhost:8443"
+)) {
+    Assert-HelmTemplateFails -SetValues ($externalAgentValues + $invalid) -Pattern @("egressAllowList") -TestName "ExternalAgent rejects allow-list entry $invalid"
+}
+Assert-HelmTemplateFails -SetValues ($workflowExecutorValues + @("k8sController.workflowExecutor.collaboration.externalAgents.enabled=true")) -Pattern @("requires workflowExecutor.collaboration.enabled") -TestName "ExternalAgent requires collaboration"
 Assert-HelmTemplateFails -SetValues (@("mode=kubernetes", "k8sController.workflowExecutor.collaboration.enabled=true")) -Pattern @("collaboration") -TestName "Collaboration requires the native executor"
 if ($WorkflowExecutorOnly) {
     if ($Failed -ne 0 -or $Passed -eq 0) { throw ($Errors -join "`n") }

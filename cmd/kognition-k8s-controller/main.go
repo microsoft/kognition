@@ -409,6 +409,13 @@ func runControllerWithManager(
 		}
 		enableCollaborationAdmission(assembly.validating)
 	}
+	if enabled, err := externalAgentsEnabled(os.Getenv); err != nil {
+		return fmt.Errorf("configure external agents: %w", err)
+	} else if enabled {
+		if _, err := enableExternalAgentAdmission(assembly.validating, os.Getenv); err != nil {
+			return fmt.Errorf("configure external agents: %w", err)
+		}
+	}
 	runtimeApprovalRetention, err := k8sctrl.RuntimeApprovalTombstoneRetention(os.Getenv("KOGNITION_RUNTIME_APPROVAL_TOMBSTONE_RETENTION"))
 	if err != nil {
 		return fmt.Errorf("configure RuntimeApproval tombstone retention: %w", err)
@@ -521,6 +528,13 @@ func runResourceWebhooksWithManager(options controllerOptions, logger *zap.Logge
 		return err
 	} else if enabled {
 		enableCollaborationAdmission(validating)
+	}
+	if enabled, err := externalAgentsEnabled(os.Getenv); err != nil {
+		return err
+	} else if enabled {
+		if _, err := enableExternalAgentAdmission(validating, os.Getenv); err != nil {
+			return err
+		}
 	}
 	bindingOptions, err := workflowBindingWebhookOptionsFromEnv(namespace, direct)
 	if err != nil {
@@ -1167,6 +1181,7 @@ func newControllerAssembly(
 		k8sctrl.NewSecretRefReconcilerAdapter(st, logger),
 		k8sctrl.NewToolReconcilerAdapter(st, logger, intctrl.WithExecProbeRunner(k8sctrl.NewKubernetesExecProbeRunner(kubeClient))),
 		k8sctrl.NewToolClassReconcilerAdapter(st, logger),
+		k8sctrl.NewExternalAgentReconcilerAdapter(st, logger, externalAgentReconcilerOptions(os.Getenv)...),
 		k8sctrl.NewToolInvocationRunReconcilerAdapter(st, logger, intctrl.WithStdioInvocationRunner(k8sctrl.NewKubernetesStdioInvocationRunner(kubeClient, config))),
 		workflowAdapter,
 		workflowRunAdapter,

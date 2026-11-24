@@ -845,6 +845,7 @@ func TestControllerAssemblyRegistersProductionRoster(t *testing.T) {
 		"SecretRefReconcilerAdapter",
 		"ToolReconcilerAdapter",
 		"ToolClassReconcilerAdapter",
+		"ExternalAgentReconcilerAdapter",
 		"ToolInvocationRunReconcilerAdapter",
 		"WorkflowReconcilerAdapter",
 		"WorkflowRunReconcilerAdapter",
@@ -908,6 +909,8 @@ func TestControllerAssemblyRegistersProductionRoster(t *testing.T) {
 		"AutonomyReviewValidator",
 		"IntentGatewayValidator",
 		"AgentIdentityValidator",
+		"ExternalAgentValidator",
+		"ExternalAgentGrantValidator",
 		"CrossNamespaceHook",
 	}
 	assertConcreteTypeNames(t, "validating hooks", assembly.validating, wantValidating)

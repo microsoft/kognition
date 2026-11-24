@@ -123,6 +123,14 @@ rules:
   - apiGroups: ["kognition.dev"]
     resources: ["modelinvocationprofiles"]
     verbs: ["get", "list", "watch"]
+  # ExternalAgent is read-only for the controller except for its status. The
+  # controller never creates, edits or deletes external agents or their grants.
+  - apiGroups: ["kognition.dev"]
+    resources: ["externalagents", "externalagentgrants"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["externalagents/status"]
+    verbs: ["get", "update", "patch"]
   - apiGroups: ["kognition.dev"]
     resources: ["runtimeapprovals"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

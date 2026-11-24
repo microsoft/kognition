@@ -144,7 +144,19 @@
             "collaboration": {
               "type": "object",
               "properties": {
-                "enabled": { "type": "boolean" }
+                "enabled": { "type": "boolean" },
+                "externalAgents": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "egressAllowList": {
+                      "type": "array",
+                      "items": { "type": "string", "minLength": 1, "maxLength": 260 },
+                      "maxItems": 64
+                    }
+                  },
+                  "additionalProperties": false
+                }
               },
               "additionalProperties": false
             }

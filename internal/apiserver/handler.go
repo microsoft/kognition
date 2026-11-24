@@ -55,6 +55,8 @@ var pluralToKind = map[string]string{
 	"models":                      "Model",
 	"modelgrants":                 "ModelGrant",
 	"modelinvocationprofiles":     "ModelInvocationProfile",
+	"externalagents":              "ExternalAgent",
+	"externalagentgrants":         "ExternalAgentGrant",
 	"agentpolicies":               "AgentPolicy",
 	"cognitiveadmissionpolicies":  "CognitiveAdmissionPolicy",
 	"cognitivequotas":             "CognitiveQuota",

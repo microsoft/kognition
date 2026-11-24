@@ -725,6 +725,10 @@ func (s *StoreAdapter) marshalToInternal(kind string, obj client.Object) ([]byte
 		return json.Marshal(convert.ModelClassFromK8s(resource))
 	case "ModelInvocationProfile":
 		return marshalConverted(obj, "*k8s.ModelInvocationProfile", convert.ModelInvocationProfileFromK8s)
+	case "ExternalAgent":
+		return marshalConverted(obj, "*k8s.ExternalAgent", convert.ExternalAgentFromK8s)
+	case "ExternalAgentGrant":
+		return marshalConverted(obj, "*k8s.ExternalAgentGrant", convert.ExternalAgentGrantFromK8s)
 	case "ModelGrant":
 		resource, ok := obj.(*k8s.ModelGrant)
 		if !ok || resource == nil {
@@ -899,6 +903,10 @@ func (s *StoreAdapter) marshalListToInternal(kind string, listObj client.ObjectL
 		return marshalConvertedList(listObj, "*k8s.ModelClassList", func(list *k8s.ModelClassList) []k8s.ModelClass { return list.Items }, convert.ModelClassFromK8s)
 	case "ModelInvocationProfile":
 		return marshalConvertedList(listObj, "*k8s.ModelInvocationProfileList", func(list *k8s.ModelInvocationProfileList) []k8s.ModelInvocationProfile { return list.Items }, convert.ModelInvocationProfileFromK8s)
+	case "ExternalAgent":
+		return marshalConvertedList(listObj, "*k8s.ExternalAgentList", func(list *k8s.ExternalAgentList) []k8s.ExternalAgent { return list.Items }, convert.ExternalAgentFromK8s)
+	case "ExternalAgentGrant":
+		return marshalConvertedList(listObj, "*k8s.ExternalAgentGrantList", func(list *k8s.ExternalAgentGrantList) []k8s.ExternalAgentGrant { return list.Items }, convert.ExternalAgentGrantFromK8s)
 	case "ModelGrant":
 		return marshalConvertedList(listObj, "*k8s.ModelGrantList", func(list *k8s.ModelGrantList) []k8s.ModelGrant { return list.Items }, convert.ModelGrantFromK8s)
 	case "AutonomyClass":
@@ -1070,6 +1078,18 @@ func (s *StoreAdapter) unmarshalFromInternal(kind string, data []byte) (client.O
 			return nil, fmt.Errorf("unmarshal %s from internal: %w", kind, err)
 		}
 		return convert.ModelInvocationProfileToK8s(&internal), nil
+	case "ExternalAgent":
+		var internal api.ExternalAgent
+		if err := json.Unmarshal(data, &internal); err != nil {
+			return nil, fmt.Errorf("unmarshal %s from internal: %w", kind, err)
+		}
+		return convert.ExternalAgentToK8s(&internal), nil
+	case "ExternalAgentGrant":
+		var internal api.ExternalAgentGrant
+		if err := json.Unmarshal(data, &internal); err != nil {
+			return nil, fmt.Errorf("unmarshal %s from internal: %w", kind, err)
+		}
+		return convert.ExternalAgentGrantToK8s(&internal), nil
 	case "ModelGrant":
 		var internal api.ModelGrant
 		if err := json.Unmarshal(data, &internal); err != nil {
@@ -1328,6 +1348,10 @@ func (s *StoreAdapter) newObject(kind string) (client.Object, error) {
 		return &k8s.ModelClass{}, nil
 	case "ModelInvocationProfile":
 		return &k8s.ModelInvocationProfile{}, nil
+	case "ExternalAgent":
+		return &k8s.ExternalAgent{}, nil
+	case "ExternalAgentGrant":
+		return &k8s.ExternalAgentGrant{}, nil
 	case "ModelGrant":
 		return &k8s.ModelGrant{}, nil
 	case "AutonomyClass":
@@ -1434,6 +1458,10 @@ func (s *StoreAdapter) newListObject(kind string) (client.ObjectList, error) {
 		return &k8s.ModelClassList{}, nil
 	case "ModelInvocationProfile":
 		return &k8s.ModelInvocationProfileList{}, nil
+	case "ExternalAgent":
+		return &k8s.ExternalAgentList{}, nil
+	case "ExternalAgentGrant":
+		return &k8s.ExternalAgentGrantList{}, nil
 	case "ModelGrant":
 		return &k8s.ModelGrantList{}, nil
 	case "AutonomyClass":
@@ -1562,7 +1590,7 @@ func isClusterScopedKind(kind string) bool {
 
 func kindHasStatusSubresource(kind string) bool {
 	switch kind {
-	case "AgentRole", "AgentRoleBinding", "AgentCommunicationPolicy", "AutonomyClass", "CognitiveAdmissionPolicy", "CognitiveLimitRange", "CrossNamespaceGrant", "MemoryGrant", "ModelGrant", "ModelInvocationProfile":
+	case "AgentRole", "AgentRoleBinding", "AgentCommunicationPolicy", "AutonomyClass", "CognitiveAdmissionPolicy", "CognitiveLimitRange", "CrossNamespaceGrant", "MemoryGrant", "ModelGrant", "ModelInvocationProfile", "ExternalAgentGrant":
 		return false
 	default:
 		return true
