@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -17,6 +18,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import ingest
+
+_LOG = logging.getLogger("kognition.ingester")
 
 _MAX_REQUEST_BYTES = 1024 * 1024
 _MAX_ENV_VALUE_LENGTH = 2048
@@ -39,6 +42,62 @@ _ALLOWED_CREDENTIAL_TYPES = frozenset({
 })
 
 _SAFE_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z0-9_.-]+$")
+
+_SENSITIVE_NAME_PATTERN = re.compile(r"key|secret|token|passw|dsn|credential|connection|sas|auth", re.IGNORECASE)
+_URL_USERINFO_PATTERN = re.compile(r"(?<=://)[^/\s@]+@")
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]+")
+_MIN_SECRET_LENGTH = 4
+_MAX_ERROR_LENGTH = 500
+_REDACTED = "[redacted]"
+# Only errors that describe the caller's own input are shown to the caller.
+_CALLER_SAFE_ERRORS = (ValueError, RuntimeError)
+
+
+def _collect_secrets(node: Any, sensitive: bool, found: set[str]) -> None:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            _collect_secrets(value, sensitive or bool(_SENSITIVE_NAME_PATTERN.search(str(key))), found)
+    elif isinstance(node, (list, tuple)):
+        for value in node:
+            _collect_secrets(value, sensitive, found)
+    elif sensitive and isinstance(node, str):
+        found.add(node)
+        found.add(urllib.parse.unquote(node))
+        found.add(urllib.parse.quote(node, safe=""))
+        if "://" in node:
+            try:
+                parsed = urllib.parse.urlparse(node)
+                parts = (parsed.username, parsed.password)
+            except ValueError:
+                parts = ()
+            for part in parts:
+                if part:
+                    found.add(part)
+                    found.add(urllib.parse.unquote(part))
+
+
+def _secret_values(payload: Any, environment: dict[str, str]) -> list[str]:
+    found: set[str] = set()
+    _collect_secrets(payload, False, found)
+    _collect_secrets(environment, False, found)
+    for name, value in os.environ.items():
+        if _SENSITIVE_NAME_PATTERN.search(name) and len(value) >= 8:
+            found.add(value)
+    return sorted((s for s in found if len(s) >= _MIN_SECRET_LENGTH), key=len, reverse=True)
+
+
+def _redact(message: str, secrets: list[str]) -> str:
+    for secret in secrets:
+        message = message.replace(secret, _REDACTED)
+    message = _URL_USERINFO_PATTERN.sub(_REDACTED + "@", message)
+    return _CONTROL_CHARACTERS.sub(" ", message).strip()
+
+
+def _public_error(exc: Exception, secrets: list[str]) -> str:
+    text = _redact(str(exc), secrets)
+    if not isinstance(exc, _CALLER_SAFE_ERRORS) or not text:
+        return f"ingestion failed ({type(exc).__name__})"
+    return text[:_MAX_ERROR_LENGTH]
 
 
 _DEFAULT_ALLOWED_TOKEN_FILE_DIR = "/var/run/secrets"
@@ -175,9 +234,16 @@ class TaskRegistry:
                 status.sourceDigest = str(summary.get("sourceDigest") or "")
                 status.completedAt = time.time()
         except Exception as exc:  # noqa: BLE001
+            secrets = _secret_values(payload, safe_environment)
+            _LOG.warning(
+                "ingest task %s failed (%s): %s",
+                status.id,
+                type(exc).__name__,
+                _redact(str(exc), secrets)[:_MAX_ERROR_LENGTH],
+            )
             with self._lock:
                 status.state = "failed"
-                status.error = str(exc)
+                status.error = _public_error(exc, secrets)
                 status.completedAt = time.time()
 
     def _remove_expired_locked(self) -> None:

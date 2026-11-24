@@ -71,6 +71,79 @@ def test_registry_reports_sanitized_failure(monkeypatch):
     assert "sensitive" not in json.dumps(vars(result))
 
 
+def _failed_status(monkeypatch, exc, payload=None, environment=None):
+    def fail(*_args, **_kwargs):
+        raise exc
+
+    monkeypatch.setattr(service.ingest, "ingest_task", fail)
+    registry = service.TaskRegistry()
+    registry.submit("failed-task", payload or {}, environment or {})
+    return _wait_for_terminal(registry, "failed-task")
+
+
+def test_failure_redacts_payload_secrets_from_error(monkeypatch):
+    payload = {
+        "embedding": {"apiKey": "sk-secret-value", "model": "text-embedding-3-small"},
+        "sources": [{"type": "blob", "credentials": {"accountKey": "blob-key-12345", "region": "eastus2"}}],
+        "vectorStore": {"dsn": "postgres://svc:p%40ss-word@db.internal/kb"},
+    }
+    exc = ValueError(
+        "rejected sk-secret-value / blob-key-12345 / eastus2 / "
+        "postgres://svc:p%40ss-word@db.internal/kb / p@ss-word / text-embedding-3-small"
+    )
+
+    result = _failed_status(monkeypatch, exc, payload)
+
+    assert result.state == "failed"
+    for secret in ("sk-secret-value", "blob-key-12345", "p%40ss-word", "p@ss-word", "postgres://svc"):
+        assert secret not in result.error
+    assert "[redacted]" in result.error
+    assert "text-embedding-3-small" in result.error
+
+
+def test_failure_redacts_environment_secrets_from_error(monkeypatch):
+    result = _failed_status(
+        monkeypatch,
+        RuntimeError("login failed for secret-from-env-1"),
+        environment={"AZURE_CLIENT_SECRET": "secret-from-env-1", "AZURE_CLIENT_ID": "client-id"},
+    )
+
+    assert "secret-from-env-1" not in result.error
+    assert "login failed for [redacted]" == result.error
+
+
+class OperationalError(Exception):
+    pass
+
+
+def test_failure_hides_unexpected_exception_details(monkeypatch):
+    result = _failed_status(
+        monkeypatch,
+        OperationalError("connection to host=10.1.2.3 user=svc password=hunter2 failed"),
+    )
+
+    assert result.error == "ingestion failed (OperationalError)"
+
+
+def test_failure_message_is_single_line_and_bounded(monkeypatch):
+    result = _failed_status(monkeypatch, ValueError("first\nsecond\x1b[31m " + "x" * 5000))
+
+    assert "\n" not in result.error and "\x1b" not in result.error
+    assert len(result.error) <= 500
+
+
+def test_failure_details_are_logged_redacted(monkeypatch, caplog):
+    with caplog.at_level("WARNING", logger="kognition.ingester"):
+        _failed_status(
+            monkeypatch,
+            ValueError("bad sk-secret-value"),
+            {"embedding": {"apiKey": "sk-secret-value"}},
+        )
+
+    assert "sk-secret-value" not in caplog.text
+    assert "failed-task" in caplog.text
+
+
 def test_registry_scopes_task_environment(monkeypatch):
     monkeypatch.setenv("AZURE_CLIENT_ID", "service-default")
     monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
