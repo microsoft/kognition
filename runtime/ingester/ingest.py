@@ -73,6 +73,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Protocol
 from urllib.parse import urlparse, urlunparse
@@ -190,27 +191,72 @@ def _validate_remote_url(uri: str, *, allow_private_http: bool = False) -> None:
         raise ValueError("URL sources must not include credentials")
     if _private_networks_allowed():
         return
+    _public_addresses(parsed.hostname, parsed.port or 443)
+
+
+def _public_addresses(hostname: str, port: int) -> list[str]:
+    """Resolve a hostname and require every address to be publicly routable."""
     try:
-        literal_address = ipaddress.ip_address(parsed.hostname)
+        literal_address = ipaddress.ip_address(hostname)
     except ValueError:
         literal_address = None
     if literal_address is not None:
         if not literal_address.is_global:
             raise ValueError("URL source hostname must resolve only to publicly routable addresses")
-        return
+        return [str(literal_address)]
     try:
-        addresses = {
-            item[4][0]
-            for item in socket.getaddrinfo(
-                parsed.hostname,
-                parsed.port or 443,
-                type=socket.SOCK_STREAM,
+        addresses = list(
+            dict.fromkeys(
+                item[4][0]
+                for item in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
             )
-        }
+        )
     except socket.gaierror as exc:
-        raise ValueError(f"failed to resolve URL source hostname: {parsed.hostname}") from exc
+        raise ValueError(f"failed to resolve URL source hostname: {hostname}") from exc
     if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
         raise ValueError("URL source hostname must resolve only to publicly routable addresses")
+    return addresses
+
+
+class _PinnedTransport(httpx.HTTPTransport):
+    """Connect only to the addresses that passed validation for this request.
+
+    Validation and connection otherwise resolve the name separately, so a DNS
+    answer that changes between them (rebinding) could reach an internal
+    address. The request is rewritten to the validated IP while the Host header
+    and TLS server name keep the original hostname.
+    """
+
+    def __init__(self, exempt_hosts: Callable[[], frozenset[str]] = lambda: frozenset(), **kwargs: Any):
+        super().__init__(**kwargs)
+        self._exempt_hosts = exempt_hosts
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        if not _private_networks_allowed() and host.lower() not in self._exempt_hosts():
+            port = request.url.port or (443 if request.url.scheme == "https" else 80)
+            address = _public_addresses(host, port)[0]
+            if address != host:
+                request.url = request.url.copy_with(host=address)
+                request.extensions = {**request.extensions, "sni_hostname": host}
+        return super().handle_request(request)
+
+
+def _pinned_http_client(
+    *, exempt_hosts: Callable[[], frozenset[str]] = lambda: frozenset(), **kwargs: Any
+) -> httpx.Client:
+    """HTTP client that never follows redirects and connects only to validated addresses.
+
+    Behind a configured HTTP proxy the proxy performs resolution and egress, so
+    the client keeps its default proxy handling instead of pinning.
+    """
+    if urllib.request.getproxies():
+        return httpx.Client(follow_redirects=False, **kwargs)
+    return httpx.Client(
+        follow_redirects=False,
+        transport=_PinnedTransport(exempt_hosts=exempt_hosts),
+        **kwargs,
+    )
 
 
 def _read_http_response(response: httpx.Response, limit: int) -> bytes:
@@ -253,7 +299,7 @@ def _fetch_url(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
     uri = source["uri"]
     current_uri = uri
     limit = _max_document_bytes()
-    with httpx.Client(follow_redirects=False, timeout=30.0) as client:
+    with _pinned_http_client(timeout=30.0) as client:
         for redirect_count in range(_MAX_URL_REDIRECTS + 1):
             _validate_remote_url(current_uri, allow_private_http=True)
             with client.stream("GET", current_uri) as response:
@@ -263,7 +309,8 @@ def _fetch_url(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
                     location = response.headers.get("location")
                     if not location:
                         raise ValueError("URL source redirect is missing a Location header")
-                    current_uri = str(response.url.join(location))
+                    # Join against the requested URL: the request itself targets the pinned IP.
+                    current_uri = str(httpx.URL(current_uri).join(location))
                     continue
                 response.raise_for_status()
                 data = _read_http_response(response, limit)
@@ -650,8 +697,9 @@ def _build_embedder(cfg: dict[str, Any], dimension: int, env: dict[str, str] | N
         raise ValueError(
             "embedding endpoint requires an API key; daemon credentials are only sent to trusted endpoints"
         )
-    # Credentials must never follow a redirect to another host.
-    http_client = httpx.Client(follow_redirects=False)
+    # Credentials must never follow a redirect to another host, and the connection
+    # must reach the address that passed validation (no DNS rebinding).
+    http_client = _pinned_http_client(exempt_hosts=lambda: _SERVICE_TRUSTED_EMBEDDING_HOSTS)
     if provider == "azure_openai":
         endpoint = _azure_resource_root(base_url or "")
         api_version = cfg.get("apiVersion") or "2024-08-01-preview"

@@ -241,12 +241,11 @@ def test_fetch_blob_without_provider_is_unsupported():
 
 
 def _install_http_transport(monkeypatch, handler):
-    real_client = httpx.Client
-    transport = httpx.MockTransport(handler)
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    # Replace only the network hop so the pinned transport still runs.
     monkeypatch.setattr(
-        ingest.httpx,
-        "Client",
-        lambda **kwargs: real_client(transport=transport, **kwargs),
+        httpx.HTTPTransport, "handle_request", lambda self, request: handler(request)
     )
     monkeypatch.setattr(
         ingest.socket,
@@ -1361,3 +1360,151 @@ def test_ingester_credential_managed_identity(monkeypatch):
     _clear_azure_env(monkeypatch)
     monkeypatch.setenv("AZURE_CREDENTIAL_TYPE", "managed-identity")
     assert ingest._build_azure_credential().kind == "managed-identity"
+
+
+# --------------------------- DNS-rebinding pinning ---------------------------
+
+
+@pytest.fixture
+def pinned_env(monkeypatch):
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    ingest.reset_trusted_service_config()
+    monkeypatch.setattr(ingest, "_private_networks_allowed", lambda: False)
+    sent = []
+
+    def fake_handle(self, request):
+        sent.append(request)
+        return httpx.Response(200, request=request, content=b"ok")
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", fake_handle)
+    yield monkeypatch, sent
+    ingest.reset_trusted_service_config()
+
+
+def _resolve_to(monkeypatch, *addresses):
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 443)) for a in addresses],
+    )
+
+
+def test_pinned_client_connects_to_validated_address_and_keeps_hostname(pinned_env):
+    monkeypatch, sent = pinned_env
+    _resolve_to(monkeypatch, "93.184.216.34")
+
+    with ingest._pinned_http_client() as client:
+        client.get("https://docs.example/page")
+
+    assert sent[0].url.host == "93.184.216.34"
+    assert sent[0].headers["host"] == "docs.example"
+    assert sent[0].extensions["sni_hostname"] == "docs.example"
+
+
+def test_pinned_client_resolves_again_for_every_request(pinned_env):
+    monkeypatch, sent = pinned_env
+    answers = [["93.184.216.34"], ["10.0.0.5"]]
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 443)) for a in answers.pop(0)],
+    )
+
+    with ingest._pinned_http_client() as client:
+        client.get("https://rebind.example/")
+        with pytest.raises(ValueError, match="publicly routable"):
+            client.get("https://rebind.example/")
+
+    assert len(sent) == 1
+
+
+def test_pinned_client_rejects_mixed_public_and_private_answers(pinned_env):
+    monkeypatch, sent = pinned_env
+    _resolve_to(monkeypatch, "93.184.216.34", "169.254.169.254")
+
+    with ingest._pinned_http_client() as client, pytest.raises(ValueError, match="publicly routable"):
+        client.get("https://mixed.example/")
+
+    assert sent == []
+
+
+def test_pinned_client_leaves_literal_public_addresses_unchanged(pinned_env):
+    _, sent = pinned_env
+
+    with ingest._pinned_http_client() as client:
+        client.get("https://93.184.216.34/")
+        with pytest.raises(ValueError, match="publicly routable"):
+            client.get("https://169.254.169.254/")
+
+    assert [r.url.host for r in sent] == ["93.184.216.34"]
+    assert "sni_hostname" not in sent[0].extensions
+
+
+def test_pinned_client_exempts_only_listed_hosts_and_private_network_opt_in(pinned_env):
+    monkeypatch, sent = pinned_env
+    _resolve_to(monkeypatch, "10.0.0.5")
+
+    with ingest._pinned_http_client(exempt_hosts=lambda: frozenset({"vllm.internal"})) as client:
+        client.get("https://vllm.internal/")
+        with pytest.raises(ValueError, match="publicly routable"):
+            client.get("https://other.internal/")
+    assert sent[0].url.host == "vllm.internal"
+
+    monkeypatch.setattr(ingest, "_private_networks_allowed", lambda: True)
+    with ingest._pinned_http_client() as client:
+        client.get("https://other.internal/")
+    assert sent[1].url.host == "other.internal"
+
+
+def test_pinned_client_uses_default_handling_behind_a_proxy(pinned_env):
+    monkeypatch, _ = pinned_env
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.internal:3128")
+
+    with ingest._pinned_http_client() as client:
+        assert not isinstance(client._transport, ingest._PinnedTransport)
+        assert client.follow_redirects is False
+
+
+def test_fetch_url_connects_to_the_validated_address(pinned_env):
+    monkeypatch, sent = pinned_env
+    _resolve_to(monkeypatch, "93.184.216.34")
+
+    documents = list(ingest._fetch_url({"uri": "https://docs.example/page.txt"}))
+
+    assert documents == [("ok", "https://docs.example/page.txt")]
+    assert sent[0].url.host == "93.184.216.34"
+
+
+def test_embedding_clients_are_pinned_and_exempt_only_operator_hosts(embedding_env):
+    embedding_env.delenv("HTTPS_PROXY", raising=False)
+    embedding_env.delenv("https_proxy", raising=False)
+    embedding_env.delenv("ALL_PROXY", raising=False)
+    embedding_env.delenv("HTTP_PROXY", raising=False)
+    embedding_env.delenv("http_proxy", raising=False)
+    ingest.set_trusted_service_config(trusted_embedding_hosts=["vllm.internal.example"])
+
+    emb = ingest._build_embedder({"baseUrl": "https://llm.example/v1", "apiKey": "k"}, 3)
+    transport = emb.client._client._transport
+
+    assert isinstance(transport, ingest._PinnedTransport)
+    assert transport._exempt_hosts() == frozenset({"vllm.internal.example"})
+
+
+def test_fetch_url_follows_relative_redirect_on_original_hostname(pinned_env):
+    monkeypatch, sent = pinned_env
+    _resolve_to(monkeypatch, "93.184.216.34")
+
+    def fake_handle(self, request):
+        sent.append(request)
+        if request.url.path == "/old":
+            return httpx.Response(302, headers={"location": "/new"}, request=request)
+        return httpx.Response(200, request=request, content=b"moved")
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", fake_handle)
+
+    documents = list(ingest._fetch_url({"uri": "https://docs.example/old"}))
+
+    assert documents == [("moved", "https://docs.example/old")]
+    assert [r.headers["host"] for r in sent] == ["docs.example", "docs.example"]
+    assert [r.url.host for r in sent] == ["93.184.216.34", "93.184.216.34"]
