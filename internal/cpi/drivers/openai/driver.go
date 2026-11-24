@@ -164,8 +164,7 @@ func (d *Driver) Complete(ctx context.Context, req *cpi.CompletionRequest) (*cpi
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("openai-compatible: HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, cpi.NewProviderError("openai-compatible", "", resp)
 	}
 
 	var chatResp chatCompletionResponse
@@ -216,8 +215,7 @@ func (d *Driver) Embed(ctx context.Context, req *cpi.EmbedRequest) (*cpi.EmbedRe
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("openai-compatible: embed HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, cpi.NewProviderError("openai-compatible", "embed", resp)
 	}
 
 	var embedResp embeddingResponse
