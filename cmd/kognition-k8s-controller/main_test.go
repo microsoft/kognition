@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -550,7 +552,8 @@ func TestParseControllerOptions(t *testing.T) {
 
 func TestNewCPIRegistryIncludesProductionDrivers(t *testing.T) {
 	want := map[string]bool{"anthropic": true, "aws-bedrock": true, "foundry": true, "ollama": true, "openai-compatible": true}
-	got := newCPIRegistry().List()
+	registry := newCPIRegistry(nil)
+	got := registry.List()
 	if len(got) != len(want) {
 		t.Fatalf("drivers = %v, want %v", got, want)
 	}
@@ -558,6 +561,43 @@ func TestNewCPIRegistryIncludesProductionDrivers(t *testing.T) {
 		if !want[name] {
 			t.Fatalf("unexpected driver %q in %v", name, got)
 		}
+	}
+	if registry.Observed() {
+		t.Fatal("a registry created without a recorder must not be observed")
+	}
+}
+
+type callRecorder struct{ outcomes []cpi.CallOutcome }
+
+func (r *callRecorder) RecordCall(outcome cpi.CallOutcome) { r.outcomes = append(r.outcomes, outcome) }
+
+func TestNewCPIRegistryReportsCallOutcomes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	recorder := &callRecorder{}
+	registry := newCPIRegistry(recorder)
+	if !registry.Observed() {
+		t.Fatal("a registry created with a recorder must be observed")
+	}
+
+	driver, ok := registry.Get("anthropic")
+	if !ok {
+		t.Fatal("anthropic driver is not registered")
+	}
+	_, err := driver.Complete(context.Background(), &cpi.CompletionRequest{
+		Model: "claude", Endpoint: server.URL, Messages: []cpi.Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("Complete() succeeded against a rate limiting provider")
+	}
+	if len(recorder.outcomes) != 1 {
+		t.Fatalf("recorded %d outcomes, want 1: %+v", len(recorder.outcomes), recorder.outcomes)
+	}
+	got := recorder.outcomes[0]
+	if got.Provider != "anthropic" || got.Operation != cpi.OperationComplete || got.Model != "claude" || got.Reason != cpi.ReasonRateLimited || !got.ProviderFault {
+		t.Fatalf("outcome = %+v, want a provider-fault RateLimited complete call to claude through anthropic", got)
 	}
 }
 

@@ -4,14 +4,52 @@
 package main
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
 
 	"go.uber.org/zap"
 
+	"github.com/kognition-ai/kognition/internal/cpi"
 	"github.com/kognition-ai/kognition/internal/store"
 )
+
+type callRecorder struct{ outcomes []cpi.CallOutcome }
+
+func (r *callRecorder) RecordCall(outcome cpi.CallOutcome) { r.outcomes = append(r.outcomes, outcome) }
+
+func TestNewCPIRegistryRegistersProductionDriversAndReportsCallOutcomes(t *testing.T) {
+	registry := newCPIRegistry(nil)
+	if got := len(registry.List()); got != 5 || registry.Observed() {
+		t.Fatalf("drivers = %d, observed = %t; want 5 production drivers and no observation without a recorder", got, registry.Observed())
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	recorder := &callRecorder{}
+	registry = newCPIRegistry(recorder)
+	driver, ok := registry.Get("anthropic")
+	if !ok || !registry.Observed() {
+		t.Fatalf("anthropic registered = %t, observed = %t; want both true with a recorder", ok, registry.Observed())
+	}
+	if _, err := driver.Complete(context.Background(), &cpi.CompletionRequest{
+		Model: "claude", Endpoint: server.URL, Messages: []cpi.Message{{Role: "user", Content: "hi"}},
+	}); err == nil {
+		t.Fatal("Complete() succeeded against a rate limiting provider")
+	}
+	if len(recorder.outcomes) != 1 {
+		t.Fatalf("recorded %d outcomes, want 1: %+v", len(recorder.outcomes), recorder.outcomes)
+	}
+	got := recorder.outcomes[0]
+	if got.Provider != "anthropic" || got.Operation != cpi.OperationComplete || got.Model != "claude" || got.Reason != cpi.ReasonRateLimited || !got.ProviderFault {
+		t.Fatalf("outcome = %+v, want a provider-fault RateLimited complete call to claude through anthropic", got)
+	}
+}
 
 type canaryOperationCapableStore struct {
 	store.Store

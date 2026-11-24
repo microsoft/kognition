@@ -98,7 +98,7 @@ type apiServerRuntime struct {
 	initialize func(context.Context) error
 }
 
-type apiServerRuntimeFactory func(context.Context, *zap.Logger, []apiserver.Option) (*apiServerRuntime, error)
+type apiServerRuntimeFactory func(context.Context, *zap.Logger, *cpi.Registry, []apiserver.Option) (*apiServerRuntime, error)
 
 func runAPIServerCommand(
 	ctx context.Context,
@@ -116,7 +116,7 @@ func runAPIServerCommand(
 		logger.Warn("API authentication is DISABLED; do not expose this server to untrusted networks " +
 			"(set KOGNITION_AUTH_ENABLED=true with KOGNITION_OIDC_ISSUER)")
 	}
-	runtime, err := newRuntime(ctx, logger, options)
+	runtime, err := newRuntime(ctx, logger, registry, options)
 	if err != nil {
 		return fmt.Errorf("create API server runtime: %w", err)
 	}
@@ -129,13 +129,14 @@ func runAPIServerCommand(
 	return runServerLifecycle(ctx, runtime.server, runtime.listener, runtime.closePool, logger)
 }
 
-func newProductionRuntime(ctx context.Context, logger *zap.Logger, options []apiserver.Option) (*apiServerRuntime, error) {
+func newProductionRuntime(ctx context.Context, logger *zap.Logger, registry *cpi.Registry, options []apiserver.Option) (*apiServerRuntime, error) {
 	pool, err := newDatabasePool(ctx, databaseURL())
 	if err != nil {
 		return nil, err
 	}
 	st := newPostgresStore(pool, logger.Named("store"))
 	metricsRegistry := prometheus.NewRegistry()
+	registry.Observe(observability.NewCPICallMetrics(metricsRegistry))
 	usageWriter := observability.NewModelUsageMetrics(metricsRegistry).Wrap(st)
 	auditStore := observability.NewTrustDecisionMetrics(metricsRegistry).Wrap(st)
 	bindingKeys, err := runtimeapproval.BindingKeyStoreFromJSON(os.Getenv(runtimeapproval.BindingKeysEnvironmentVariable))

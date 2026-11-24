@@ -93,7 +93,7 @@ func run(logger *zap.Logger) error {
 		}
 		return err
 	})
-	options := []modelgateway.Option{modelgateway.WithObservability(tracePipeline.Tracer, tracePipeline.Collector), modelgateway.WithQuotaChecker(quota), modelgateway.WithAuditLog(observability.NewCognitiveAuditLog(meteredAuditStore))}
+	options := []modelgateway.Option{modelgateway.WithObservability(tracePipeline.Tracer, tracePipeline.Collector), modelgateway.WithQuotaChecker(quota), modelgateway.WithAuditLog(observability.NewCognitiveAuditLog(meteredAuditStore)), modelgateway.WithCallRecorder(observability.NewCPICallMetrics(ctrlmetrics.Registry))}
 	// The runtime request context carries the Agent-specific deadline. Do not
 	// impose a shorter process-wide proxy timeout that would truncate valid
 	// long-running Model calls configured on the Agent.

@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/kognition-ai/kognition/internal/apiserver"
+	"github.com/kognition-ai/kognition/internal/cpi"
 )
 
 type lifecycleServerStub struct {
@@ -190,7 +191,7 @@ func TestRunAPIServerCommand(t *testing.T) {
 		t.Setenv("KOGNITION_AUTH_ENABLED", "true")
 		t.Setenv("KOGNITION_BOOTSTRAP_TOKEN", "")
 		t.Setenv("KOGNITION_OIDC_ISSUER", "")
-		err := runAPIServerCommand(context.Background(), zap.NewNop(), registry, func(context.Context, *zap.Logger, []apiserver.Option) (*apiServerRuntime, error) {
+		err := runAPIServerCommand(context.Background(), zap.NewNop(), registry, func(context.Context, *zap.Logger, *cpi.Registry, []apiserver.Option) (*apiServerRuntime, error) {
 			t.Fatal("runtime factory should not be called")
 			return nil, nil
 		})
@@ -202,7 +203,7 @@ func TestRunAPIServerCommand(t *testing.T) {
 	t.Run("runtime failure", func(t *testing.T) {
 		t.Setenv("KOGNITION_AUTH_ENABLED", "")
 		wantErr := errors.New("runtime failed")
-		err := runAPIServerCommand(context.Background(), zap.NewNop(), registry, func(context.Context, *zap.Logger, []apiserver.Option) (*apiServerRuntime, error) {
+		err := runAPIServerCommand(context.Background(), zap.NewNop(), registry, func(context.Context, *zap.Logger, *cpi.Registry, []apiserver.Option) (*apiServerRuntime, error) {
 			return nil, wantErr
 		})
 		if !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "create API server runtime") {
@@ -221,7 +222,10 @@ func TestRunAPIServerCommand(t *testing.T) {
 			<-server.started
 			cancel()
 		}()
-		err := runAPIServerCommand(ctx, zap.NewNop(), registry, func(_ context.Context, _ *zap.Logger, options []apiserver.Option) (*apiServerRuntime, error) {
+		err := runAPIServerCommand(ctx, zap.NewNop(), registry, func(_ context.Context, _ *zap.Logger, got *cpi.Registry, options []apiserver.Option) (*apiServerRuntime, error) {
+			if got != registry {
+				t.Fatal("the runtime factory must receive the command's CPI registry")
+			}
 			if len(options) != 3 {
 				t.Fatalf("options = %d, want 3", len(options))
 			}
@@ -236,9 +240,16 @@ func TestRunAPIServerCommand(t *testing.T) {
 func TestNewProductionRuntime(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost/database")
 	t.Setenv("KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON", `[{"version":1,"epoch":1,"algorithm":"HMAC-SHA-256","domain":"kognition.dev/runtime-approval/action/v1","status":"Active","material":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}]`)
-	runtime, err := newProductionRuntime(context.Background(), zap.NewNop(), nil)
+	registry := newProductionCPIRegistry()
+	if registry.Observed() {
+		t.Fatal("the production registry must not be observed before the runtime is built")
+	}
+	runtime, err := newProductionRuntime(context.Background(), zap.NewNop(), registry, nil)
 	if err != nil {
 		t.Fatalf("newProductionRuntime: %v", err)
+	}
+	if !registry.Observed() {
+		t.Fatal("newProductionRuntime must report CPI call outcomes to the runtime's metrics registry")
 	}
 	if runtime.server == nil || runtime.listener == nil || runtime.closePool == nil || runtime.initialize == nil {
 		t.Fatalf("runtime = %#v", runtime)

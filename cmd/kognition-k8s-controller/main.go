@@ -320,7 +320,7 @@ func runControllerWithManager(
 	})
 
 	opaEngine := opa.NewEngine()
-	cpiRegistry := newCPIRegistry()
+	cpiRegistry := newCPIRegistry(observability.NewCPICallMetrics(ctrlmetrics.Registry))
 	dispatcherConfig, err := dispatcherConfigFromEnv()
 	if err != nil {
 		return fmt.Errorf("configure runtime dispatcher: %w", err)
@@ -790,13 +790,14 @@ func parseControllerOptions(args []string) (controllerOptions, error) {
 	return options, nil
 }
 
-func newCPIRegistry() *cpi.Registry {
+func newCPIRegistry(recorder cpi.CallRecorder) *cpi.Registry {
 	registry := cpi.NewRegistry()
 	registry.MustRegister(openaidrv.New(nil))
 	registry.MustRegister(foundrydrv.New(nil))
 	registry.MustRegister(anthropicdrv.New(nil))
 	registry.MustRegister(ollamadrv.New(nil))
 	registry.MustRegister(bedrockdrv.New(nil))
+	registry.Observe(recorder)
 	return registry
 }
 

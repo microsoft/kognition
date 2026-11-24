@@ -110,7 +110,7 @@ func main() {
 		logger.Fatal("configure workload identity status reporting", zap.Error(err))
 	}
 	defer closeIdentityReader()
-	mgr := newControllerManagerWithWorkloadIdentity(st, logger, tracePipeline, usageWriter, auditStore, identityReader, workflowToolTracingOptions(tracePipeline)...)
+	mgr := newControllerManagerWithWorkloadIdentity(st, logger, tracePipeline, usageWriter, auditStore, observability.NewCPICallMetrics(metricsRegistry), identityReader, workflowToolTracingOptions(tracePipeline)...)
 	if err := mgr.Start(ctx); err != nil {
 		logger.Fatal("controller manager error", zap.Error(err))
 	}
@@ -150,11 +150,24 @@ func shutdownTracePipeline(pipeline *observability.TracePipeline, logger *zap.Lo
 	}
 }
 
-func newControllerManager(st store.Store, logger *zap.Logger, tracePipeline *observability.TracePipeline, usageWriter observability.UsageEventWriter, auditStore observability.AuditStore, workflowToolOptions ...controller.WorkflowToolInvokerOption) *controller.Manager {
-	return newControllerManagerWithWorkloadIdentity(st, logger, tracePipeline, usageWriter, auditStore, nil, workflowToolOptions...)
+// newCPIRegistry registers the built-in model drivers and reports their call
+// outcomes to recorder, which may be nil.
+func newCPIRegistry(recorder cpi.CallRecorder) *cpi.Registry {
+	registry := cpi.NewRegistry()
+	registry.MustRegister(openaidrv.New(nil))
+	registry.MustRegister(foundrydrv.New(nil))
+	registry.MustRegister(anthropicdrv.New(nil))
+	registry.MustRegister(ollamadrv.New(nil))
+	registry.MustRegister(bedrockdrv.New(nil))
+	registry.Observe(recorder)
+	return registry
 }
 
-func newControllerManagerWithWorkloadIdentity(st store.Store, logger *zap.Logger, tracePipeline *observability.TracePipeline, usageWriter observability.UsageEventWriter, auditStore observability.AuditStore, reader *runtimeauth.WorkloadIdentityStatusRegistry, workflowToolOptions ...controller.WorkflowToolInvokerOption) *controller.Manager {
+func newControllerManager(st store.Store, logger *zap.Logger, tracePipeline *observability.TracePipeline, usageWriter observability.UsageEventWriter, auditStore observability.AuditStore, workflowToolOptions ...controller.WorkflowToolInvokerOption) *controller.Manager {
+	return newControllerManagerWithWorkloadIdentity(st, logger, tracePipeline, usageWriter, auditStore, nil, nil, workflowToolOptions...)
+}
+
+func newControllerManagerWithWorkloadIdentity(st store.Store, logger *zap.Logger, tracePipeline *observability.TracePipeline, usageWriter observability.UsageEventWriter, auditStore observability.AuditStore, cpiRecorder cpi.CallRecorder, reader *runtimeauth.WorkloadIdentityStatusRegistry, workflowToolOptions ...controller.WorkflowToolInvokerOption) *controller.Manager {
 	policyEngine := opa.NewEngine()
 	agentPolicyReconciler := controller.NewAgentPolicyReconciler(st, policyEngine, logger.Named("agent-policy-reconciler"))
 	quotaReconciler := controller.NewCognitiveQuotaReconciler(st, logger.Named("runtime-quota"))
@@ -215,12 +228,7 @@ func newControllerManagerWithWorkloadIdentity(st store.Store, logger *zap.Logger
 	}
 
 	// Register the AgentInstance reconciler.
-	registry := cpi.NewRegistry()
-	registry.MustRegister(openaidrv.New(nil))
-	registry.MustRegister(foundrydrv.New(nil))
-	registry.MustRegister(anthropicdrv.New(nil))
-	registry.MustRegister(ollamadrv.New(nil))
-	registry.MustRegister(bedrockdrv.New(nil))
+	registry := newCPIRegistry(cpiRecorder)
 
 	cpiDispatcher := controller.NewCPIDispatcher(st, registry, logger.Named("cpi-dispatcher"))
 	if usageWriter != nil {

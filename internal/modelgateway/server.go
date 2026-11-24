@@ -53,6 +53,7 @@ type Server struct {
 	quota     ModelQuotaChecker
 	audit     *observability.CognitiveAuditLog
 	drivers   *cpi.Registry
+	recorder  cpi.CallRecorder
 }
 
 // Option configures optional Model Gateway dependencies.
@@ -61,6 +62,13 @@ type Option func(*Server)
 // WithCPIRegistry uses administrator-registered adapters rather than a new discovery mechanism.
 func WithCPIRegistry(registry *cpi.Registry) Option {
 	return func(server *Server) { server.drivers = registry }
+}
+
+// WithCallRecorder reports the outcome of every provider call made through the
+// gateway's CPI registry. Observation applies to the registry in use after all
+// options are applied, so it also covers a registry supplied by WithCPIRegistry.
+func WithCallRecorder(recorder cpi.CallRecorder) Option {
+	return func(server *Server) { server.recorder = recorder }
 }
 
 // WithObservability emits model-inference spans after the gateway verifies a
@@ -119,6 +127,9 @@ func newServer(store store.Store, issuer *runtimeauth.ModelSessionCapabilityIssu
 	}
 	if server.drivers == nil {
 		return nil, errors.New("model gateway CPI registry is required")
+	}
+	if server.recorder != nil {
+		server.drivers.Observe(server.recorder)
 	}
 	return server, nil
 }
