@@ -50,6 +50,12 @@ producer side):
 Output on stdout (single line):
 
     {"documents": N, "chunks": M, "sourceDigest": "sha256:..."}
+
+Trust model for embeddings: the daemon's own OPENAI_API_KEY and Azure AD
+tokens are sent only to api.openai.com, Azure OpenAI hosts, or hosts listed in
+KOGNITION_INGEST_TRUSTED_EMBEDDING_HOSTS (comma-separated, set at startup).
+Any other embedding baseUrl must pass SSRF validation and must bring its own
+apiKey (for example from the Model credentialRef).
 """
 
 from __future__ import annotations
