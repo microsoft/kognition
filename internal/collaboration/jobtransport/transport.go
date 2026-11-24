@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -167,16 +166,7 @@ func (t *Transport) Send(ctx context.Context, msg collaboration.Message) error {
 // reachable returns the sorted names of the members that self may involve, as
 // declared by the step's allowedInteractions. The engine enforces the same set.
 func (t *Transport) reachable(self string) []string {
-	seen := map[string]struct{}{}
-	names := []string{}
-	for _, edge := range t.cfg.Run.Spec.AllowedInteractions {
-		if _, dup := seen[edge.To]; edge.From == self && !dup {
-			seen[edge.To] = struct{}{}
-			names = append(names, edge.To)
-		}
-	}
-	sort.Strings(names)
-	return names
+	return a2atransport.Reachable(t.cfg.Run.Spec.AllowedInteractions, self)
 }
 
 // Observe implements driver.Transport.

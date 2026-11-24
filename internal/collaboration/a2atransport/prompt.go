@@ -5,10 +5,27 @@ package a2atransport
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
+	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/collaboration"
 )
+
+// Reachable returns the sorted names of the members that self may involve, as
+// declared by the step's allowedInteractions. The engine enforces the same set.
+func Reachable(edges []api.CollaborationInteraction, self string) []string {
+	seen := map[string]struct{}{}
+	names := []string{}
+	for _, edge := range edges {
+		if _, dup := seen[edge.To]; edge.From == self && !dup {
+			seen[edge.To] = struct{}{}
+			names = append(names, edge.To)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
 
 // Prompt renders the trusted content of one dispatch as the text a member receives.
 // Results released from other members are labeled as untrusted data. others names
