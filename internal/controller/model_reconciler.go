@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -15,23 +16,29 @@ import (
 	"github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/cpi"
 	"github.com/kognition-ai/kognition/internal/lifecycle"
+	"github.com/kognition-ai/kognition/internal/modelhealth"
 	"github.com/kognition-ai/kognition/internal/store"
 )
 
 const modelKind = "Model"
 
 // ModelReconciler validates model connectivity and reports runtime capabilities.
+// When the store can share passive health, it also degrades a Model whose real
+// calls are failing, even though its active probe still passes.
 type ModelReconciler struct {
-	store    store.Store
-	registry *cpi.Registry
-	logger   *zap.Logger
+	store      store.Store
+	callHealth store.ModelCallHealthStore
+	registry   *cpi.Registry
+	logger     *zap.Logger
 }
 
 func NewModelReconciler(s store.Store, registry *cpi.Registry, logger *zap.Logger) *ModelReconciler {
+	callHealth, _ := s.(store.ModelCallHealthStore)
 	return &ModelReconciler{
-		store:    s,
-		registry: registry,
-		logger:   logger.With(zap.String("reconciler", "model")),
+		store:      s,
+		callHealth: callHealth,
+		registry:   registry,
+		logger:     logger.With(zap.String("reconciler", "model")),
 	}
 }
 
@@ -108,34 +115,9 @@ func (r *ModelReconciler) Reconcile(ctx context.Context, req Request) (Result, e
 func (r *ModelReconciler) evaluate(ctx context.Context, namespace string, model *v1alpha1.Model) (bool, time.Duration, string, string) {
 	start := time.Now()
 
-	provider := model.Spec.Provider
-	var modelClass *v1alpha1.ModelClass
-	if model.Spec.ClassName != "" {
-		raw, err := r.store.Get(ctx, "ModelClass", "", model.Spec.ClassName)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return false, time.Since(start), "ModelClassMissing", fmt.Sprintf("modelClass %q was not found", model.Spec.ClassName)
-			}
-			return false, time.Since(start), "ModelClassLookupFailed", fmt.Sprintf("modelClass lookup failed: %v", err)
-		}
-		var resolved v1alpha1.ModelClass
-		if err := json.Unmarshal(raw, &resolved); err != nil {
-			return false, time.Since(start), "ModelClassLookupFailed", fmt.Sprintf("modelClass unmarshal failed: %v", err)
-		}
-		classProvider := resolved.Spec.Provisioner
-		if provider != "" && cpi.CanonicalProvisioner(provider) != cpi.CanonicalProvisioner(classProvider) {
-			return false, time.Since(start), "ProviderConflict", fmt.Sprintf(
-				"provider %q does not match modelClass %q provisioner %q",
-				model.Spec.Provider,
-				model.Spec.ClassName,
-				resolved.Spec.Provisioner,
-			)
-		}
-		provider = classProvider
-		modelClass = &resolved
-	}
-	if provider == "" {
-		provider = "openai-compatible"
+	provider, modelClass, failure := resolveModelProvider(ctx, r.store, model)
+	if failure != nil {
+		return false, time.Since(start), failure.reason, failure.message
 	}
 
 	driver, ok := r.registry.Get(provider)
@@ -197,7 +179,85 @@ func (r *ModelReconciler) evaluate(ctx context.Context, namespace string, model 
 		}
 	}
 
+	if verdict := r.passiveVerdict(ctx, provider, model); verdict.Degraded {
+		return false, time.Since(start), verdict.Reason, verdict.Message
+	}
 	return true, time.Since(start), health.Reason, health.Message
+}
+
+// modelFailure is the reason and message of a Model that cannot be evaluated.
+type modelFailure struct {
+	reason  string
+	message string
+}
+
+// resolveModelProvider returns the provisioner that serves model and its
+// ModelClass, if it has one. The failure is set when the ModelClass cannot be
+// resolved or disagrees with the Model's provider.
+func resolveModelProvider(ctx context.Context, st store.Store, model *v1alpha1.Model) (string, *v1alpha1.ModelClass, *modelFailure) {
+	provider := model.Spec.Provider
+	var modelClass *v1alpha1.ModelClass
+	if model.Spec.ClassName != "" {
+		raw, err := st.Get(ctx, "ModelClass", "", model.Spec.ClassName)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return "", nil, &modelFailure{"ModelClassMissing", fmt.Sprintf("modelClass %q was not found", model.Spec.ClassName)}
+			}
+			return "", nil, &modelFailure{"ModelClassLookupFailed", fmt.Sprintf("modelClass lookup failed: %v", err)}
+		}
+		var resolved v1alpha1.ModelClass
+		if err := json.Unmarshal(raw, &resolved); err != nil {
+			return "", nil, &modelFailure{"ModelClassLookupFailed", fmt.Sprintf("modelClass unmarshal failed: %v", err)}
+		}
+		classProvider := resolved.Spec.Provisioner
+		if provider != "" && cpi.CanonicalProvisioner(provider) != cpi.CanonicalProvisioner(classProvider) {
+			return "", nil, &modelFailure{"ProviderConflict", fmt.Sprintf(
+				"provider %q does not match modelClass %q provisioner %q",
+				model.Spec.Provider,
+				model.Spec.ClassName,
+				resolved.Spec.Provisioner,
+			)}
+		}
+		provider = classProvider
+		modelClass = &resolved
+	}
+	if provider == "" {
+		provider = "openai-compatible"
+	}
+	return provider, modelClass, nil
+}
+
+// passiveVerdict reports whether real calls to the Model's target are failing. A
+// store failure keeps the previous verdict, so a monitoring outage neither
+// degrades nor heals a Model.
+func (r *ModelReconciler) passiveVerdict(ctx context.Context, provider string, model *v1alpha1.Model) modelhealth.Verdict {
+	if r.callHealth == nil {
+		return modelhealth.Verdict{}
+	}
+	previous, wasDegraded := modelPassiveDegradation(model)
+	records, err := r.callHealth.ListModelCallHealth(ctx, modelhealth.ReporterStaleAfter)
+	if err != nil {
+		r.logger.Warn("read passive model health", zap.Error(err))
+		return previous
+	}
+	target := modelhealth.TargetKey(provider, model.Spec.Endpoint, model.Spec.ModelID)
+	var matching []store.ModelCallHealth
+	for _, record := range records {
+		if record.Target == target {
+			matching = append(matching, record)
+		}
+	}
+	return modelhealth.Evaluate(modelhealth.Merge(matching), wasDegraded)
+}
+
+// modelPassiveDegradation reports whether the Model is currently marked degraded
+// by passive health, and the verdict that marked it.
+func modelPassiveDegradation(model *v1alpha1.Model) (modelhealth.Verdict, bool) {
+	ready := lifecycle.GetCondition(apiToLifecycleConditions(model.Status.Conditions), lifecycle.ConditionReady)
+	if ready == nil || ready.Status != string(lifecycle.ConditionFalse) || !strings.HasPrefix(ready.Message, modelhealth.MessagePrefix) {
+		return modelhealth.Verdict{}, false
+	}
+	return modelhealth.Verdict{Degraded: true, Reason: ready.Reason, Message: ready.Message}, true
 }
 
 func (r *ModelReconciler) updateModel(ctx context.Context, model *v1alpha1.Model) error {
