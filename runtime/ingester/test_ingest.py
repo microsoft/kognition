@@ -968,6 +968,167 @@ def test_build_embedder_honors_provider_and_model():
     assert emb.dimension == 3072
 
 
+@pytest.fixture
+def embedding_env(monkeypatch):
+    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "AZURE_TENANT_ID", "AZURE_CLIENT_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
+    )
+    ingest.reset_trusted_service_config()
+    yield monkeypatch
+    ingest.reset_trusted_service_config()
+
+
+def test_embedder_sends_daemon_openai_key_only_to_default_endpoint(embedding_env):
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+
+    default = ingest._build_embedder({}, 3)
+    explicit = ingest._build_embedder({"baseUrl": "https://api.openai.com/v1"}, 3)
+
+    assert default.client.api_key == "sk-daemon"
+    assert explicit.client.api_key == "sk-daemon"
+
+
+def test_embedder_withholds_daemon_openai_key_from_other_endpoints(embedding_env):
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+
+    with pytest.raises(ValueError, match="requires an API key"):
+        ingest._build_embedder({"baseUrl": "https://attacker.example/v1"}, 3)
+
+
+def test_embedder_still_uses_payload_key_for_custom_endpoint(embedding_env):
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+
+    emb = ingest._build_embedder(
+        {"baseUrl": "https://llm.example/v1", "apiKey": "sk-model-secret"}, 3
+    )
+
+    assert emb.client.api_key == "sk-model-secret"
+
+
+def test_embedder_uses_daemon_key_for_operator_trusted_host(embedding_env):
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+    ingest.set_trusted_service_config(trusted_embedding_hosts=["llm.internal.example"])
+
+    emb = ingest._build_embedder({"baseUrl": "https://llm.internal.example/v1"}, 3)
+
+    assert emb.client.api_key == "sk-daemon"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://attacker.example",
+        "https://evilopenai.azure.com",
+        "https://acct.openai.azure.com.attacker.example",
+        "https://attacker.example/acct.openai.azure.com",
+    ],
+)
+def test_embedder_never_mints_azure_token_for_untrusted_endpoint(embedding_env, base_url):
+    minted = []
+    embedding_env.setattr(
+        ingest,
+        "_azure_ad_token_provider",
+        lambda *a, **k: minted.append(1) or (lambda: "token"),
+    )
+
+    with pytest.raises(ValueError, match="Azure AD credentials"):
+        ingest._build_embedder(
+            {"provider": "azure_openai", "baseUrl": base_url},
+            3,
+            env={"AZURE_TENANT_ID": "tenant"},
+        )
+
+    assert minted == []
+
+
+def test_embedder_mints_azure_token_for_azure_openai_endpoint(embedding_env):
+    seen = []
+    embedding_env.setattr(
+        ingest,
+        "_azure_ad_token_provider",
+        lambda *a, **k: seen.append(k.get("env")) or (lambda: "token"),
+    )
+
+    emb = ingest._build_embedder(
+        {"provider": "azure_openai", "baseUrl": "https://acct.openai.azure.com/openai"},
+        3,
+        env={"AZURE_TENANT_ID": "tenant"},
+    )
+
+    assert emb.provider == "azure_openai"
+    assert len(seen) == 1
+
+
+def test_embedder_allows_payload_key_on_non_azure_host_for_azure_provider(embedding_env):
+    emb = ingest._build_embedder(
+        {"provider": "azure_openai", "baseUrl": "https://gateway.example", "apiKey": "k"}, 3
+    )
+
+    assert emb.provider == "azure_openai"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://169.254.169.254/latest",
+        "https://169.254.169.254/latest",
+        "https://127.0.0.1:8443/v1",
+        "https://user:pass@attacker.example/v1",
+        "file:///etc/passwd",
+    ],
+)
+def test_embedder_rejects_unsafe_endpoints(embedding_env, base_url):
+    with pytest.raises(ValueError):
+        ingest._build_embedder({"baseUrl": base_url, "apiKey": "k"}, 3)
+
+
+def test_embedder_rejects_endpoint_resolving_to_private_address(embedding_env):
+    embedding_env.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))],
+    )
+
+    with pytest.raises(ValueError, match="publicly routable"):
+        ingest._build_embedder({"baseUrl": "https://rebind.example/v1", "apiKey": "k"}, 3)
+
+
+def test_embedder_allows_private_endpoint_when_operator_trusts_the_host(embedding_env):
+    embedding_env.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))],
+    )
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+    ingest.set_trusted_service_config(trusted_embedding_hosts=["vllm.internal.example"])
+
+    emb = ingest._build_embedder({"baseUrl": "https://vllm.internal.example/v1"}, 3)
+
+    assert emb.provider == "openai"
+
+
+def test_embedder_does_not_follow_redirects(embedding_env):
+    openai = ingest._build_embedder({"baseUrl": "https://llm.example/v1", "apiKey": "k"}, 3)
+    azure = ingest._build_embedder(
+        {"provider": "azure_openai", "baseUrl": "https://acct.openai.azure.com", "apiKey": "k"}, 3
+    )
+
+    assert openai.client._client.follow_redirects is False
+    assert azure.client._client.follow_redirects is False
+
+
+def test_deterministic_embedder_ignores_endpoint(embedding_env):
+    emb = ingest._build_embedder(
+        {"provider": "deterministic", "baseUrl": "https://169.254.169.254"}, 3
+    )
+
+    assert emb.provider == "deterministic"
+
+
 # --------------------------- _build_azure_credential -------------------------
 # Azure credential selection (client-secret / workload-identity /
 # managed-identity / default) for secretless auth on Azure.

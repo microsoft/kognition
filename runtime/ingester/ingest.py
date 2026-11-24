@@ -120,26 +120,35 @@ def _max_document_bytes() -> int:
 
 _SERVICE_INDEXER_EXECUTABLE: str | None = None
 _SERVICE_ALLOW_PRIVATE_NETWORKS: bool | None = None
+_SERVICE_TRUSTED_EMBEDDING_HOSTS: frozenset[str] = frozenset()
 
 
 def set_trusted_service_config(
     *,
     indexer_executable: str | None = None,
     allow_private_networks: bool | None = None,
+    trusted_embedding_hosts: Iterable[str] | None = None,
 ) -> None:
     """Configure trusted service settings at daemon startup."""
     global _SERVICE_INDEXER_EXECUTABLE, _SERVICE_ALLOW_PRIVATE_NETWORKS
+    global _SERVICE_TRUSTED_EMBEDDING_HOSTS
     if indexer_executable is not None:
         _SERVICE_INDEXER_EXECUTABLE = indexer_executable
     if allow_private_networks is not None:
         _SERVICE_ALLOW_PRIVATE_NETWORKS = allow_private_networks
+    if trusted_embedding_hosts is not None:
+        _SERVICE_TRUSTED_EMBEDDING_HOSTS = frozenset(
+            host.strip().lower() for host in trusted_embedding_hosts if host.strip()
+        )
 
 
 def reset_trusted_service_config() -> None:
     """Reset trusted service settings to unconfigured state (for testing)."""
     global _SERVICE_INDEXER_EXECUTABLE, _SERVICE_ALLOW_PRIVATE_NETWORKS
+    global _SERVICE_TRUSTED_EMBEDDING_HOSTS
     _SERVICE_INDEXER_EXECUTABLE = None
     _SERVICE_ALLOW_PRIVATE_NETWORKS = None
+    _SERVICE_TRUSTED_EMBEDDING_HOSTS = frozenset()
 
 
 def _private_networks_allowed() -> bool:
@@ -570,7 +579,6 @@ def _build_embedder(cfg: dict[str, Any], dimension: int, env: dict[str, str] | N
     provider = (cfg.get("provider") or "openai").lower()
     model = cfg.get("model") or "text-embedding-3-small"
     active_env = {**os.environ, **env} if env is not None else os.environ
-    api_key = cfg.get("apiKey") or active_env.get("OPENAI_API_KEY") or ""
     base_url = cfg.get("baseUrl")
     requested_dimensions = cfg.get("dimensions")
     if requested_dimensions is not None and (
@@ -581,30 +589,78 @@ def _build_embedder(cfg: dict[str, Any], dimension: int, env: dict[str, str] | N
         raise ValueError("invocation profile embedding dimensions must match the KnowledgeBase dimension")
     if provider == "deterministic":
         return Embedder(client=None, model=model, provider=provider, dimension=dimension)
+    ambient_credentials_allowed = _check_embedding_endpoint(base_url, provider)
+    api_key = cfg.get("apiKey") or (
+        active_env.get("OPENAI_API_KEY") if ambient_credentials_allowed else ""
+    ) or ""
+    use_azure_ad = provider == "azure_openai" and not api_key and bool(active_env.get("AZURE_TENANT_ID"))
+    if use_azure_ad and not ambient_credentials_allowed:
+        raise ValueError(
+            "Azure AD credentials may only be used with Azure OpenAI or operator-trusted embedding endpoints"
+        )
+    if not api_key and not use_azure_ad:
+        raise ValueError(
+            "embedding endpoint requires an API key; daemon credentials are only sent to trusted endpoints"
+        )
+    # Credentials must never follow a redirect to another host.
+    http_client = httpx.Client(follow_redirects=False)
     if provider == "azure_openai":
         endpoint = _azure_resource_root(base_url or "")
         api_version = cfg.get("apiVersion") or "2024-08-01-preview"
-        # If no explicit apiKey but Azure service-principal creds are present in
-        # the environment, mint an AAD token. This matches the runtime chat
-        # path in runtime/agent/providers.py.
-        if not api_key and active_env.get("AZURE_TENANT_ID"):
+        # Without an explicit apiKey, mint an AAD token from the Azure
+        # identity supplied for this task (matches runtime/agent/providers.py).
+        if use_azure_ad:
             client = AzureOpenAI(
                 azure_ad_token_provider=_azure_ad_token_provider(env=active_env),
                 azure_endpoint=endpoint,
                 api_version=api_version,
+                http_client=http_client,
             )
         else:
             client = AzureOpenAI(
                 api_key=api_key,
                 azure_endpoint=endpoint,
                 api_version=api_version,
+                http_client=http_client,
             )
     else:
-        kw: dict[str, Any] = {"api_key": api_key}
+        kw: dict[str, Any] = {"api_key": api_key, "http_client": http_client}
         if base_url:
             kw["base_url"] = base_url
         client = OpenAI(**kw)
     return Embedder(client=client, model=model, provider=provider, dimension=dimension, requested_dimensions=requested_dimensions)
+
+
+_OPENAI_DEFAULT_HOSTS = frozenset({"api.openai.com"})
+_AZURE_OPENAI_HOST_SUFFIXES = (
+    ".openai.azure.com",
+    ".cognitiveservices.azure.com",
+    ".services.ai.azure.com",
+)
+
+
+def _check_embedding_endpoint(base_url: str | None, provider: str) -> bool:
+    """Validate a caller-selected embedding endpoint.
+
+    Returns True only when daemon-held credentials may be sent to it: the
+    provider's own service or a host the operator trusted at startup. Any
+    other endpoint must pass SSRF validation and receives caller credentials only.
+    """
+    if not base_url:
+        return provider != "azure_openai"
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+    scheme = parsed.scheme.lower()
+    if host and not (parsed.username or parsed.password):
+        if host in _SERVICE_TRUSTED_EMBEDDING_HOSTS and scheme in {"http", "https"}:
+            return True
+        if scheme == "https":
+            if provider == "azure_openai" and host.endswith(_AZURE_OPENAI_HOST_SUFFIXES):
+                return True
+            if provider != "azure_openai" and host in _OPENAI_DEFAULT_HOSTS:
+                return True
+    _validate_remote_url(base_url, allow_private_http=True)
+    return False
 
 
 def _azure_resource_root(endpoint: str) -> str:

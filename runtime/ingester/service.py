@@ -282,6 +282,7 @@ def main() -> None:
         allow_private_networks=(
             os.environ.get("KOGNITION_INGEST_ALLOW_PRIVATE_NETWORKS", "").lower() == "true"
         ),
+        trusted_embedding_hosts=os.environ.get("KOGNITION_INGEST_TRUSTED_EMBEDDING_HOSTS", "").split(","),
     )
     address = os.environ.get("KOGNITION_INGEST_LISTEN", "0.0.0.0:8082")
     host, port = address.rsplit(":", 1)
