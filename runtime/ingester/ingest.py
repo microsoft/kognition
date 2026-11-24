@@ -949,13 +949,7 @@ def ingest_task(task: dict[str, Any], env: dict[str, str] | None = None) -> dict
         dimension = int(provider_index.get("dimension") or 0)
         if dimension < 1:
             raise ValueError("providerIndex.dimension must be positive")
-        if env is not None:
-            try:
-                embedder = _build_embedder(task.get("embedding") or {}, dimension, env=env)
-            except TypeError:
-                embedder = _build_embedder(task.get("embedding") or {}, dimension)
-        else:
-            embedder = _build_embedder(task.get("embedding") or {}, dimension)
+        embedder = _build_embedder(task.get("embedding") or {}, dimension, env=env)
         spool_path = os.environ.get(
             "KOGNITION_KNOWLEDGE_INDEX_SPOOL_FILE",
             "/var/run/kognition/index/chunks.jsonl",
@@ -977,13 +971,7 @@ def ingest_task(task: dict[str, Any], env: dict[str, str] | None = None) -> dict
         raise ValueError("vectorStore.dsn is required")
     _validate_table_name(table)
 
-    if env is not None:
-        try:
-            embedder = _build_embedder(task.get("embedding") or {}, dimension, env=env)
-        except TypeError:
-            embedder = _build_embedder(task.get("embedding") or {}, dimension)
-    else:
-        embedder = _build_embedder(task.get("embedding") or {}, dimension)
+    embedder = _build_embedder(task.get("embedding") or {}, dimension, env=env)
     with psycopg.connect(dsn, autocommit=False) as conn:
         register_vector(conn)
         _ensure_schema(conn, table, dimension)

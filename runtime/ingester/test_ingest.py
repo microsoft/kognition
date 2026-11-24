@@ -749,7 +749,7 @@ def test_ingest_task_provider_mode_completes_spool_before_secure_transport(
     monkeypatch.setattr(
         ingest,
         "_build_embedder",
-        lambda config, dimension: object(),
+        lambda config, dimension, env=None: object(),
     )
     summary = {
         "documents": 1,
@@ -792,7 +792,9 @@ def test_ingest_task_provider_mode_aborts_partial_spool_on_failure(
 ):
     spool = tmp_path / "chunks.jsonl"
     monkeypatch.setenv("KOGNITION_KNOWLEDGE_INDEX_SPOOL_FILE", str(spool))
-    monkeypatch.setattr(ingest, "_build_embedder", lambda config, dimension: object())
+    monkeypatch.setattr(
+        ingest, "_build_embedder", lambda config, dimension, env=None: object()
+    )
     monkeypatch.setattr(
         ingest,
         "_ingest_sources",
@@ -806,6 +808,32 @@ def test_ingest_task_provider_mode_aborts_partial_spool_on_failure(
 
     assert not spool.exists()
     assert not list(tmp_path.glob(".kognition-spool-*"))
+
+
+@pytest.mark.parametrize(
+    "task",
+    [
+        {"kb": {"name": "kb"}, "providerIndex": {"dimension": 3}},
+        {"kb": {"name": "kb"}, "vectorStore": {"dsn": "postgres://unused"}},
+    ],
+    ids=["provider-index", "vector-store"],
+)
+def test_ingest_task_propagates_embedder_type_error_without_retry(
+    monkeypatch, tmp_path, task
+):
+    monkeypatch.setenv("KOGNITION_KNOWLEDGE_INDEX_SPOOL_FILE", str(tmp_path / "chunks.jsonl"))
+    calls = []
+
+    def build(config, dimension, env=None):
+        calls.append(env)
+        raise TypeError("credential construction failed")
+
+    monkeypatch.setattr(ingest, "_build_embedder", build)
+
+    with pytest.raises(TypeError, match="credential construction failed"):
+        ingest.ingest_task(task, env={"AZURE_CREDENTIAL_TYPE": "managed-identity"})
+
+    assert calls == [{"AZURE_CREDENTIAL_TYPE": "managed-identity"}]
 
 
 def test_ingest_task_rejects_multiple_index_backends():
