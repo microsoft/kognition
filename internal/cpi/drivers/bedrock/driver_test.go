@@ -6,8 +6,10 @@ package bedrock
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/kognition-ai/kognition/api/v1alpha1"
@@ -283,6 +285,79 @@ func TestProbe_AuthFailure(t *testing.T) {
 		t.Errorf("Reason = %q, want %q", result.Reason, "AuthenticationFailed")
 	}
 }
+
+func TestProbe_ClassifiesHTTPResponses(t *testing.T) {
+	const validation = `{"message":"Malformed input request: #: required key [messages] not found"}`
+	tests := []struct {
+		name          string
+		status        int
+		body          string
+		retryAfter    string
+		wantAvailable bool
+		wantReason    string
+	}{
+		{name: "ok", status: http.StatusOK, body: `{}`, wantAvailable: true, wantReason: "Healthy"},
+		{name: "request validation error", status: http.StatusBadRequest, body: validation, wantAvailable: true, wantReason: "Healthy"},
+		{name: "unparseable validation body", status: http.StatusBadRequest, body: `<html>`, wantAvailable: true, wantReason: "Healthy"},
+		{name: "empty validation body", status: http.StatusBadRequest, wantAvailable: true, wantReason: "Healthy"},
+		{name: "invalid model identifier", status: http.StatusBadRequest, body: `{"message":"The provided model identifier is invalid."}`, wantReason: "ModelUnavailable"},
+		{name: "on-demand unsupported", status: http.StatusBadRequest, body: `{"message":"Invocation of model ID x with on-demand throughput isn't supported. Retry your request with the ID or ARN of an inference profile that contains this model."}`, wantReason: "ModelUnavailable"},
+		{name: "model unsupported for operation", status: http.StatusBadRequest, body: `{"message":"This action doesn't support the model that you provided."}`, wantReason: "ModelUnavailable"},
+		{name: "unauthorized", status: http.StatusUnauthorized, wantReason: "AuthenticationFailed"},
+		{name: "access denied", status: http.StatusForbidden, wantReason: "AuthenticationFailed"},
+		{name: "not found", status: http.StatusNotFound, wantReason: "EndpointError"},
+		{name: "model timeout", status: http.StatusRequestTimeout, wantReason: "EndpointError"},
+		{name: "throttled", status: http.StatusTooManyRequests, retryAfter: "7", wantReason: "RateLimited"},
+		{name: "model error", status: http.StatusFailedDependency, wantReason: "EndpointError"},
+		{name: "internal error", status: http.StatusInternalServerError, wantReason: "EndpointError"},
+		{name: "service unavailable", status: http.StatusServiceUnavailable, wantReason: "EndpointError"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if test.retryAfter != "" {
+					w.Header().Set("Retry-After", test.retryAfter)
+				}
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+
+			result, err := New(server.Client()).Probe(context.Background(), &v1alpha1.ModelSpec{
+				ModelID:  "anthropic.claude-3-haiku",
+				Endpoint: server.URL,
+			}, nil)
+			if err != nil {
+				t.Fatalf("Probe() error: %v", err)
+			}
+			if result.Available != test.wantAvailable || result.Reason != test.wantReason {
+				t.Fatalf("Probe() = %+v; want available %t, reason %q", result, test.wantAvailable, test.wantReason)
+			}
+			if test.retryAfter != "" && !strings.Contains(result.Message, "Retry-After: "+test.retryAfter) {
+				t.Errorf("Message = %q, want Retry-After hint", result.Message)
+			}
+		})
+	}
+}
+
+func TestProbe_EndpointUnreachable(t *testing.T) {
+	client := &http.Client{Transport: failingTransport{err: errors.New("connection refused")}}
+	result, err := New(client).Probe(context.Background(), &v1alpha1.ModelSpec{
+		ModelID:  "anthropic.claude-3-haiku",
+		Endpoint: "https://bedrock.example",
+	}, nil)
+	if err != nil {
+		t.Fatalf("Probe() error: %v", err)
+	}
+	if result.Available || result.Reason != "EndpointUnreachable" {
+		t.Fatalf("Probe() = %+v, want unavailable EndpointUnreachable", result)
+	}
+}
+
+type failingTransport struct{ err error }
+
+func (t failingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, t.err }
 
 func TestEmbed_NotSupported(t *testing.T) {
 	driver := New(nil)
