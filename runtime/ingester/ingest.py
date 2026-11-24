@@ -127,6 +127,7 @@ def _max_document_bytes() -> int:
 _SERVICE_INDEXER_EXECUTABLE: str | None = None
 _SERVICE_ALLOW_PRIVATE_NETWORKS: bool | None = None
 _SERVICE_TRUSTED_EMBEDDING_HOSTS: frozenset[str] = frozenset()
+_SERVICE_STRICT_AZURE_HOSTS = False
 
 
 def set_trusted_service_config(
@@ -134,10 +135,13 @@ def set_trusted_service_config(
     indexer_executable: str | None = None,
     allow_private_networks: bool | None = None,
     trusted_embedding_hosts: Iterable[str] | None = None,
+    strict_azure_hosts: bool | None = None,
 ) -> None:
     """Configure trusted service settings at daemon startup."""
     global _SERVICE_INDEXER_EXECUTABLE, _SERVICE_ALLOW_PRIVATE_NETWORKS
-    global _SERVICE_TRUSTED_EMBEDDING_HOSTS
+    global _SERVICE_TRUSTED_EMBEDDING_HOSTS, _SERVICE_STRICT_AZURE_HOSTS
+    if strict_azure_hosts is not None:
+        _SERVICE_STRICT_AZURE_HOSTS = strict_azure_hosts
     if indexer_executable is not None:
         _SERVICE_INDEXER_EXECUTABLE = indexer_executable
     if allow_private_networks is not None:
@@ -151,10 +155,11 @@ def set_trusted_service_config(
 def reset_trusted_service_config() -> None:
     """Reset trusted service settings to unconfigured state (for testing)."""
     global _SERVICE_INDEXER_EXECUTABLE, _SERVICE_ALLOW_PRIVATE_NETWORKS
-    global _SERVICE_TRUSTED_EMBEDDING_HOSTS
+    global _SERVICE_TRUSTED_EMBEDDING_HOSTS, _SERVICE_STRICT_AZURE_HOSTS
     _SERVICE_INDEXER_EXECUTABLE = None
     _SERVICE_ALLOW_PRIVATE_NETWORKS = None
     _SERVICE_TRUSTED_EMBEDDING_HOSTS = frozenset()
+    _SERVICE_STRICT_AZURE_HOSTS = False
 
 
 def _private_networks_allowed() -> bool:
@@ -451,6 +456,34 @@ def _is_within(path: str, root: str) -> bool:
         return False
 
 
+def _git_environment(home: str) -> dict[str, str]:
+    """Minimal environment for git so daemon credentials and user git config never reach a clone."""
+    inherited = (
+        "PATH", "SYSTEMROOT", "LANG", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "GIT_SSL_CAINFO",
+    )
+    environment = {name: os.environ[name] for name in inherited if name in os.environ}
+    environment.update(
+        HOME=home,
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_TERMINAL_PROMPT="0",
+    )
+    return environment
+
+
+def _git_clone_command(branch: str, url: str, destination: str) -> list[str]:
+    return [
+        "git",
+        # Only HTTPS (validated above) and no redirect, which would bypass the URL checks.
+        "-c", "protocol.allow=never",
+        "-c", "protocol.https.allow=always",
+        "-c", "http.followRedirects=false",
+        "-c", "core.symlinks=false",
+        "clone", "--depth", "1", "--branch", branch, "--", url, destination,
+    ]
+
+
 def _fetch_git(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
     import subprocess
     import tempfile
@@ -462,14 +495,15 @@ def _fetch_git(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
     limit = _max_document_bytes()
     max_documents = _max_documents_per_source()
     document_count = 0
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as git_home:
         try:
             subprocess.run(
-                ["git", "clone", "--depth", "1", "--branch", branch, "--", url, tmp],
+                _git_clone_command(branch, url, tmp),
                 check=True,
                 capture_output=True,
                 text=True,
                 timeout=180,
+                env=_git_environment(git_home),
             )
         except subprocess.CalledProcessError as exc:  # surface a helpful error
             raise RuntimeError(f"git clone failed: {(exc.stderr or '').strip() or exc}") from exc
@@ -595,9 +629,17 @@ def _build_embedder(cfg: dict[str, Any], dimension: int, env: dict[str, str] | N
         raise ValueError("invocation profile embedding dimensions must match the KnowledgeBase dimension")
     if provider == "deterministic":
         return Embedder(client=None, model=model, provider=provider, dimension=dimension)
-    ambient_credentials_allowed = _check_embedding_endpoint(base_url, provider)
+    ambient_tier = _check_embedding_endpoint(base_url, provider)
+    # A daemon OpenAI key is meaningless to Azure OpenAI, so only an operator-listed host may receive it there.
+    daemon_key_allowed = ambient_tier == _TRUST_OPERATOR or (
+        ambient_tier == _TRUST_PROVIDER and provider != "azure_openai"
+    )
+    # Strict mode limits the Azure AD token to hosts the operator listed exactly.
+    ambient_credentials_allowed = ambient_tier == _TRUST_OPERATOR or (
+        ambient_tier == _TRUST_PROVIDER and not _SERVICE_STRICT_AZURE_HOSTS
+    )
     api_key = cfg.get("apiKey") or (
-        active_env.get("OPENAI_API_KEY") if ambient_credentials_allowed else ""
+        active_env.get("OPENAI_API_KEY") if daemon_key_allowed else ""
     ) or ""
     use_azure_ad = provider == "azure_openai" and not api_key and bool(active_env.get("AZURE_TENANT_ID"))
     if use_azure_ad and not ambient_credentials_allowed:
@@ -643,30 +685,32 @@ _AZURE_OPENAI_HOST_SUFFIXES = (
     ".cognitiveservices.azure.com",
     ".services.ai.azure.com",
 )
+_TRUST_OPERATOR = "operator"
+_TRUST_PROVIDER = "provider"
 
 
-def _check_embedding_endpoint(base_url: str | None, provider: str) -> bool:
+def _check_embedding_endpoint(base_url: str | None, provider: str) -> str | None:
     """Validate a caller-selected embedding endpoint.
 
-    Returns True only when daemon-held credentials may be sent to it: the
-    provider's own service or a host the operator trusted at startup. Any
-    other endpoint must pass SSRF validation and receives caller credentials only.
+    Returns the trust tier that lets daemon-held credentials reach it: an
+    operator-listed host, or the provider's own service. Any other endpoint
+    must pass SSRF validation and receives caller credentials only (None).
     """
     if not base_url:
-        return provider != "azure_openai"
+        return None if provider == "azure_openai" else _TRUST_PROVIDER
     parsed = urlparse(base_url)
     host = (parsed.hostname or "").lower()
     scheme = parsed.scheme.lower()
     if host and not (parsed.username or parsed.password):
         if host in _SERVICE_TRUSTED_EMBEDDING_HOSTS and scheme in {"http", "https"}:
-            return True
+            return _TRUST_OPERATOR
         if scheme == "https":
             if provider == "azure_openai" and host.endswith(_AZURE_OPENAI_HOST_SUFFIXES):
-                return True
+                return _TRUST_PROVIDER
             if provider != "azure_openai" and host in _OPENAI_DEFAULT_HOSTS:
-                return True
+                return _TRUST_PROVIDER
     _validate_remote_url(base_url, allow_private_http=True)
-    return False
+    return None
 
 
 def _azure_resource_root(endpoint: str) -> str:

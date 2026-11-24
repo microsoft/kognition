@@ -417,11 +417,65 @@ def test_fetch_git_bounds_files_and_cleans_temporary_clone(monkeypatch):
             )
         )
 
-    assert commands[0][0:6] == [
-        "git", "clone", "--depth", "1", "--branch", "release/v1"
+    command = commands[0]
+    assert command[command.index("clone") + 1 : command.index("--")] == [
+        "--depth", "1", "--branch", "release/v1"
     ]
-    assert commands[0][6] == "--"
+    assert command[command.index("--") + 1] == "https://example.test/repo.git"
     assert all(not os.path.exists(path) for path in clone_directories)
+
+
+def test_git_clone_command_restricts_protocols_redirects_and_symlinks():
+    command = ingest._git_clone_command("main", "https://example.test/repo.git", "/tmp/dest")
+
+    options = [command[i + 1] for i, part in enumerate(command) if part == "-c"]
+    assert command.index("clone") > max(i for i, part in enumerate(command) if part == "-c")
+    assert {
+        "protocol.allow=never",
+        "protocol.https.allow=always",
+        "http.followRedirects=false",
+        "core.symlinks=false",
+    } <= set(options)
+    assert command[-3:] == ["--", "https://example.test/repo.git", "/tmp/dest"]
+
+
+def test_fetch_git_runs_clone_with_scrubbed_environment(monkeypatch):
+    import subprocess
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-daemon")
+    seen = {}
+
+    def fake_run(command, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(command, 0)
+
+    _allow_public_git_host(monkeypatch)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert list(ingest._fetch_git({"url": "https://example.test/repo.git"})) == []
+    assert "OPENAI_API_KEY" not in seen["env"]
+    assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_git_environment_withholds_daemon_credentials(monkeypatch, tmp_path):
+    for name, value in {
+        "OPENAI_API_KEY": "sk-daemon",
+        "AZURE_CLIENT_SECRET": "azure-daemon",
+        "PGPASSWORD": "pg-daemon",
+        "GIT_ASKPASS": "/bin/steal",
+        "HTTPS_PROXY": "http://proxy.internal:3128",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    environment = ingest._git_environment(str(tmp_path))
+
+    assert environment["HTTPS_PROXY"] == "http://proxy.internal:3128"
+    assert environment["HOME"] == str(tmp_path)
+    assert environment["GIT_TERMINAL_PROMPT"] == "0"
+    assert environment["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert environment["GIT_CONFIG_GLOBAL"] == os.devnull
+    for name in ("OPENAI_API_KEY", "AZURE_CLIENT_SECRET", "PGPASSWORD", "GIT_ASKPASS"):
+        assert name not in environment
 
 
 def _allow_public_git_host(monkeypatch):
@@ -1109,6 +1163,59 @@ def test_embedder_mints_azure_token_for_azure_openai_endpoint(embedding_env):
 
     assert emb.provider == "azure_openai"
     assert len(seen) == 1
+
+
+def test_embedder_never_sends_daemon_openai_key_to_azure_suffix_host(embedding_env):
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+    embedding_env.setattr(ingest, "_azure_ad_token_provider", lambda *a, **k: (lambda: "token"))
+
+    emb = ingest._build_embedder(
+        {"provider": "azure_openai", "baseUrl": "https://acct.openai.azure.com/openai"},
+        3,
+        env={"AZURE_TENANT_ID": "tenant"},
+    )
+
+    assert emb.client.api_key != "sk-daemon"
+
+    with pytest.raises(ValueError, match="requires an API key"):
+        ingest._build_embedder(
+            {"provider": "azure_openai", "baseUrl": "https://acct.openai.azure.com/openai"}, 3
+        )
+
+
+def test_strict_azure_hosts_limit_token_to_operator_listed_hosts(embedding_env):
+    minted = []
+    embedding_env.setattr(
+        ingest,
+        "_azure_ad_token_provider",
+        lambda *a, **k: minted.append(1) or (lambda: "token"),
+    )
+    cfg = {"provider": "azure_openai", "baseUrl": "https://acct.openai.azure.com/openai"}
+    env = {"AZURE_TENANT_ID": "tenant"}
+
+    ingest.set_trusted_service_config(strict_azure_hosts=True)
+    with pytest.raises(ValueError, match="Azure AD credentials"):
+        ingest._build_embedder(cfg, 3, env=env)
+    assert minted == []
+
+    ingest.set_trusted_service_config(
+        strict_azure_hosts=True, trusted_embedding_hosts=["acct.openai.azure.com"]
+    )
+    assert ingest._build_embedder(cfg, 3, env=env).provider == "azure_openai"
+    assert minted == [1]
+
+
+def test_strict_azure_hosts_do_not_affect_payload_keys_or_default_openai(embedding_env):
+    embedding_env.setenv("OPENAI_API_KEY", "sk-daemon")
+    ingest.set_trusted_service_config(strict_azure_hosts=True)
+
+    azure = ingest._build_embedder(
+        {"provider": "azure_openai", "baseUrl": "https://acct.openai.azure.com", "apiKey": "k"}, 3
+    )
+    openai = ingest._build_embedder({}, 3)
+
+    assert azure.client.api_key == "k"
+    assert openai.client.api_key == "sk-daemon"
 
 
 def test_embedder_allows_payload_key_on_non_azure_host_for_azure_provider(embedding_env):
