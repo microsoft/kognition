@@ -45,4 +45,25 @@ webhooks:
         resources:
           - toolclasses
         scope: Cluster
+  {{- if .Values.k8sController.workflowExecutor.enabled }}
+  - name: workflow-submission.kognition.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    reinvocationPolicy: Never
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    clientConfig:
+      {{- include "kognition.resourceWebhookCABundle" . | nindent 6 }}
+      service:
+        name: {{ include "kognition.fullname" . }}-workflow-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 443
+    rules:
+      - apiGroups: ["kognition.dev"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["workflowruns"]
+        scope: Namespaced
+  {{- end }}
 {{- end }}

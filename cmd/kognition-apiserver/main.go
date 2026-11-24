@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -18,7 +19,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
+	corev1 "k8s.io/api/core/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/apiserver"
 	"github.com/kognition-ai/kognition/internal/auth"
 	"github.com/kognition-ai/kognition/internal/controller"
@@ -129,6 +137,44 @@ func runAPIServerCommand(
 	return runServerLifecycle(ctx, runtime.server, runtime.listener, runtime.closePool, logger)
 }
 
+func newWorkflowExecutorInitiation(ctx context.Context, st *pgstore.Store, keys runtimeapproval.BindingKeyStore) (*runtimeapproval.WorkflowExecutorInitiationService, error) {
+	clock := func() (time.Time, error) {
+		clockContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return st.WorkflowExecutorClock(clockContext)
+	}
+	authorizer, err := runtimeapproval.NewLiveWorkflowExecutorAuthorizer(runtimeapproval.WorkflowExecutorAuthorityConfig{
+		Reader: st, CurrentExecutor: runtimeapproval.AuthenticatedWorkflowExecutor,
+		CurrentControllerUID: auth.AuthenticatedWorkflowControllerUID, Clock: clock,
+	})
+	if err != nil {
+		return nil, err
+	}
+	dispatch, err := runtimeapproval.NewWorkflowDispatchGate(runtimeapproval.WorkflowDispatchConfig{
+		Activations: st, Approvals: st, Keys: keys, Clock: clock,
+		Eligibility: func(ctx context.Context, approval api.RuntimeApproval) error {
+			if approval.Spec.ActorKind != api.RuntimeApprovalActorExecutor {
+				return runtimeapproval.ErrWorkflowDispatchUnsupported
+			}
+			_, err := auth.AuthenticatedWorkflowControllerUID(ctx)
+			return err
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	coordinator, err := runtimeapproval.NewWorkflowExecutorCoordinator(runtimeapproval.WorkflowExecutorCoordinatorConfig{
+		Store: st, Keys: keys, Authorizer: authorizer, Dispatch: dispatch, Clock: clock, TTL: 24 * time.Hour,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return runtimeapproval.NewWorkflowExecutorInitiationService(runtimeapproval.WorkflowExecutorInitiationConfig{
+		Keys: keys, Coordinator: coordinator, CurrentExecutor: runtimeapproval.AuthenticatedWorkflowExecutor,
+		CurrentControllerUID: auth.AuthenticatedWorkflowControllerUID, Clock: clock,
+	})
+}
+
 func newProductionRuntime(ctx context.Context, logger *zap.Logger, options []apiserver.Option) (*apiServerRuntime, error) {
 	pool, err := newDatabasePool(ctx, databaseURL())
 	if err != nil {
@@ -142,6 +188,18 @@ func newProductionRuntime(ctx context.Context, logger *zap.Logger, options []api
 	if err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("configure RuntimeApproval binding keys: %w", err)
+	}
+	if profile := os.Getenv("KOGNITION_WORKFLOW_EXECUTOR_ATTESTATION_PROFILE"); profile != "" {
+		if profile != "kubernetes-bound-token-v1" {
+			pool.Close()
+			return nil, fmt.Errorf("unsupported Workflow executor attestation profile")
+		}
+		initiation, err := newWorkflowExecutorInitiation(ctx, st, bindingKeys)
+		if err != nil {
+			pool.Close()
+			return nil, fmt.Errorf("configure Workflow executor initiation: %w", err)
+		}
+		options = append(options, apiserver.WithWorkflowExecutorInitiation(initiation, nil))
 	}
 	policyEvaluator := controller.NewAgentPolicyReconciler(st, opa.NewEngine(), logger.Named("runtime-agent-policy"))
 	invocationPolicies := controller.NewInvocationPolicyEngine(
@@ -193,6 +251,7 @@ func newProductionRuntime(ctx context.Context, logger *zap.Logger, options []api
 		return nil, fmt.Errorf("create tool gateway: %w", err)
 	}
 	options = append(options,
+		apiserver.WithWorkflowExecutorClock(st.WorkflowExecutorClock),
 		apiserver.WithModelAccessAuthorizer(invocationPolicies),
 		apiserver.WithModelGatewayCore(modelGatewayCore),
 		apiserver.WithChatQuotaEnforcer(quotaEnforcer),
@@ -238,6 +297,26 @@ func newCPIRegistry(httpClient *http.Client) *cpi.Registry {
 
 func buildServerOptions(ctx context.Context, registry *cpi.Registry) ([]apiserver.Option, bool, error) {
 	options := []apiserver.Option{apiserver.WithCPIRegistry(registry)}
+	executors, err := runtimeapproval.WorkflowExecutorPrincipalsFromJSON(os.Getenv(runtimeapproval.WorkflowExecutorPrincipalsEnvironmentVariable))
+	if err != nil {
+		return nil, true, fmt.Errorf("configure Workflow executor principals: %w", err)
+	}
+	attestationProfile := os.Getenv("KOGNITION_WORKFLOW_EXECUTOR_ATTESTATION_PROFILE")
+	if attestationProfile != "" && (attestationProfile != "kubernetes-bound-token-v1" || len(executors) == 0 ||
+		os.Getenv("KOGNITION_AUTH_ENABLED") != "true" || os.Getenv("KOGNITION_OIDC_AUDIENCE") != auth.WorkflowExecutorTokenAudience) {
+		return nil, true, fmt.Errorf("Workflow executor attestation requires the explicit Kubernetes profile, configured principals and dedicated OIDC audience")
+	}
+	if len(executors) != 0 {
+		if os.Getenv("KOGNITION_AUTH_ENABLED") != "true" {
+			return nil, true, fmt.Errorf("Workflow executor configuration requires enabled authentication")
+		}
+		for _, executor := range executors {
+			if executor.Method != "oidc" || executor.Issuer != os.Getenv("KOGNITION_OIDC_ISSUER") || executor.Issuer == "" {
+				return nil, true, fmt.Errorf("standalone Workflow executor must match the configured OIDC issuer")
+			}
+		}
+		options = append(options, apiserver.WithWorkflowExecutorPrincipals(executors))
+	}
 	serviceToken := os.Getenv("KOGNITION_AGENT_SERVICE_TOKEN")
 	if serviceToken != "" {
 		if os.Getenv("KOGNITION_AUTH_ENABLED") != "true" || len(serviceToken) < 32 || serviceToken == os.Getenv("KOGNITION_BOOTSTRAP_TOKEN") || serviceToken == os.Getenv("KOGNITION_RUNTIME_AUTH_TOKEN") {
@@ -252,10 +331,46 @@ func buildServerOptions(ctx context.Context, registry *cpi.Registry) ([]apiserve
 	if err != nil {
 		return nil, true, err
 	}
+	if attestationProfile != "" {
+		authenticator, err = newWorkflowExecutorKubernetesAuthenticator(authenticator, executors)
+		if err != nil {
+			return nil, true, fmt.Errorf("configure Workflow executor attestation: %w", err)
+		}
+	}
 	return append(options,
 		apiserver.WithAuthenticator(authenticator, requiredGroups),
 		apiserver.WithControlPlaneAdminGroups(splitCSV(os.Getenv("KOGNITION_CONTROL_PLANE_ADMIN_GROUPS"))),
 	), true, nil
+}
+
+func newWorkflowExecutorKubernetesAuthenticator(base auth.Authenticator, principals []api.ControlPlaneRoleSubject) (auth.Authenticator, error) {
+	var config *rest.Config
+	var err error
+	if path := os.Getenv("KOGNITION_WORKFLOW_EXECUTOR_KUBECONFIG"); path != "" {
+		if !filepath.IsAbs(path) {
+			return nil, fmt.Errorf("Workflow executor kubeconfig must be an explicit absolute path")
+		}
+		config, err = clientcmd.BuildConfigFromFlags("", path)
+	} else {
+		config, err = rest.InClusterConfig()
+	}
+	if err != nil {
+		return nil, err
+	}
+	config.Timeout = 5 * time.Second
+	kube, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	scheme := k8sruntime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		return nil, err
+	}
+	reader, err := client.New(config, client.Options{Scheme: scheme})
+	if err != nil {
+		return nil, err
+	}
+	return auth.NewWorkflowExecutorAuthenticator(base, principals, kube.AuthenticationV1().TokenReviews(), reader)
 }
 
 func runServerLifecycle(

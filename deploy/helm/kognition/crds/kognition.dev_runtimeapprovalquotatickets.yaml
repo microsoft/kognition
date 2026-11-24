@@ -97,6 +97,28 @@ spec:
                 - scope
                 - uid
                 type: object
+              actorKind:
+                type: string
+                enum: [WorkflowExecutor]
+              executorRef:
+                type: object
+                required: [method, issuer, subject]
+                properties:
+                  method:
+                    type: string
+                    minLength: 1
+                    maxLength: 64
+                  issuer:
+                    type: string
+                    minLength: 1
+                    maxLength: 512
+                  subject:
+                    type: string
+                    minLength: 1
+                    maxLength: 512
+                x-kubernetes-validations:
+                - rule: "!(self.method in ['anonymous', 'token'])"
+                  message: "executor quota requires a canonical non-bootstrap principal"
               binding:
                 properties:
                   algorithm:
@@ -106,6 +128,7 @@ spec:
                   domain:
                     enum:
                     - kognition.dev/runtime-approval/action/v1
+                    - kognition.dev/workflow-executor/action/v1
                     type: string
                   epoch:
                     format: int64
@@ -114,6 +137,7 @@ spec:
                   format:
                     enum:
                     - kognition-runtime-action-v1
+                    - kognition-workflow-executor-action-v1
                     type: string
                   keyVersion:
                     format: int64
@@ -166,7 +190,6 @@ spec:
                 minLength: 1
                 type: string
             required:
-            - agentRef
             - binding
             - chargedBytes
             - createdAt
@@ -175,10 +198,10 @@ spec:
             - workspace
             type: object
             x-kubernetes-validations:
-            - message: agentRef must identify an Agent namespaced to the RuntimeApprovalQuotaTicket
-                workspace
-              rule: self.agentRef.kind == 'Agent' && self.agentRef.scope == 'Namespaced'
-                && self.agentRef.__namespace__ == self.workspace
+            - message: quota ticket must identify its actual Agent or executor actor
+              rule: "has(self.actorKind) ? (has(self.executorRef) && !has(self.agentRef)) : (has(self.agentRef) && !has(self.executorRef) && self.agentRef.kind == 'Agent' && self.agentRef.scope == 'Namespaced' && self.agentRef.__namespace__ == self.workspace)"
+            - message: quota binding domain must match its actual actor type
+              rule: "has(self.actorKind) ? (self.binding.format == 'kognition-workflow-executor-action-v1' && self.binding.domain == 'kognition.dev/workflow-executor/action/v1') : (self.binding.format == 'kognition-runtime-action-v1' && self.binding.domain == 'kognition.dev/runtime-approval/action/v1')"
             - message: compacted tickets require compaction and retention timestamps
               rule: 'self.phase == ''Compacted'' ? (has(self.compactedAt) && has(self.retentionDeadline))
                 : true'

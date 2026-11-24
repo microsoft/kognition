@@ -4,6 +4,7 @@
 package admission
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -49,7 +50,7 @@ func (v *RuntimeApprovalValidator) WithDecisionAuthority(username string) *Runti
 func (v *RuntimeApprovalValidator) WithExecutionWriters(writers map[string]string) *RuntimeApprovalValidator {
 	v.executionWriters = make(map[string]string, len(writers))
 	for username, plane := range writers {
-		if username != "" && (plane == api.RuntimeApprovalPlaneTool || plane == api.RuntimeApprovalPlaneMemory || plane == api.RuntimeApprovalPlaneCommunication) {
+		if username != "" && (plane == api.RuntimeApprovalPlaneTool || plane == api.RuntimeApprovalPlaneMemory || plane == api.RuntimeApprovalPlaneCommunication || plane == api.RuntimeApprovalPlaneWorkflow) {
 			v.executionWriters[username] = plane
 		}
 	}
@@ -78,6 +79,21 @@ func (v *RuntimeApprovalValidator) Validate(ctx context.Context, req *Request) *
 	var current api.RuntimeApproval
 	if err := json.Unmarshal(req.Object, &current); err != nil {
 		return denyRuntimeApproval("invalid RuntimeApproval: " + err.Error())
+	}
+	canonical, err := runtimeapproval.CanonicalizeJSON(req.Object)
+	if err != nil {
+		return denyRuntimeApproval("invalid RuntimeApproval JSON")
+	}
+	var raw struct {
+		Spec json.RawMessage `json:"spec"`
+	}
+	if err := json.Unmarshal(canonical, &raw); err != nil {
+		return denyRuntimeApproval("invalid RuntimeApproval specification")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw.Spec))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&current.Spec); err != nil {
+		return denyRuntimeApproval("invalid RuntimeApproval specification: " + err.Error())
 	}
 	if current.Spec.Workspace != req.Namespace {
 		return denyRuntimeApproval("spec.workspace must equal metadata.namespace")

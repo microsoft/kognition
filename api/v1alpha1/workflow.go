@@ -137,7 +137,8 @@ type WorkflowBudget struct {
 	MaxTokensPerCycle int64  `json:"maxTokensPerCycle,omitempty" yaml:"maxTokensPerCycle,omitempty"`
 }
 
-// WorkflowStepType discriminates between agent-backed and tool-backed steps.
+// WorkflowStepType discriminates between agent-backed, tool-backed, and
+// collaboration steps.
 type WorkflowStepType string
 
 const (
@@ -145,6 +146,8 @@ const (
 	WorkflowStepTypeAgent WorkflowStepType = "agent"
 	// WorkflowStepTypeTool invokes a Tool directly, with no AgentJob or LLM round-trip.
 	WorkflowStepTypeTool WorkflowStepType = "tool"
+	// WorkflowStepTypeCollaboration runs a governed multi-agent collaboration.
+	WorkflowStepTypeCollaboration WorkflowStepType = "collaboration"
 )
 
 // WorkflowStep defines a single node in a workflow graph.
@@ -186,6 +189,10 @@ type WorkflowStep struct {
 	// materializing an isolated per-step MemoryClaim instead of sharing the
 	// run-level one.
 	MemoryClaim *WorkflowMemoryClaim `json:"memoryClaim,omitempty" yaml:"memoryClaim,omitempty"`
+
+	// Collaboration configures the step when type="collaboration" and must be
+	// empty for every other type.
+	Collaboration *WorkflowCollaboration `json:"collaboration,omitempty" yaml:"collaboration,omitempty"`
 }
 
 // WorkflowStepRetry configures retry semantics for a workflow step.

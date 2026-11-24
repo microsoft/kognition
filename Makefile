@@ -57,7 +57,6 @@ COMPONENT ?=
 JAEGER_MANIFEST := deploy/observability/jaeger.yaml
 PROMETHEUS_VALUES := deploy/observability/prometheus-values.yaml
 PROMETHEUS_STACK_VERSION ?= 88.5.2
-JAEGER_OTLP_ENDPOINT ?= jaeger-collector.$(OBSERVABILITY_NAMESPACE).svc.cluster.local:4317
 FRESH_IMAGE_TAG ?=
 K8S_RUNTIME_IMAGE_TAG = $(if $(FRESH_IMAGE_TAG),$(FRESH_IMAGE_TAG),$(APP_VERSION))
 K8S_FRESH_HELM_IMAGE_ARGS = $(if $(FRESH_IMAGE_TAG),--set k8sController.image.tag=$(FRESH_IMAGE_TAG) --set memoryService.image.tag=$(FRESH_IMAGE_TAG) --set memoryPolicyGateway.image.tag=$(FRESH_IMAGE_TAG) --set toolGateway.image.tag=$(FRESH_IMAGE_TAG) --set modelGateway.image.tag=$(FRESH_IMAGE_TAG) --set agentCommunicationGateway.image.tag=$(FRESH_IMAGE_TAG) --set intentGateway.image.tag=$(FRESH_IMAGE_TAG) --set kbIngester.image.tag=$(FRESH_IMAGE_TAG),)
@@ -476,7 +475,7 @@ endif
 port-forward:
 	kubectl port-forward -n $(NAMESPACE) svc/$(RELEASE)-apiserver 8080:8080
 
-## observability-install: Install dev Jaeger, Prometheus Operator, Grafana, and configure Kognition telemetry
+## observability-install: Install dev Jaeger, Prometheus Operator, and Grafana
 observability-install:
 	@if ! helm status $(RELEASE) --namespace $(NAMESPACE) >/dev/null 2>&1; then \
 		echo "Helm release '$(RELEASE)' is not installed in namespace '$(NAMESPACE)' yet."; \
@@ -491,27 +490,7 @@ observability-install:
 	helm upgrade --install kognition-observability prometheus-community/kube-prometheus-stack --version $(PROMETHEUS_STACK_VERSION) --namespace $(OBSERVABILITY_NAMESPACE) --values $(PROMETHEUS_VALUES) --wait --timeout 10m
 	kubectl -n $(OBSERVABILITY_NAMESPACE) rollout status deployment/kognition-observability-grafana --timeout=180s
 	kubectl -n $(OBSERVABILITY_NAMESPACE) wait --for=condition=Available deployment -l app=kube-prometheus-stack-operator,release=kognition-observability --timeout=180s
-	helm upgrade $(RELEASE) $(CHART) --namespace $(NAMESPACE) --reuse-values \
-		--set observability.openTelemetry.enabled=true \
-		--set observability.openTelemetry.endpoint=$(JAEGER_OTLP_ENDPOINT) \
-		--set observability.openTelemetry.protocol=grpc \
-		--set observability.openTelemetry.serviceName=kognition \
-		--set observability.openTelemetry.environment=dev \
-		--set observability.metrics.serviceMonitor.enabled=true \
-		--set observability.grafanaDashboards.enabled=true \
-		--set observability.metrics.serviceMonitor.labels.release=kognition-observability \
-		--set-string observability.grafanaDashboards.labels.grafana_dashboard=1 \
-		--set toolGateway.monitoring.serviceMonitor.enabled=true \
-		--set toolGateway.monitoring.prometheusRule.enabled=true \
-		--set toolGateway.monitoring.grafanaDashboard.enabled=true \
-		--set toolGateway.monitoring.serviceMonitor.labels.release=kognition-observability \
-		--set toolGateway.monitoring.prometheusRule.labels.release=kognition-observability \
-		--set-string toolGateway.monitoring.grafanaDashboard.labels.grafana_dashboard=1
-	@if kubectl -n $(NAMESPACE) get deployment/$(RELEASE)-k8s-controller >/dev/null 2>&1; then \
-		kubectl -n $(NAMESPACE) rollout status deployment/$(RELEASE)-k8s-controller --timeout=120s; \
-	elif kubectl -n $(NAMESPACE) get deployment/$(RELEASE)-controller-manager >/dev/null 2>&1; then \
-		kubectl -n $(NAMESPACE) rollout status deployment/$(RELEASE)-controller-manager --timeout=120s; \
-	fi
+	@echo "Kognition release unchanged. See docs/observability.md to configure telemetry."
 	@echo "Jaeger UI: make jaeger-ui, then open http://localhost:16686"
 	@echo "Grafana UI: make grafana-ui, then open http://localhost:3000"
 
@@ -532,20 +511,10 @@ jaeger-ui:
 grafana-ui:
 	kubectl port-forward -n $(OBSERVABILITY_NAMESPACE) svc/kognition-observability-grafana 3000:80
 
-## observability-uninstall: Remove the development observability bundle and disable Kognition telemetry integrations
+## observability-uninstall: Remove the development observability bundle only
 observability-uninstall:
 	-kubectl delete -n $(OBSERVABILITY_NAMESPACE) -f $(JAEGER_MANIFEST) --ignore-not-found
 	-helm uninstall kognition-observability --namespace $(OBSERVABILITY_NAMESPACE)
-	@if helm status $(RELEASE) --namespace $(NAMESPACE) >/dev/null 2>&1; then \
-		helm upgrade $(RELEASE) $(CHART) --namespace $(NAMESPACE) --reuse-values \
-			--set observability.openTelemetry.enabled=false \
-			--set observability.openTelemetry.endpoint="" \
-			--set observability.metrics.serviceMonitor.enabled=false \
-			--set observability.grafanaDashboards.enabled=false \
-			--set toolGateway.monitoring.serviceMonitor.enabled=false \
-			--set toolGateway.monitoring.prometheusRule.enabled=false \
-			--set toolGateway.monitoring.grafanaDashboard.enabled=false; \
-	fi
 
 ## jaeger-uninstall: Backward-compatible alias for observability-uninstall
 jaeger-uninstall: observability-uninstall

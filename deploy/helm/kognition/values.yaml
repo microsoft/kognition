@@ -318,6 +318,18 @@ k8sController:
     create: true
     name: ""
     annotations: {}
+  workflowExecutor:
+    enabled: false
+    principals: []
+    bindingAdminGroups: []
+    # -- Multi-agent collaboration steps (supervisor, peer, handoff, parallel).
+    # Disabled by default. Each member task runs as an ordinary AgentJob in the
+    # Workflow namespace, so it uses the existing agent dispatcher, runtime
+    # credentials, model gateway and token metering. Enabling it grants the
+    # controller update on ConfigMaps in managed namespaces; admission restricts
+    # that to the collaboration ledger records.
+    collaboration:
+      enabled: false
   # -- Experimental gRPC sidecar plugin discovery. Disabled until a workload
   # explicitly packages compatible sidecars into the controller Pod.
   pluginHost:

@@ -94,9 +94,6 @@ func run(logger *zap.Logger) error {
 		return err
 	})
 	options := []modelgateway.Option{modelgateway.WithObservability(tracePipeline.Tracer, tracePipeline.Collector), modelgateway.WithQuotaChecker(quota), modelgateway.WithAuditLog(observability.NewCognitiveAuditLog(meteredAuditStore))}
-	// The runtime request context carries the Agent-specific deadline. Do not
-	// impose a shorter process-wide proxy timeout that would truncate valid
-	// long-running Model calls configured on the Agent.
 	server, err := modelgateway.New(st, issuer, policies, &http.Client{}, logger, options...)
 	if err != nil {
 		return fmt.Errorf("create model gateway: %w", err)

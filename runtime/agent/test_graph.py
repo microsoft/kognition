@@ -69,8 +69,16 @@ def _input_state():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("enabled", [False, True])
-async def test_agent_graph_honors_explicit_delegation_setting(monkeypatch: pytest.MonkeyPatch, enabled):
+@pytest.mark.parametrize(
+    ("enabled", "capability", "expected"),
+    [
+        (False, "", []),
+        (False, "delegation-session", []),
+        (True, "delegation-session", ["delegate_to_agent"]),
+        (True, "", []),
+    ],
+)
+async def test_agent_graph_honors_explicit_delegation_setting(monkeypatch: pytest.MonkeyPatch, enabled, capability, expected):
     observed = []
     model = FakeModel([AIMessage(content="declared contract")])
 
@@ -84,8 +92,10 @@ async def test_agent_graph_honors_explicit_delegation_setting(monkeypatch: pytes
     config.memory_enabled = False
     config.agent_communication_gateway_url = "http://127.0.0.1:8094"
     config.agent_delegation_enabled = enabled
-    result = await graph.build_agent_graph(config).ainvoke(_input_state())
-    assert observed == (["delegate_to_agent"] if enabled else [])
+    state = _input_state()
+    state["agent_delegation_session_capability"] = capability
+    result = await graph.build_agent_graph(config).ainvoke(state)
+    assert observed == expected
     assert result["messages"][-1].content == "declared contract"
 
 

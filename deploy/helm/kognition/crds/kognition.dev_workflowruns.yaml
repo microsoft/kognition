@@ -368,6 +368,231 @@ spec:
                           required:
                           - name
                           type: object
+                        collaboration:
+                          description: |-
+                            Collaboration configures the step when type="collaboration" and must be
+                            empty for every other type.
+                          properties:
+                            allowedInteractions:
+                              description: |-
+                                AllowedInteractions lists the delegation requests members may make. It does
+                                not replace communication policy or add Workflow dependency edges.
+                              items:
+                                description: CollaborationInteraction permits one
+                                  member to delegate to another.
+                                properties:
+                                  from:
+                                    pattern: ^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$
+                                    type: string
+                                  to:
+                                    pattern: ^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$
+                                    type: string
+                                required:
+                                - from
+                                - to
+                                type: object
+                              maxItems: 56
+                              type: array
+                            handoff:
+                              description: CollaborationHandoff configures the Handoff
+                                strategy.
+                              properties:
+                                entryMember:
+                                  description: EntryMember is the first owner.
+                                  pattern: ^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$
+                                  type: string
+                                maxHandoffs:
+                                  description: MaxHandoffs bounds ownership transfers.
+                                    It cannot exceed limits.maxDelegations.
+                                  format: int32
+                                  maximum: 100
+                                  minimum: 1
+                                  type: integer
+                              required:
+                              - entryMember
+                              - maxHandoffs
+                              type: object
+                            limits:
+                              description: Limits bounds the step. Every field is
+                                required and finite.
+                              properties:
+                                maxDelegationDepth:
+                                  format: int32
+                                  maximum: 5
+                                  minimum: 1
+                                  type: integer
+                                maxDelegations:
+                                  format: int32
+                                  maximum: 100
+                                  minimum: 1
+                                  type: integer
+                                maxMessages:
+                                  format: int32
+                                  maximum: 500
+                                  minimum: 1
+                                  type: integer
+                                maxParallelTasks:
+                                  format: int32
+                                  maximum: 8
+                                  minimum: 1
+                                  type: integer
+                                maxTokens:
+                                  format: int64
+                                  minimum: 1
+                                  type: integer
+                                maxTurns:
+                                  format: int32
+                                  maximum: 100
+                                  minimum: 1
+                                  type: integer
+                              required:
+                              - maxDelegationDepth
+                              - maxDelegations
+                              - maxMessages
+                              - maxParallelTasks
+                              - maxTokens
+                              - maxTurns
+                              type: object
+                            members:
+                              description: Members are the participating Agents, addressed
+                                by step-local alias.
+                              items:
+                                description: CollaborationMember binds a step-local
+                                  alias to an Agent.
+                                properties:
+                                  agentRef:
+                                    description: AgentRef references the member Agent.
+                                    properties:
+                                      name:
+                                        description: Name is the Agent name.
+                                        maxLength: 253
+                                        minLength: 1
+                                        type: string
+                                      namespace:
+                                        description: Namespace is the Agent namespace.
+                                          An empty value means the Workflow namespace.
+                                        maxLength: 63
+                                        type: string
+                                    required:
+                                    - name
+                                    type: object
+                                  name:
+                                    description: Name is the stable step-local alias.
+                                    pattern: ^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$
+                                    type: string
+                                  serviceRef:
+                                    description: |-
+                                      ServiceRef optionally pins one AgentService, in the Agent namespace, when
+                                      the Agent has several serving configurations.
+                                    properties:
+                                      name:
+                                        description: Name is the name of the referenced
+                                          resource.
+                                        type: string
+                                    required:
+                                    - name
+                                    type: object
+                                required:
+                                - agentRef
+                                - name
+                                type: object
+                              maxItems: 8
+                              minItems: 2
+                              type: array
+                              x-kubernetes-list-map-keys:
+                              - name
+                              x-kubernetes-list-type: map
+                            parallel:
+                              description: CollaborationParallel configures the Parallel
+                                strategy.
+                              properties:
+                                branches:
+                                  description: Branches are the members that run concurrently.
+                                  items:
+                                    description: CollaborationBranch is one parallel
+                                      branch.
+                                    properties:
+                                      member:
+                                        description: Member is the member alias that
+                                          runs the branch.
+                                        pattern: ^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$
+                                        type: string
+                                      optional:
+                                        description: |-
+                                          Optional branches may fail without failing the step. They are recorded in
+                                          the result manifest.
+                                        type: boolean
+                                    required:
+                                    - member
+                                    type: object
+                                  maxItems: 8
+                                  minItems: 2
+                                  type: array
+                                synthesizer:
+                                  description: Synthesizer optionally combines the
+                                    branch results. It must not be a branch.
+                                  pattern: ^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$
+                                  type: string
+                              required:
+                              - branches
+                              type: object
+                            peer:
+                              description: CollaborationPeer configures the Peer strategy.
+                              properties:
+                                finalizer:
+                                  description: Finalizer is the only member that can
+                                    complete the step.
+                                  pattern: ^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$
+                                  type: string
+                              required:
+                              - finalizer
+                              type: object
+                            protocol:
+                              description: Protocol selects the inter-agent protocol
+                                profile.
+                              enum:
+                              - A2A
+                              type: string
+                            strategy:
+                              description: |-
+                                Strategy selects the coordination strategy. Exactly the matching strategy
+                                block must be present.
+                              enum:
+                              - Supervisor
+                              - Parallel
+                              - Handoff
+                              - Peer
+                              type: string
+                            supervisor:
+                              description: CollaborationSupervisor configures the
+                                Supervisor strategy.
+                              properties:
+                                coordinator:
+                                  description: Coordinator is the member alias that
+                                    delegates and produces the final artifact.
+                                  pattern: ^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$
+                                  type: string
+                              required:
+                              - coordinator
+                              type: object
+                          required:
+                          - limits
+                          - members
+                          - protocol
+                          - strategy
+                          type: object
+                          x-kubernetes-validations:
+                          - message: supervisor is required exactly when strategy
+                              is Supervisor
+                            rule: (self.strategy == 'Supervisor') == has(self.supervisor)
+                          - message: parallel is required exactly when strategy is
+                              Parallel
+                            rule: (self.strategy == 'Parallel') == has(self.parallel)
+                          - message: handoff is required exactly when strategy is
+                              Handoff
+                            rule: (self.strategy == 'Handoff') == has(self.handoff)
+                          - message: peer is required exactly when strategy is Peer
+                            rule: (self.strategy == 'Peer') == has(self.peer)
                         condition:
                           description: |-
                             Condition is a CEL expression that gates step dispatch.
@@ -442,10 +667,15 @@ spec:
                           enum:
                           - agent
                           - tool
+                          - collaboration
                           type: string
                       required:
                       - name
                       type: object
+                      x-kubernetes-validations:
+                      - message: collaboration is required exactly when type is collaboration
+                        rule: (has(self.type) && self.type == 'collaboration') ==
+                          has(self.collaboration)
                     type: array
                 required:
                 - steps

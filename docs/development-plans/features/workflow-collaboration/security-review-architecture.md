@@ -1,5 +1,9 @@
 # Workflow Collaboration Readiness And Architectural Security Review
 
+> **Historical.** This review covers the receiver and task-plane design, which
+> was removed in favor of AgentJob-based member turns. The shipped design needs a
+> fresh review; see the [workflow collaboration guide](../../../workflow-collaboration.md).
+
 - Date: 2026-11-16.
 - Scope: final review of the proposed Workflow collaboration implementation plan.
 - Mode: source-grounded architecture and implementation-readiness review.
@@ -18,6 +22,103 @@ above is unchanged as a record of the 2026-11-16 review. Dependent implementatio
 may now proceed behind a disabled feature in delivery order. This is not
 independent security-owner approval. Each remedy still needs executable
 acceptance evidence, and production activation needs that approval.
+
+## Governance Design Elaboration (2026-11-18)
+
+The accepted decisions stand. The expanded
+[execution contract](execution-contract.md#governance-and-trust-enforcement)
+details per-operation identity, authority, content release, effective Agent
+autonomy, exact-action review, and evidence without defining a shared team
+principal or pooled trust score. Specialization uses separately authorized
+service operations and does not transfer a specialist's capabilities to its
+coordinator. This is design elaboration, not independent security-owner approval.
+
+The [strategy contract](execution-contract.md#strategy-safety-and-runtime-state)
+distinguishes child completion from activation finalization, preserves optional
+branch uncertainty, requires passive recipient preparation and atomic handoff,
+and defines durable progress/capacity waits. Native Go and the approved gRPC
+polling profile remain the release baseline. The SDK compatibility spike still
+precedes transport implementation.
+
+Source cross-checks identify these concrete implementation obligations:
+
+| Boundary | Required implementation proof |
+| --- | --- |
+| Non-Agent initiation review | The current Gate3 request and Agent-specific approval references cannot authenticate an executor by substitution. Review a typed executor-action representation without changing legacy Agent meanings or skipping review. |
+| Handoff lifecycle | Opt-in proposal, acknowledgement, guarded owner-transfer, and cancellation-precedence primitives are now implemented in the activation store. Authenticate their callers, implement real passive recipient preparation, wire owner eligibility across effect paths, and qualify cancellation/transfer races before supporting runtime Handoff. |
+| Downstream content use | Member input authorization must continue through provider/model egress, tools, memory, knowledge, evaluation, logs, status and native resource reads. A capability grant alone cannot release restricted content. |
+| Strict field handling | Prove rejection at supported API boundaries. Pruning alone cannot demonstrate that an unknown governance field reached admission or was rejected. |
+| Native scheduling and gate capacity | Prove nonblocking child waits, shared Agent capacity, finalization allowance, and bounded-ledger headroom without gate rotation or lost effect evidence. |
+
+Use the [governance acceptance matrix](execution-contract.md#governance-acceptance-scenarios)
+to test these contracts. These obligations refine implementation and evidence
+requirements within the approved resolutions. They do not reopen the historical
+decision-gate verdict or claim that the in-progress schema work is executable
+collaboration. If a proposed implementation changes an accepted policy, record
+an amendment before relying on it.
+
+## Dedicated Receiver Draft Security Assessment
+
+Verdict: BLOCKED for privilege grants, receiving deployment and activation.
+Disabled design preparation is authorized. This is a source-grounded draft
+assessment, not independent security-owner approval or a live permission audit.
+The [dedicated receiver proposal](execution-contract.md#disabled-dedicated-receiver-design)
+preserves accepted gates and the installed unconditional task-write denial.
+
+| Threat and boundary | Activation risk | Required control and open evidence |
+| --- | --- | --- |
+| Spoofing and privilege elevation through shared identity | High if the default ServiceAccount gains protected access | Existing candidate Deployments select the shared default identity. Independently approve dedicated ServiceAccount and live Pod UIDs, protect writer Pod/token/exec/key custody, and prove wrong-identity and replacement denials. No new permissions were granted. |
+| Tampering and replay at native persistence | High if a controller or receiver gets a blanket exemption | Independently authorize exact CREATE/UPDATE receipts, verify old and proposed state, preserve immutable scope/history and UID/resourceVersion CAS, and deny unrelated ConfigMap writes by the writer. Raw-record and full-object v2 receipt binding are tested with injected authorization. Live writer authorization, positive installed v2 acceptance, API defaulting and key isolation remain unfinished. |
+| Information disclosure across polling and recovery | High if discovery or expired initiation is treated as content authority | Preserve current per-read authorization and exact retained owner. Qualify TLS peers, required extensions, receiver binding and bounded maintenance without fresh initiation or credential forwarding. Existing injected SDK tests do not qualify deployment. |
+| Repudiation and duplicate effect attribution | High if a new process becomes another effect owner | Keep RuntimeApproval and retained activation ownership unchanged. Prove durable evidence and no resend after committed send failure, lost acknowledgement and restart in both stores. Real member provenance and deployed qualification remain open. |
+| Denial of service through writer or retention bypass | Medium before executable bounds are proven | Enforce bounded receipt/task decoding, authorization deadlines, shared budgets and 7-day content/90-day replay retention. A new receiver must not reset allowances, erase tombstones or treat uncertain effects as complete. |
+
+The [Kubernetes RBAC reference](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
+states that top-level CREATE cannot be restricted by resource name, default
+ServiceAccount permissions apply to every Pod selecting that identity, and
+namespace edit permissions can expose other ServiceAccounts through Pod creation.
+The [AKS identity reference](https://learn.microsoft.com/en-us/azure/aks/concepts-identity)
+distinguishes Kubernetes authentication/authorization from Azure resource and
+workload identity. Cluster reachability and Ready services establish no receiver
+authority or native runtime conformance.
+
+Azure policy, live role assignments and independent security-owner review were
+not validated. Deferred Azure and Microsoft documentation tools were unavailable,
+so the public references above were fetched directly. No compliance or deployment
+clearance is claimed. Recorded receipt and runtime/schema approval, installed
+identity/admission acceptance, both-backend interoperability and operator approval
+remain prerequisites. Tasks 1 through 5 remain open and collaboration stays disabled.
+
+The [isolated receipt contract evidence](execution-contract.md#isolated-native-task-mutation-receipt-contract)
+covers bounded canonical decoding, domain-separated signatures, exact UPDATE
+prior-record binding and shared history/version checks. It grants no principal
+permissions and does not qualify the complete ConfigMap representation, actual
+writer authorization or signing-key custody. The unconditional task-write guard
+is unchanged. This implementation evidence does not change the BLOCKED verdict.
+
+The [full ConfigMap representation](execution-contract.md#proposed-full-configmap-receipt-representation)
+now has an unwired source implementation. Its separate v2 receipt binds a strictly
+whitelisted metadata envelope and exact raw-task digest, with prior UID/version
+and both prior digests for UPDATE. Component tests cover metadata/raw-field
+tampering, expired retained signatures, current-authority revocation and missing
+or v1 receipt denial. Installed checks confirm unconditional task-write denial,
+not positive v2 acceptance. API-assigned metadata/defaulting, genuine writer
+authentication and signing-key custody still require installed proof and
+independent review. The [source evidence and AKS hold](execution-contract.md#full-object-receipt-source-evidence-and-aks-hold)
+record the tested boundary and revalidated default-ServiceAccount candidates.
+The user's finalization request authorizes implementation work but supplies no
+independent security-owner approval. The BLOCKED activation verdict is unchanged.
+
+The [2026-11-22 writer and admission code review](security-review-code.md)
+preserves its original findings and records the
+[implementation follow-up](security-review-code.md#implementation-follow-up).
+The parser defect is repaired, and the public writer/recovery source tests pass.
+The durable CREATE marker now has real PostgreSQL and real API-server CAS
+evidence. The high finding remains open for authenticated transport/startup,
+positive installed task-writer admission, all-writer admission selection,
+deployment custody and native receiver provenance. The installed task-write
+denial and BLOCKED activation verdict remain in place. This technical review
+supplies no independent security-owner or operator approval.
 
 ## Recommended Remedy Update
 

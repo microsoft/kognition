@@ -5,8 +5,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -14,7 +16,10 @@ import (
 
 	"go.uber.org/zap"
 
+	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/apiserver"
+	"github.com/kognition-ai/kognition/internal/auth"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval"
 )
 
 type lifecycleServerStub struct {
@@ -127,6 +132,7 @@ func TestNewCPIRegistryIncludesProductionDrivers(t *testing.T) {
 }
 
 func TestBuildServerOptions(t *testing.T) {
+	t.Setenv(runtimeapproval.WorkflowExecutorPrincipalsEnvironmentVariable, "")
 	t.Setenv("KOGNITION_AGENT_SERVICE_TOKEN", "")
 	registry := newCPIRegistry(http.DefaultClient)
 	t.Setenv("KOGNITION_AUTH_ENABLED", "")
@@ -152,6 +158,7 @@ func TestBuildServerOptions(t *testing.T) {
 }
 
 func TestBuildServerOptionsAgentServiceCredential(t *testing.T) {
+	t.Setenv(runtimeapproval.WorkflowExecutorPrincipalsEnvironmentVariable, "")
 	serviceToken := strings.Repeat("s", 32)
 	for _, scenario := range []struct {
 		name, enabled, service, bootstrap, runtime string
@@ -183,6 +190,7 @@ func TestBuildServerOptionsAgentServiceCredential(t *testing.T) {
 }
 
 func TestRunAPIServerCommand(t *testing.T) {
+	t.Setenv(runtimeapproval.WorkflowExecutorPrincipalsEnvironmentVariable, "")
 	t.Setenv("KOGNITION_AGENT_SERVICE_TOKEN", "")
 	registry := newCPIRegistry(http.DefaultClient)
 
@@ -233,21 +241,142 @@ func TestRunAPIServerCommand(t *testing.T) {
 	})
 }
 
+func TestBuildServerOptionsWorkflowExecutorConfiguration(t *testing.T) {
+	var issuer *httptest.Server
+	issuer = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/.well-known/openid-configuration" {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(writer).Encode(map[string]any{"issuer": issuer.URL, "jwks_uri": issuer.URL + "/keys", "id_token_signing_alg_values_supported": []string{"RS256"}}); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer issuer.Close()
+	for _, scenario := range []struct {
+		name, enabled string
+		principal     api.ControlPlaneRoleSubject
+		valid         bool
+	}{
+		{"matching OIDC identity", "true", api.ControlPlaneRoleSubject{Method: "oidc", Issuer: issuer.URL, Subject: "workflow-executor"}, true},
+		{"authentication disabled", "", api.ControlPlaneRoleSubject{Method: "oidc", Issuer: issuer.URL, Subject: "workflow-executor"}, false},
+		{"foreign issuer", "true", api.ControlPlaneRoleSubject{Method: "oidc", Issuer: "https://foreign.example", Subject: "workflow-executor"}, false},
+		{"native identity is not standalone OIDC", "true", api.ControlPlaneRoleSubject{Method: "tokenreview", Issuer: "kubernetes.io/tokenreview", Subject: "system:serviceaccount:system:executor"}, false},
+		{"shared credential", "true", api.ControlPlaneRoleSubject{Method: "static-token", Issuer: issuer.URL, Subject: "workflow-executor"}, false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			raw, err := json.Marshal([]api.ControlPlaneRoleSubject{scenario.principal})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(runtimeapproval.WorkflowExecutorPrincipalsEnvironmentVariable, string(raw))
+			t.Setenv("KOGNITION_AUTH_ENABLED", scenario.enabled)
+			t.Setenv("KOGNITION_OIDC_ISSUER", issuer.URL)
+			t.Setenv("KOGNITION_OIDC_AUDIENCE", "kognition-api")
+			t.Setenv("KOGNITION_AGENT_SERVICE_TOKEN", "")
+			t.Setenv("KOGNITION_BOOTSTRAP_TOKEN", "")
+			t.Setenv("KOGNITION_WORKFLOW_EXECUTOR_ATTESTATION_PROFILE", "")
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, enabled, err := buildServerOptions(ctx, newCPIRegistry(http.DefaultClient))
+			if (err == nil) != scenario.valid || !enabled {
+				t.Fatalf("configuration valid=%v, enabled=%v, error=%v", scenario.valid, enabled, err)
+			}
+		})
+	}
+}
+
+func TestBuildServerOptionsWorkflowExecutorAttestationRejectsUnsafeConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		name, profile, enabled, audience, principals string
+	}{
+		{name: "unknown-profile", profile: "claims-only", enabled: "true", audience: auth.WorkflowExecutorTokenAudience, principals: `[{"method":"oidc","issuer":"https://cluster.example","subject":"system:serviceaccount:team-a:executor"}]`},
+		{name: "missing-executor", profile: "kubernetes-bound-token-v1", enabled: "true", audience: auth.WorkflowExecutorTokenAudience},
+		{name: "disabled-authentication", profile: "kubernetes-bound-token-v1", audience: auth.WorkflowExecutorTokenAudience, principals: `[{"method":"oidc","issuer":"https://cluster.example","subject":"system:serviceaccount:team-a:executor"}]`},
+		{name: "generic-audience", profile: "kubernetes-bound-token-v1", enabled: "true", audience: "kognition-api", principals: `[{"method":"oidc","issuer":"https://cluster.example","subject":"system:serviceaccount:team-a:executor"}]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("KOGNITION_WORKFLOW_EXECUTOR_ATTESTATION_PROFILE", test.profile)
+			t.Setenv(runtimeapproval.WorkflowExecutorPrincipalsEnvironmentVariable, test.principals)
+			t.Setenv("KOGNITION_AUTH_ENABLED", test.enabled)
+			t.Setenv("KOGNITION_OIDC_AUDIENCE", test.audience)
+			if _, _, err := buildServerOptions(context.Background(), newCPIRegistry(http.DefaultClient)); err == nil || !strings.Contains(err.Error(), "attestation requires") {
+				t.Fatalf("unsafe profile was not rejected before discovery or Kubernetes access: %v", err)
+			}
+		})
+	}
+	t.Setenv("KOGNITION_WORKFLOW_EXECUTOR_KUBECONFIG", "relative-config")
+	if _, err := newWorkflowExecutorKubernetesAuthenticator(auth.NewStaticTokenAuthenticator(nil), nil); err == nil || !strings.Contains(err.Error(), "absolute path") {
+		t.Fatalf("relative configuration selected implicit Kubernetes credentials: %v", err)
+	}
+}
+
 func TestNewProductionRuntime(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost/database")
 	t.Setenv("KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON", `[{"version":1,"epoch":1,"algorithm":"HMAC-SHA-256","domain":"kognition.dev/runtime-approval/action/v1","status":"Active","material":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}]`)
-	runtime, err := newProductionRuntime(context.Background(), zap.NewNop(), nil)
+	for _, profile := range []string{"", "kubernetes-bound-token-v1"} {
+		t.Run("profile="+profile, func(t *testing.T) {
+			t.Setenv("KOGNITION_WORKFLOW_EXECUTOR_ATTESTATION_PROFILE", profile)
+			runtime, err := newProductionRuntime(context.Background(), zap.NewNop(), nil)
+			if err != nil {
+				t.Fatalf("newProductionRuntime: %v", err)
+			}
+			defer runtime.closePool()
+			if runtime.server == nil || runtime.listener == nil || runtime.closePool == nil || runtime.initialize == nil {
+				t.Fatalf("runtime = %#v", runtime)
+			}
+			server := runtime.server.(*apiserver.Server)
+			for _, route := range []string{"initiation-capabilities", "initiations/resolve", "initiations/dispatch"} {
+				request := httptest.NewRequest(http.MethodPost, "/internal/workflow-execution/namespaces/team-a/"+route,
+					strings.NewReader(`{"action":{"executor":{"method":"oidc","issuer":"https://cluster.example","subject":"system:serviceaccount:team-a:executor"},"activation":{"workspace":"team-a"}}}`))
+				request = request.WithContext(auth.WithIdentity(request.Context(), &auth.Identity{Method: "oidc", Issuer: "https://cluster.example", Subject: "system:serviceaccount:team-a:executor"}))
+				response := httptest.NewRecorder()
+				server.ServeHTTP(response, request)
+				want := http.StatusServiceUnavailable
+				if profile != "" && route != "initiations/dispatch" {
+					want = http.StatusForbidden
+				}
+				if response.Code != want {
+					t.Fatalf("profile=%q route=%s: status=%d want=%d body=%s", profile, route, response.Code, want, response.Body.String())
+				}
+			}
+			if err := runtime.initialize(context.Background()); err == nil {
+				t.Fatal("production RuntimeApproval activation unexpectedly succeeded against fake database credentials")
+			}
+		})
+	}
+}
+
+func TestProductionWorkflowInitiationRejectsClaimOnlyController(t *testing.T) {
+	pool, err := newDatabasePool(context.Background(), "postgres://user:pass@localhost/database")
 	if err != nil {
-		t.Fatalf("newProductionRuntime: %v", err)
+		t.Fatal(err)
 	}
-	if runtime.server == nil || runtime.listener == nil || runtime.closePool == nil || runtime.initialize == nil {
-		t.Fatalf("runtime = %#v", runtime)
+	defer pool.Close()
+	keys, err := runtimeapproval.BindingKeyStoreFromJSON(`[{"version":1,"epoch":1,"algorithm":"HMAC-SHA-256","domain":"kognition.dev/runtime-approval/action/v1","status":"Active","material":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}]`)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := runtime.initialize(context.Background()); err == nil {
-		runtime.closePool()
-		t.Fatal("production RuntimeApproval activation unexpectedly succeeded against fake database credentials")
+	service, err := newWorkflowExecutorInitiation(context.Background(), newPostgresStore(pool, zap.NewNop()), keys)
+	if err != nil {
+		t.Fatal(err)
 	}
-	runtime.closePool()
+	action := runtimeapproval.WorkflowExecutorAction{Executor: api.ControlPlaneRoleSubject{Method: "oidc", Issuer: "https://cluster.example", Subject: "system:serviceaccount:team-a:executor"}}
+	ctx := auth.WithIdentity(context.Background(), &auth.Identity{Method: action.Executor.Method, Issuer: action.Executor.Issuer, Subject: action.Executor.Subject,
+		Claims: map[string]interface{}{"controllerUID": "forged-controller", "pod_uid": "forged-controller"}})
+	capability, err := service.Issue(ctx, action)
+	if err == nil || !strings.Contains(err.Error(), "verified controller incarnation") || capability.Binding.Tag != "" {
+		t.Fatalf("claim-only controller reached trusted clock or capability issuance: %+v %v", capability, err)
+	}
+	if _, err := service.Resolve(ctx, action, capability); err == nil || !strings.Contains(err.Error(), "verified controller incarnation") {
+		t.Fatalf("claim-only controller reached approval resolution: %v", err)
+	}
+	calls := 0
+	result, err := service.Dispatch(ctx, action, capability, api.RuntimeApproval{}, func(context.Context) error { calls++; return nil })
+	if err == nil || !strings.Contains(err.Error(), "verified controller incarnation") || result.DispatchCommitted || result.TargetCalled || calls != 0 {
+		t.Fatalf("claim-only controller reached exact dispatch: %+v %v calls=%d", result, err, calls)
+	}
 }
 
 func TestRunServerLifecycleGracefulShutdown(t *testing.T) {

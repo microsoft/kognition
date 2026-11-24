@@ -733,6 +733,12 @@ func TestWorkflowReconciler_InvalidWorkflowPlansFailWithoutDispatch(t *testing.T
 			},
 		},
 		{
+			name: "disabled collaboration step",
+			mutate: func(workflow *v1alpha1.Workflow) {
+				workflow.Spec.Steps[0].Type = v1alpha1.WorkflowStepTypeCollaboration
+			},
+		},
+		{
 			name: "unknown edge destination",
 			mutate: func(workflow *v1alpha1.Workflow) {
 				workflow.Spec.Edges = []v1alpha1.WorkflowEdge{{From: "plan", To: "missing"}}

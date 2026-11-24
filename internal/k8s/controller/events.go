@@ -66,6 +66,11 @@ func (e *eventEmitter) emit(ctx context.Context, req ctrl.Request, reconcileErr 
 		return
 	}
 
+	// Events for cluster-scoped objects land in "default", where the controller has no events grant.
+	if u.GetNamespace() == "" {
+		return
+	}
+
 	phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
 	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	fp := fingerprint(reconcileErr, phase, conds)

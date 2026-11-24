@@ -9,6 +9,8 @@ const (
 	RuntimeApprovalPlaneTool          = "Tool"
 	RuntimeApprovalPlaneMemory        = "Memory"
 	RuntimeApprovalPlaneCommunication = "Communication"
+	RuntimeApprovalPlaneWorkflow      = "Workflow"
+	RuntimeApprovalActorExecutor      = "WorkflowExecutor"
 
 	RuntimeApprovalDecisionPending     = "Pending"
 	RuntimeApprovalDecisionNotRequired = "NotRequired"
@@ -39,22 +41,47 @@ func (r *RuntimeApproval) GetObjectMeta() *ObjectMeta { return &r.ObjectMeta }
 // RuntimeApprovalSpec contains only bounded references and keyed binding
 // evidence. Complete action payloads and secrets are never persisted here.
 type RuntimeApprovalSpec struct {
-	Workspace         string                     `json:"workspace" yaml:"workspace"`
-	InvocationID      string                     `json:"invocationID" yaml:"invocationID"`
-	InitialDecision   string                     `json:"initialDecision" yaml:"initialDecision"`
-	Plane             string                     `json:"plane" yaml:"plane"`
-	Operation         string                     `json:"operation" yaml:"operation"`
-	AgentRef          RuntimeApprovalReference   `json:"agentRef" yaml:"agentRef"`
-	AgentIdentityRef  RuntimeApprovalReference   `json:"agentIdentityRef" yaml:"agentIdentityRef"`
-	AgentInstanceRef  RuntimeApprovalReference   `json:"agentInstanceRef" yaml:"agentInstanceRef"`
-	SessionRef        string                     `json:"sessionRef" yaml:"sessionRef"`
-	TargetRef         RuntimeApprovalReference   `json:"targetRef" yaml:"targetRef"`
-	TrustProfileRef   *RuntimeApprovalReference  `json:"trustProfileRef,omitempty" yaml:"trustProfileRef,omitempty"`
-	AutonomyClassRef  RuntimeApprovalReference   `json:"autonomyClassRef" yaml:"autonomyClassRef"`
-	AuthorizationRefs []RuntimeApprovalReference `json:"authorizationRefs,omitempty" yaml:"authorizationRefs,omitempty"`
-	Binding           RuntimeActionBinding       `json:"binding" yaml:"binding"`
-	CreatedAt         time.Time                  `json:"createdAt" yaml:"createdAt"`
-	ExpiresAt         time.Time                  `json:"expiresAt" yaml:"expiresAt"`
+	ActorKind         string                           `json:"actorKind,omitempty" yaml:"actorKind,omitempty"`
+	ExecutorAction    *WorkflowExecutorActionReference `json:"executorAction,omitempty" yaml:"executorAction,omitempty"`
+	Workspace         string                           `json:"workspace" yaml:"workspace"`
+	InvocationID      string                           `json:"invocationID" yaml:"invocationID"`
+	InitialDecision   string                           `json:"initialDecision" yaml:"initialDecision"`
+	Plane             string                           `json:"plane" yaml:"plane"`
+	Operation         string                           `json:"operation" yaml:"operation"`
+	AgentRef          RuntimeApprovalReference         `json:"agentRef,omitzero" yaml:"agentRef,omitempty"`
+	AgentIdentityRef  RuntimeApprovalReference         `json:"agentIdentityRef,omitzero" yaml:"agentIdentityRef,omitempty"`
+	AgentInstanceRef  RuntimeApprovalReference         `json:"agentInstanceRef,omitzero" yaml:"agentInstanceRef,omitempty"`
+	SessionRef        string                           `json:"sessionRef,omitempty" yaml:"sessionRef,omitempty"`
+	TargetRef         RuntimeApprovalReference         `json:"targetRef" yaml:"targetRef"`
+	TrustProfileRef   *RuntimeApprovalReference        `json:"trustProfileRef,omitempty" yaml:"trustProfileRef,omitempty"`
+	AutonomyClassRef  RuntimeApprovalReference         `json:"autonomyClassRef,omitzero" yaml:"autonomyClassRef,omitempty"`
+	AuthorizationRefs []RuntimeApprovalReference       `json:"authorizationRefs,omitempty" yaml:"authorizationRefs,omitempty"`
+	WorkflowContext   *WorkflowActionContext           `json:"workflowContext,omitempty" yaml:"workflowContext,omitempty"`
+	Binding           RuntimeActionBinding             `json:"binding" yaml:"binding"`
+	CreatedAt         time.Time                        `json:"createdAt" yaml:"createdAt"`
+	ExpiresAt         time.Time                        `json:"expiresAt" yaml:"expiresAt"`
+}
+
+type WorkflowExecutorActionReference struct {
+	Executor               ControlPlaneRoleSubject  `json:"executor" yaml:"executor"`
+	Initiator              ControlPlaneRoleSubject  `json:"initiator" yaml:"initiator"`
+	Workflow               RuntimeApprovalReference `json:"workflow" yaml:"workflow"`
+	WorkflowRevisionDigest string                   `json:"workflowRevisionDigest" yaml:"workflowRevisionDigest"`
+	ExecutionBinding       RuntimeApprovalReference `json:"executionBinding" yaml:"executionBinding"`
+	Target                 RuntimeApprovalReference `json:"target" yaml:"target"`
+	Service                RuntimeApprovalReference `json:"service" yaml:"service"`
+	Context                WorkflowActionContext    `json:"context" yaml:"context"`
+	ExpiresAt              time.Time                `json:"expiresAt" yaml:"expiresAt"`
+}
+
+type WorkflowActionContext struct {
+	Workspace     string `json:"workspace" yaml:"workspace"`
+	RunUID        string `json:"runUID" yaml:"runUID"`
+	Step          string `json:"step" yaml:"step"`
+	ActivationID  string `json:"activationID" yaml:"activationID"`
+	Attempt       int64  `json:"attempt" yaml:"attempt"`
+	OwnerEpoch    int64  `json:"ownerEpoch" yaml:"ownerEpoch"`
+	BindingDigest string `json:"bindingDigest" yaml:"bindingDigest"`
 }
 
 // RuntimeApprovalReference identifies one exact persisted resource incarnation.

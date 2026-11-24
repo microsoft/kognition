@@ -49,6 +49,11 @@ func (a *WorkflowReconcilerAdapter) SetAuditLog(audit *observability.CognitiveAu
 	a.internal.SetAuditLog(audit)
 }
 
+// SetCollaborationRunner forwards the governed collaboration runner to the wrapped internal reconciler.
+func (a *WorkflowReconcilerAdapter) SetCollaborationRunner(runner intctrl.WorkflowCollaborationRunner) {
+	a.internal.SetCollaborationRunner(runner)
+}
+
 // SetTracing forwards workflow execution tracing to the wrapped internal reconciler.
 func (a *WorkflowReconcilerAdapter) SetTracing(tracer *observability.Tracer, collector *observability.Collector) {
 	a.internal.SetTracing(tracer, collector)

@@ -1,0 +1,40 @@
+apiVersion: kognition.dev/v1alpha1
+kind: Workflow
+metadata:
+  name: parallel-review
+  namespace: default
+spec:
+  maxConcurrentRuns: 1
+  budgets:
+    maxDuration: 5m
+    maxTokens: 8192
+  steps:
+    - name: review-request
+      type: collaboration
+      input: "{{ .Input }}"
+      timeout: 4m
+      collaboration:
+        strategy: Parallel
+        protocol: A2A
+        members:
+          - name: analyst
+            agentRef:
+              name: request-analyst
+          - name: reviewer
+            agentRef:
+              name: request-reviewer
+          - name: synthesizer
+            agentRef:
+              name: review-synthesizer
+        parallel:
+          branches:
+            - member: analyst
+            - member: reviewer
+          synthesizer: synthesizer
+        limits:
+          maxTurns: 4
+          maxMessages: 16
+          maxDelegations: 1
+          maxDelegationDepth: 1
+          maxParallelTasks: 2
+          maxTokens: 8192

@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/types"
@@ -17,8 +18,54 @@ import (
 	intctrl "github.com/kognition-ai/kognition/internal/controller"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/requestid"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval"
 	"github.com/kognition-ai/kognition/internal/store"
 )
+
+type workflowRunSubmissionStore interface {
+	GetWorkflowRunAcceptance(context.Context, string, string) (runtimeapproval.WorkflowRunAcceptance, error)
+	FinalizeWorkflowRunSubmission(context.Context, string, string) (runtimeapproval.WorkflowRunAcceptance, error)
+}
+
+type WorkflowRunSubmissionReconciler struct {
+	reader client.Reader
+	store  workflowRunSubmissionStore
+}
+
+func NewWorkflowRunSubmissionReconciler(reader client.Reader, records workflowRunSubmissionStore) *WorkflowRunSubmissionReconciler {
+	return &WorkflowRunSubmissionReconciler{reader: reader, store: records}
+}
+
+func (r *WorkflowRunSubmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	if r.reader == nil || r.store == nil {
+		return ctrl.Result{}, runtimeapproval.ErrWorkflowDispatchUnsupported
+	}
+	run := &k8s.WorkflowRun{}
+	if err := r.reader.Get(ctx, req.NamespacedName, run); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if run.Annotations[runtimeapproval.WorkflowRunAcceptanceRequiredAnnotation] != "true" || !run.DeletionTimestamp.IsZero() ||
+		(run.Status.Phase != "" && run.Status.Phase != "Pending") {
+		return ctrl.Result{}, nil
+	}
+	if run.UID == "" {
+		return ctrl.Result{}, store.ErrConflict
+	}
+	if _, err := r.store.GetWorkflowRunAcceptance(ctx, run.Namespace, string(run.UID)); err == nil {
+		return ctrl.Result{}, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return ctrl.Result{}, err
+	}
+	_, err := r.store.FinalizeWorkflowRunSubmission(ctx, run.Namespace, run.Name)
+	return ctrl.Result{}, err
+}
+
+func (r *WorkflowRunSubmissionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		Named("workflowrun-submission").
+		For(&k8s.WorkflowRun{}).
+		Complete(r)
+}
 
 // WorkflowRunReconcilerAdapter wraps the internal WorkflowRunReconciler for use with
 // controller-runtime.
@@ -46,6 +93,11 @@ func (a *WorkflowRunReconcilerAdapter) SetToolInvoker(invoker intctrl.WorkflowTo
 // to the shared WorkflowRun execution engine.
 func (a *WorkflowRunReconcilerAdapter) SetCommunicationPolicyAuthorizer(authorizer intctrl.CommunicationPolicyAuthorizer) {
 	a.internal.SetCommunicationPolicyAuthorizer(authorizer)
+}
+
+// SetCollaborationRunner forwards the collaboration runner to the shared WorkflowRun execution engine.
+func (a *WorkflowRunReconcilerAdapter) SetCollaborationRunner(runner intctrl.WorkflowCollaborationRunner) {
+	a.internal.SetCollaborationRunner(runner)
 }
 
 // SetAuditLog forwards durable communication evidence recording to the shared execution engine.

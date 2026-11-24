@@ -3772,6 +3772,11 @@ func TestIssueAgentDelegationSessionCapabilityBindsManagedIdentity(t *testing.T)
 	if _, err := d.issueAgentDelegationSessionCapability(agent, instance, "session-1", "", 0); err == nil {
 		t.Fatal("delegation capability without automatic identity was allowed")
 	}
+	instance.ObjectMeta.Annotations = map[string]string{intctrl.CollaborationDispatchAnnotation: "d1"}
+	if capability, err := d.issueAgentDelegationSessionCapability(agent, instance, "session-1", "", 0); err != nil || capability != "" {
+		t.Fatalf("collaboration member capability = %q, %v", capability, err)
+	}
+	instance.ObjectMeta.Annotations = nil
 	d.config.AgentCommunicationGatewayURL = ""
 	if capability, err := d.issueAgentDelegationSessionCapability(agent, instance, "session-1", "", 0); err != nil || capability != "" {
 		t.Fatalf("disabled Agent Communication Gateway capability = %q, %v", capability, err)

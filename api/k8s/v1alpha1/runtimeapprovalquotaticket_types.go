@@ -50,10 +50,13 @@ type RuntimeApprovalQuotaTicket struct {
 // ticket to at most 2 KiB serialized. The binding descriptor is copied so a
 // retention pass can validate the associated binding key is still retained.
 //
-// +kubebuilder:validation:XValidation:rule="self.agentRef.kind == 'Agent' && self.agentRef.scope == 'Namespaced' && self.agentRef.__namespace__ == self.workspace",message="agentRef must identify an Agent namespaced to the RuntimeApprovalQuotaTicket workspace"
+// +kubebuilder:validation:XValidation:rule="has(self.actorKind) ? (has(self.executorRef) && !has(self.agentRef)) : (has(self.agentRef) && self.agentRef.kind == 'Agent' && self.agentRef.scope == 'Namespaced' && self.agentRef.__namespace__ == self.workspace)",message="quota ticket must identify its actual Agent or executor actor"
 // +kubebuilder:validation:XValidation:rule="self.phase == 'Compacted' ? (has(self.compactedAt) && has(self.retentionDeadline)) : true",message="compacted tickets require compaction and retention timestamps"
 // +kubebuilder:validation:XValidation:rule="self.phase == 'Live' ? !has(self.compactedAt) : true",message="live tickets cannot have a compaction timestamp"
 type RuntimeApprovalQuotaTicketSpec struct {
+	// +kubebuilder:validation:Enum=WorkflowExecutor
+	ActorKind   string                     `json:"actorKind,omitempty"`
+	ExecutorRef *WorkflowExecutorPrincipal `json:"executorRef,omitempty"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	Workspace string `json:"workspace"`
@@ -63,7 +66,7 @@ type RuntimeApprovalQuotaTicketSpec struct {
 	// +optional
 	// +kubebuilder:validation:MaxLength=128
 	RuntimeApprovalUID string                   `json:"runtimeApprovalUID,omitempty"`
-	AgentRef           RuntimeApprovalReference `json:"agentRef"`
+	AgentRef           RuntimeApprovalReference `json:"agentRef,omitzero"`
 	Binding            RuntimeActionBinding     `json:"binding"`
 	// +kubebuilder:validation:Enum=Live;Compacted
 	Phase RuntimeApprovalQuotaTicketPhase `json:"phase"`

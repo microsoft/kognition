@@ -15,7 +15,7 @@ import (
 )
 
 const identityFixtureTarget = "e2e/fixtures/workload-identity-platform.yaml"
-const identityFixtureDigest = "1ddc8083300394454e7eb503593435194496dfb42d03a30f13339eeb4415ecb3"
+const identityFixtureDigest = "d544cb89782bdd97107cdef0ddb8f4ded02bad453ea19960bc5180214f80e674"
 const identityIgnoreTarget = ".trivyignore.yaml"
 const identityIgnoreDigest = "9bf362f3ef6f900ca799e2d6138f9cf1704a10751fe117b438288b4a873f5368"
 

@@ -11,6 +11,7 @@ func (in *AgentCommunicationPolicy) DeepCopyInto(out *AgentCommunicationPolicy) 
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
 	out.Spec = in.Spec
 	out.Spec.AllowFrom = append([]LocalObjectReference(nil), in.Spec.AllowFrom...)
+	out.Spec.AllowFromQualified = append([]QualifiedAgentReference(nil), in.Spec.AllowFromQualified...)
 	out.Spec.AllowTo = append([]LocalObjectReference(nil), in.Spec.AllowTo...)
 }
 

@@ -7,6 +7,8 @@ import (
 	"context"
 	"os"
 	"strings"
+	"time"
+	"unicode"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -29,6 +31,46 @@ func GRPCUnaryInterceptor(authenticator Authenticator, requiredGroups []string) 
 			return nil, status.Error(codes.PermissionDenied, "forbidden: caller lacks a required group")
 		}
 		return handler(WithIdentity(ctx, identity), request)
+	}
+}
+
+func WorkflowExecutorGRPCUnaryInterceptor(authenticator Authenticator) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if info == nil || (info.FullMethod != "/lf.a2a.v1.A2AService/SendMessage" && info.FullMethod != "/lf.a2a.v1.A2AService/GetTask") {
+			return nil, status.Error(codes.Unimplemented, "unsupported Workflow execution method")
+		}
+		if authenticator == nil || handler == nil {
+			return nil, status.Error(codes.Unavailable, "Workflow execution authentication unavailable")
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, status.FromContextError(err).Err()
+		}
+		token, ok := strictGRPCBearerToken(ctx)
+		if !ok {
+			return nil, status.Error(codes.Unauthenticated, "Workflow executor authentication required")
+		}
+		bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		identity, err := authenticator.Authenticate(bounded, token)
+		if err != nil || identity == nil {
+			return nil, status.Error(codes.Unauthenticated, "Workflow executor authentication required")
+		}
+		if _, err := AuthenticatedWorkflowControllerUID(WithIdentity(bounded, identity)); err != nil {
+			return nil, status.Error(codes.Unauthenticated, "Workflow executor authentication required")
+		}
+		if err := bounded.Err(); err != nil {
+			return nil, status.FromContextError(err).Err()
+		}
+		return handler(WithIdentity(ctx, identity), request)
+	}
+}
+
+func WorkflowExecutorGRPCServerOptions(authenticator Authenticator) []grpc.ServerOption {
+	return []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(WorkflowExecutorGRPCUnaryInterceptor(authenticator)),
+		grpc.ChainStreamInterceptor(func(_ any, _ grpc.ServerStream, _ *grpc.StreamServerInfo, _ grpc.StreamHandler) error {
+			return status.Error(codes.Unimplemented, "Workflow execution streaming is unsupported")
+		}),
 	}
 }
 
@@ -59,6 +101,21 @@ func NewEnvironmentAuthenticator(ctx context.Context) (Authenticator, []string, 
 		return nil, nil, ErrNoToken
 	}
 	return chain, splitGroups(os.Getenv("KOGNITION_OIDC_REQUIRED_GROUPS")), nil
+}
+
+// strictGRPCBearerToken accepts exactly one bounded Bearer credential without whitespace or control characters.
+func strictGRPCBearerToken(ctx context.Context) (string, bool) {
+	values := metadata.ValueFromIncomingContext(ctx, "authorization")
+	if len(values) != 1 || len(values[0]) > (64<<10)+7 {
+		return "", false
+	}
+	scheme, token, found := strings.Cut(values[0], " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") || token == "" || len(token) > 64<<10 || strings.ContainsFunc(token, func(character rune) bool {
+		return unicode.IsSpace(character) || unicode.IsControl(character)
+	}) {
+		return "", false
+	}
+	return token, true
 }
 
 func grpcBearerToken(ctx context.Context) string {

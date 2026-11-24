@@ -32,6 +32,7 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -155,6 +156,9 @@ _MAX_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MiB
 _HTTP_TIMEOUT_SECONDS = 30.0
 _tool_session_capability: ContextVar[str] = ContextVar("tool_session_capability", default="")
 _agent_delegation_session_capability: ContextVar[str] = ContextVar("agent_delegation_session_capability", default="")
+_agent_delegation_invocations: ContextVar[dict[str, tuple[bytes, str]] | None] = ContextVar(
+    "agent_delegation_invocations", default=None
+)
 _knowledge_session_capability: ContextVar[str] = ContextVar("knowledge_session_capability", default="")
 
 
@@ -169,11 +173,16 @@ def tool_runtime_session_capability(capability: str):
 
 @contextmanager
 def agent_delegation_runtime_session_capability(capability: str):
+    invocations = None
+    if capability != _agent_delegation_session_capability.get() or _agent_delegation_invocations.get() is None:
+        invocations = _agent_delegation_invocations.set({})
     token = _agent_delegation_session_capability.set(capability)
     try:
         yield
     finally:
         _agent_delegation_session_capability.reset(token)
+        if invocations is not None:
+            _agent_delegation_invocations.reset(invocations)
 
 
 @contextmanager
@@ -391,41 +400,67 @@ def build_agent_delegation_tool(gateway_url: str) -> StructuredTool | None:
         return None
     base_url = gateway_url.rstrip("/")
 
-    def delegate_to_agent(target_namespace: str, target_agent_service: str, message: str) -> str:
+    def delegate_to_agent(target_namespace: str, target_agent_service: str, message: str, invocation_id: str = "") -> str:
         session_capability = _agent_delegation_session_capability.get()
-        if not session_capability:
+        invocations = _agent_delegation_invocations.get()
+        if not session_capability or invocations is None:
             return "Agent delegation cannot run because its session capability is missing."
-        invocation_id = str(uuid.uuid4())
+        fingerprint = sha256(json.dumps([target_namespace, target_agent_service, message]).encode()).digest()
+        capability = ""
+        if invocation_id:
+            previous = invocations.get(invocation_id)
+            if previous is None or previous[0] != fingerprint:
+                return "Agent delegation continuation does not match an outstanding request in this session."
+            capability = previous[1]
+        else:
+            if len(invocations) >= 128:
+                return "Too many outstanding agent delegations in this session."
+            invocation_id = str(uuid.uuid4())
+            invocations[invocation_id] = (fingerprint, "")
+        body = {"target_namespace": target_namespace, "target_agent_service": target_agent_service, "invocation_id": invocation_id, "message": message}
         headers = {"Authorization": f"Bearer {session_capability}", **runtime_tracing.inject_trace_headers()}
         try:
-            exchange = httpx.post(
-                f"{base_url}/v1/agent-services/capabilities",
-                json={"target_namespace": target_namespace, "target_agent_service": target_agent_service, "invocation_id": invocation_id, "message": message},
-                timeout=_HTTP_TIMEOUT_SECONDS,
-                headers=headers,
-            )
-            exchange_body = exchange.json()
-            if str(exchange_body.get("runtime_approval_state", "")).lower() in ("pending", "terminal", "unavailable"):
-                return _truncate(json.dumps(exchange_body))
-            exchange.raise_for_status()
-            capability = exchange_body.get("capability", "")
-            if not isinstance(capability, str) or not capability:
-                return "Agent delegation capability exchange returned no capability."
+            if not capability:
+                exchange = httpx.post(
+                    f"{base_url}/v1/agent-services/capabilities", json=body, timeout=_HTTP_TIMEOUT_SECONDS, headers=headers,
+                )
+                exchange_body = exchange.json()
+                if isinstance(exchange_body, dict):
+                    approval_state = str(exchange_body.get("runtime_approval_state", "")).lower()
+                    if approval_state in ("pending", "terminal", "unavailable"):
+                        if approval_state == "terminal":
+                            invocations.pop(invocation_id, None)
+                        return _truncate(json.dumps({**exchange_body, "invocation_id": invocation_id}))
+                exchange.raise_for_status()
+                capability = exchange_body.get("capability", "") if isinstance(exchange_body, dict) else ""
+                if not isinstance(capability, str) or not capability:
+                    raise ValueError("Agent delegation capability exchange returned no capability.")
+                invocations[invocation_id] = (fingerprint, capability)
             response = httpx.post(
                 f"{base_url}/v1/agent-services/invoke",
-                json={"target_namespace": target_namespace, "target_agent_service": target_agent_service, "invocation_id": invocation_id, "message": message},
+                json=body,
                 timeout=_HTTP_TIMEOUT_SECONDS,
                 headers={"Authorization": f"Bearer {capability}", **runtime_tracing.inject_trace_headers()},
             )
         except (httpx.HTTPError, ValueError) as exc:
             logger.warning("Agent delegation gateway call failed: %s", exc)
-            return f"Agent delegation gateway call failed: {exc}"
+            if isinstance(exc, httpx.HTTPStatusError) and 400 <= exc.response.status_code < 500 and exc.response.status_code not in (408, 429):
+                invocations.pop(invocation_id, None)
+                return f"Agent delegation capability exchange returned HTTP {exc.response.status_code}."
+            return json.dumps({"invocation_id": invocation_id, "error": "Agent delegation outcome unavailable. Continue the same invocation, not a new one."})
         try:
             response_body = response.json()
         except ValueError:
             response_body = None
-        if isinstance(response_body, dict) and str(response_body.get("runtime_approval_state", "")).lower() in ("pending", "terminal", "unavailable"):
-            return _truncate(json.dumps(response_body))
+        if isinstance(response_body, dict):
+            approval_state = str(response_body.get("runtime_approval_state", "")).lower()
+            if approval_state in ("pending", "terminal", "unavailable"):
+                if approval_state == "terminal":
+                    invocations.pop(invocation_id, None)
+                return _truncate(json.dumps({**response_body, "invocation_id": invocation_id}))
+        if response.status_code in (408, 409, 429) or response.status_code >= 500:
+            return json.dumps({"invocation_id": invocation_id, "error": "Agent delegation outcome unavailable. Continue the same invocation, not a new one."})
+        invocations.pop(invocation_id, None)
         if response.status_code >= 400:
             return f"Agent delegation gateway returned HTTP {response.status_code}: {_truncate(response.text)}"
         return _truncate(json.dumps(response_body)) if response_body is not None else _truncate(response.text)
@@ -438,6 +473,7 @@ def build_agent_delegation_tool(gateway_url: str) -> StructuredTool | None:
                 "target_namespace": {"type": "string"},
                 "target_agent_service": {"type": "string"},
                 "message": {"type": "string"},
+                "invocation_id": {"type": "string", "default": "", "description": "Continue an outstanding delegation using its returned invocation ID and unchanged arguments. Omit for a new action."},
             },
             "required": ["target_namespace", "target_agent_service", "message"],
         },
@@ -445,7 +481,7 @@ def build_agent_delegation_tool(gateway_url: str) -> StructuredTool | None:
     return StructuredTool.from_function(
         func=delegate_to_agent,
         name="delegate_to_agent",
-        description="Delegate a message to an authorized AgentService.",
+        description="Delegate a message to an authorized AgentService. Continue a pending or uncertain delegation with its invocation_id rather than starting it again.",
         args_schema=args_model,
     )
 

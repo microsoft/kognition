@@ -1312,9 +1312,10 @@ func TestAgentCommunicationPolicyRoundTrip(t *testing.T) {
 		TypeMeta:   api.TypeMeta{Kind: "AgentCommunicationPolicy", APIVersion: api.APIVersion},
 		ObjectMeta: api.ObjectMeta{Name: "assistant-policy", Namespace: "apps"},
 		Spec: api.AgentCommunicationPolicySpec{
-			AllowFrom:   []api.LocalObjectReference{{Name: "planner"}},
-			AllowTo:     []api.LocalObjectReference{{Name: "executor"}},
-			DefaultDeny: true,
+			AllowFrom:          []api.LocalObjectReference{{Name: "planner"}},
+			AllowFromQualified: []api.AgentReference{{Namespace: "other-team", Name: "planner"}},
+			AllowTo:            []api.LocalObjectReference{{Name: "executor"}},
+			DefaultDeny:        true,
 		},
 	}
 	k8sObj := convert.AgentCommunicationPolicyToK8s(in)
@@ -1325,6 +1326,18 @@ func TestAgentCommunicationPolicyRoundTrip(t *testing.T) {
 	k8sObj.Spec.AllowFrom[0].Name = "mutated"
 	if in.Spec.AllowFrom[0].Name != "planner" {
 		t.Fatal("AgentCommunicationPolicyToK8s aliases caller-owned storage")
+	}
+	if k8sObj.Spec.AllowFromQualified[0].Namespace != "other-team" || k8sObj.Spec.AllowFromQualified[0].Name != "planner" {
+		t.Fatal("native policy lost qualified source identity")
+	}
+	copy := k8sObj.DeepCopy()
+	copy.Spec.AllowFromQualified[0].Namespace = "changed"
+	if k8sObj.Spec.AllowFromQualified[0].Namespace != "other-team" {
+		t.Fatal("qualified references share deepcopy storage")
+	}
+	k8sObj.Spec.AllowFromQualified[0].Namespace = "mutated"
+	if in.Spec.AllowFromQualified[0].Namespace != "other-team" || out.Spec.AllowFromQualified[0].Namespace != "other-team" {
+		t.Fatal("qualified policy conversion aliases source storage")
 	}
 }
 

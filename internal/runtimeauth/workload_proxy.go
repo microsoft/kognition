@@ -29,6 +29,8 @@ type WorkloadProxy struct {
 	gateways map[string]workloadGateway
 }
 
+const MemoryInvocationIDHeader = "X-Kognition-Memory-Invocation-Id"
+
 var workloadOperations = map[string]map[string]bool{
 	"model":         {"/v1/chat/completions": true},
 	"tool":          {"/v1/tools/capabilities": true, "/v1/tools/invoke": true},
@@ -94,6 +96,11 @@ func (proxy *WorkloadProxy) ServeHTTP(writer http.ResponseWriter, request *http.
 	for _, name := range []string{"Authorization", "traceparent", "tracestate", observability.TrustDecisionRunIDHeader} {
 		if value := request.Header.Get(name); value != "" {
 			upstream.Header.Set(name, value)
+		}
+	}
+	if plane == "memory" && path == "/v1/memory/store" {
+		if value := request.Header.Get(MemoryInvocationIDHeader); value != "" {
+			upstream.Header.Set(MemoryInvocationIDHeader, value)
 		}
 	}
 	response, err := gateway.client.Do(upstream)

@@ -523,7 +523,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	for _, name := range []string{"033_model_canary_purpose.sql", "034_runtime_recovery.sql"} {
+	for _, name := range []string{"033_model_canary_purpose.sql", "034_runtime_recovery.sql", "037_workflow_executor_approvals.sql"} {
 		migration, err = os.ReadFile("migrations/" + name)
 		if err == nil {
 			_, err = pool.Exec(ctx, string(migration))

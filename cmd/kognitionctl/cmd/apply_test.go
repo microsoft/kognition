@@ -90,10 +90,12 @@ func TestRunApply_CreatesAfterNotFound(t *testing.T) {
 apiVersion: kognition.dev/v1alpha1
 kind: Agent
 metadata:
-  namespace: team-a
   name: planner
 `)
 	defer restore()
+	oldNamespace := namespace
+	namespace = "team-a"
+	t.Cleanup(func() { namespace = oldNamespace })
 
 	output := captureStdout(t, func() error { return runApply(nil, nil) })
 	if strings.Join(methods, ",") != "GET,POST" {
@@ -105,6 +107,9 @@ metadata:
 }
 
 func TestRunApply_UpdatesWithCurrentResourceVersion(t *testing.T) {
+	oldNamespace := namespace
+	namespace = "flag-namespace"
+	t.Cleanup(func() { namespace = oldNamespace })
 	var methods []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		methods = append(methods, r.Method)

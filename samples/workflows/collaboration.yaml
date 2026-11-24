@@ -1,0 +1,222 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Demo: Team (collaboration) steps
+#
+# Exercises:
+#   - A `collaboration` step: a bounded team of Agents working on one task
+#   - Parallel strategy: branch members run concurrently, a synthesizer combines
+#   - Supervisor strategy: a coordinator delegates to specialists
+#
+# Handoff and Peer steps use the same shape; see docs/workflow-collaboration.md.
+#
+# Prerequisites:
+#   - Kubernetes mode with the Workflow executor collaboration profile enabled
+#     (Helm value k8sController.workflowExecutor.collaboration.enabled=true).
+#     Without it admission rejects `collaboration` steps.
+#   - SecretRef `foundry-creds` and Model `gpt-6-luna` in the `default`
+#     namespace, as for the other workflow demos.
+#   - Members of one team must be DISTINCT Agents, hence one Agent per role.
+#   - A member may involve another member only if an AgentCommunicationPolicy
+#     allows that edge (default deny), in addition to the step's
+#     allowedInteractions. The policies below cover every edge used here.
+#
+# Apply: kubectl apply -f samples/workflows/collaboration.yaml
+#
+# Trigger:
+#   kind: WorkflowRun
+#   spec:
+#     workflowRef: { name: wfdemo-team-parallel }
+#     input: "Assess the risks of moving a billing service to a new database."
+#
+# Watch:
+#   kubectl get workflowrun <name> -o yaml | yq .status.stepStatuses
+#   kubectl get agentjobs | grep wfcj-
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfteam-analyst
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are the analyst on a small team. Follow the response format given
+      in the task input exactly and add nothing outside it. When the format
+      leaves room for content, give a concise, factual analysis.
+  runtime:
+    class: default
+    timeout: 180s
+    maxTokens: 2048
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfteam-reviewer
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are the reviewer on a small team. Follow the response format given
+      in the task input exactly and add nothing outside it. When the format
+      leaves room for content, look for gaps, risks and counter-arguments.
+  runtime:
+    class: default
+    timeout: 180s
+    maxTokens: 2048
+---
+kind: Agent
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfteam-writer
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+spec:
+  modelRef:
+    name: gpt-6-luna
+  instructions:
+    inline: |
+      You are the writer on a small team. Follow the response format given
+      in the task input exactly and add nothing outside it. When the format
+      leaves room for content, combine the material you receive into one
+      short, well-structured answer.
+  runtime:
+    class: default
+    timeout: 180s
+    maxTokens: 2048
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfteam-writer-to-specialists
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: wfteam-writer
+  allowTo:
+    - name: wfteam-analyst
+    - name: wfteam-reviewer
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfteam-analyst-to-team
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: wfteam-analyst
+  allowTo:
+    - name: wfteam-reviewer
+    - name: wfteam-writer
+---
+kind: AgentCommunicationPolicy
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfteam-reviewer-to-team
+  namespace: default
+spec:
+  defaultDeny: true
+  allowFrom:
+    - name: wfteam-reviewer
+  allowTo:
+    - name: wfteam-analyst
+    - name: wfteam-writer
+---
+# Parallel: analyst and reviewer work on the request at the same time and the
+# writer combines their results.
+kind: Workflow
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-team-parallel
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+    workflow.kognition.dev/feature: collaboration
+spec:
+  maxConcurrentRuns: 1
+  steps:
+    - name: review-request
+      type: collaboration
+      input: "{{ .Input }}"
+      timeout: 10m
+      collaboration:
+        strategy: Parallel
+        protocol: A2A
+        members:
+          - name: analyst
+            agentRef:
+              name: wfteam-analyst
+          - name: reviewer
+            agentRef:
+              name: wfteam-reviewer
+          - name: writer
+            agentRef:
+              name: wfteam-writer
+        parallel:
+          branches:
+            - member: analyst
+            - member: reviewer
+          synthesizer: writer
+        limits:
+          maxTurns: 4
+          maxMessages: 16
+          maxDelegations: 1
+          maxDelegationDepth: 1
+          maxParallelTasks: 2
+          maxTokens: 32768
+---
+# Supervisor: the writer coordinates and may delegate to the analyst and the
+# reviewer. Only the listed interactions are admitted.
+kind: Workflow
+apiVersion: kognition.dev/v1alpha1
+metadata:
+  name: wfdemo-team-supervisor
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: workflow-demos
+    workflow.kognition.dev/feature: collaboration
+spec:
+  maxConcurrentRuns: 1
+  steps:
+    - name: prepare-answer
+      type: collaboration
+      input: "{{ .Input }}"
+      timeout: 10m
+      collaboration:
+        strategy: Supervisor
+        protocol: A2A
+        members:
+          - name: writer
+            agentRef:
+              name: wfteam-writer
+          - name: analyst
+            agentRef:
+              name: wfteam-analyst
+          - name: reviewer
+            agentRef:
+              name: wfteam-reviewer
+        allowedInteractions:
+          - from: writer
+            to: analyst
+          - from: writer
+            to: reviewer
+        supervisor:
+          coordinator: writer
+        limits:
+          maxTurns: 8
+          maxMessages: 32
+          maxDelegations: 4
+          maxDelegationDepth: 1
+          maxParallelTasks: 2
+          maxTokens: 32768

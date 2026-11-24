@@ -46,11 +46,12 @@ type Gate3Store interface {
 
 // Gate3Config configures a Gate3Coordinator.
 type Gate3Config struct {
-	Store    Gate3Store
-	Resolver *Resolver
-	Keys     BindingKeyStore
-	TTL      time.Duration
-	Now      func() time.Time
+	Store            Gate3Store
+	Resolver         *Resolver
+	Keys             BindingKeyStore
+	TTL              time.Duration
+	Now              func() time.Time
+	WorkflowDispatch *WorkflowDispatchGate
 }
 
 // Gate3Coordinator resolves live effective policy, creates or gets an
@@ -58,11 +59,12 @@ type Gate3Config struct {
 // tagged state per ADR-0014 "Preparation, Claim, and Accounting Order"
 // steps 3 and 4.
 type Gate3Coordinator struct {
-	store    Gate3Store
-	resolver *Resolver
-	keys     BindingKeyStore
-	ttl      time.Duration
-	now      func() time.Time
+	store            Gate3Store
+	resolver         *Resolver
+	keys             BindingKeyStore
+	ttl              time.Duration
+	now              func() time.Time
+	workflowDispatch *WorkflowDispatchGate
 }
 
 // NewGate3Coordinator returns a validated Gate3Coordinator.
@@ -82,7 +84,7 @@ func NewGate3Coordinator(config Gate3Config) (*Gate3Coordinator, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	return &Gate3Coordinator{store: config.Store, resolver: config.Resolver, keys: config.Keys, ttl: config.TTL, now: config.Now}, nil
+	return &Gate3Coordinator{store: config.Store, resolver: config.Resolver, keys: config.Keys, ttl: config.TTL, now: config.Now, workflowDispatch: config.WorkflowDispatch}, nil
 }
 
 // Gate3Request identifies the exact action bound to a RuntimeApproval.
@@ -103,6 +105,7 @@ type Gate3Request struct {
 	Target            api.RuntimeApprovalReference
 	AuthorizationRefs []api.RuntimeApprovalReference
 	CanonicalPayload  json.RawMessage
+	WorkflowContext   *api.WorkflowActionContext
 }
 
 // Gate3Result is the tagged outcome of a Gate 3 evaluation.
@@ -121,6 +124,9 @@ func (g *Gate3Coordinator) Resolve(ctx context.Context, request Gate3Request) (G
 	if err := g.validateRequest(request); err != nil {
 		return Gate3Result{}, err
 	}
+	if request.WorkflowContext != nil && g.workflowDispatch == nil {
+		return Gate3Result{}, ErrWorkflowDispatchUnsupported
+	}
 	resolution, err := g.resolver.Resolve(ctx, request.Namespace, request.AgentName)
 	if err != nil {
 		return Gate3Result{}, err
@@ -138,6 +144,14 @@ func (g *Gate3Coordinator) Resolve(ctx context.Context, request Gate3Request) (G
 		return Gate3Result{}, fmt.Errorf("create or get RuntimeApproval: %w", err)
 	}
 	result := Gate3Result{Approval: stored, ExpiresAt: stored.Spec.ExpiresAt}
+	if stored.Spec.WorkflowContext != nil && (stored.Status.DecisionState == api.RuntimeApprovalDecisionPending || PermitsExecution(stored.Status.DecisionState)) {
+		if g.workflowDispatch == nil {
+			return result, ErrWorkflowDispatchUnsupported
+		}
+		if err := g.workflowDispatch.Register(ctx, stored, request.CanonicalPayload); err != nil {
+			return result, fmt.Errorf("register Workflow effect: %w", err)
+		}
+	}
 	switch stored.Status.DecisionState {
 	case api.RuntimeApprovalDecisionApproved, api.RuntimeApprovalDecisionNotRequired:
 		acked, ackErr := g.acknowledgeDecision(ctx, stored)
@@ -229,6 +243,7 @@ func (g *Gate3Coordinator) buildProposedApproval(ctx context.Context, request Ga
 			TargetRef:         request.Target,
 			AutonomyClassRef:  Reference("AutonomyClass", "Cluster", &resolution.Class),
 			AuthorizationRefs: request.AuthorizationRefs,
+			WorkflowContext:   cloneWorkflowActionContext(request.WorkflowContext),
 		},
 		Status: InitialStatus(initialDecision),
 	}

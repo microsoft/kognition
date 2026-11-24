@@ -176,11 +176,14 @@ spec:
           volumeMounts:
             - {name: config, mountPath: /run/spire/config, readOnly: true}
             - {name: data, mountPath: /run/spire/data}
+            - {name: tmp, mountPath: /tmp}
       volumes:
         - name: config
           configMap: {name: server}
         - name: data
           emptyDir: {}
+        - name: tmp
+          emptyDir: {sizeLimit: 16Mi}
 ---
 apiVersion: v1
 kind: Service

@@ -50,4 +50,30 @@ foreach ($tag in @('latest', 'dev', 'main')) {
     try { & $generator -ImageRegistry demotest.azurecr.io -ImageTag $tag | Out-Null } catch { $rejected = $true }
     Assert-True $rejected "Unversioned tag must fail: $tag"
 }
+
+$groupId = '5f0d8020-43bd-44ba-ab94-edc228dfe551'
+$withGroup = & $generator -ImageRegistry demotest.azurecr.io -ImageTag build-123 -Namespace demo-system -ReleaseFullname demo -WorkflowBindingAdminGroupId $groupId
+$workflow = ($withGroup | ConvertFrom-Json -AsHashtable).k8sController.workflowExecutor
+Assert-True ($workflow.enabled -eq $true) 'A supplied admin group enables the native workflow executor'
+Assert-True ($workflow.bindingAdminGroups.Count -eq 1 -and $workflow.bindingAdminGroups[0] -eq $groupId) 'The Entra group object ID is the only binding administrator'
+Assert-True ($workflow.principals[0].subject -eq 'system:serviceaccount:demo-system:demo-controller') 'The principal is the controller ServiceAccount of the selected release'
+Assert-True (-not ($values.k8sController.ContainsKey('workflowExecutor'))) 'Workflow executor stays disabled without an admin group'
+$groupPath = [IO.Path]::GetTempFileName()
+try {
+    $withGroup | Set-Content $groupPath
+    $groupManifest = & helm template demo $chart --namespace demo-system --kube-version 1.30.3 -f $groupPath
+    if ($LASTEXITCODE -ne 0) { throw 'Workflow executor Helm rendering failed.' }
+    Assert-True (($groupManifest -join "`n").Contains($groupId)) 'The rendered controller must receive the binding administrator group'
+} finally {
+    Remove-Item $groupPath -ErrorAction SilentlyContinue
+}
+$collab = (& $generator -ImageRegistry demotest.azurecr.io -ImageTag build-123 -WorkflowBindingAdminGroupId $groupId -EnableWorkflowCollaboration | ConvertFrom-Json -AsHashtable).k8sController.workflowExecutor
+Assert-True ($collab.collaboration.enabled -eq $true) 'The collaboration switch enables the chart collaboration flag'
+Assert-True (-not $workflow.ContainsKey('collaboration')) 'Collaboration stays disabled unless requested'
+$rejected = $false
+try { & $generator -ImageRegistry demotest.azurecr.io -ImageTag build-123 -EnableWorkflowCollaboration | Out-Null } catch { $rejected = $true }
+Assert-True $rejected 'Collaboration without the Workflow executor must be rejected'
+$rejected = $false
+try { & $generator -ImageRegistry demotest.azurecr.io -ImageTag build-123 -WorkflowBindingAdminGroupId ([guid]::Empty) | Out-Null } catch { $rejected = $true }
+Assert-True $rejected 'The empty GUID must not be accepted as an administrator group'
 Write-Output 'PASS: Kubernetes runtime base, single persistent database, existing credentials, versioned registry images, gateways, ingestion and no GPU/public ingress'

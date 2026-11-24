@@ -404,7 +404,7 @@ borrowed. The shape mirrors `StorageClass` → `PersistentVolumeClaim` →
 | `AgentIdentity` | `ServiceAccount` | 🟡 | The identity an agent acts as. Token issuance, federation, workload identity all key off this. |
 | `AgentRole` | `Role` / `ClusterRole` | 🟡 | A set of permissions over Kognition verbs/resources. |
 | `AgentRoleBinding` | `RoleBinding` / `ClusterRoleBinding` | 🟡 | Binds an `AgentIdentity` to an `AgentRole` in a scope. |
-| `AgentCommunicationPolicy` | `NetworkPolicy` | 🟡 | Declarative allow/deny rules between agents, tools, and external endpoints. |
+| `AgentCommunicationPolicy` | `NetworkPolicy` | 🟡 | Declarative allow rules for agent-to-agent message delivery. Not a pod network or tool access policy. |
 | `CrossNamespaceGrant` | `RoleBinding` across namespaces | 🟡 | Allows selected Kognition resource references to cross namespace boundaries. |
 | `Workspace` | `Namespace` | 🟡 | Logical tenancy unit. In K8s mode it composes with a Kubernetes `Namespace`. |
 
@@ -415,8 +415,8 @@ This is the area with the most literal one-to-one mapping.
 | Kognition | Kubernetes analogue | Status | Notes |
 |---|---|---|---|
 | `AgentPolicy` | `PodSecurityPolicy` (deprecated) / OPA Gatekeeper `Constraint` | 🟡 | Per-resource policy declaration enforced at admission and runtime. |
-| `CognitiveAdmissionPolicy` | `ValidatingAdmissionPolicy` / `MutatingAdmissionPolicy` | 🟡 | CEL-like predicates over admission requests for Kognition kinds. |
-| `CognitiveQuota` | `ResourceQuota` | 🟡 | Caps per-namespace cognitive usage: tokens, invocations, cost, concurrent jobs. Enforced by the `quota_enforcer` admission hook. |
+| `CognitiveAdmissionPolicy` | `ValidatingAdmissionPolicy` / `MutatingAdmissionPolicy` | 🟡 | Rego rules over admission requests for Kognition kinds. |
+| `CognitiveQuota` | `ResourceQuota` | 🟡 | Namespace resource counts are checked at admission. Token and cost budgets apply at supported runtime enforcement points. |
 | `CognitiveLimitRange` | `LimitRange` | 🟡 | Defaults and per-object min/max for cognitive resources (token budgets, timeouts). Applied by the `limit_range_defaulter`. |
 
 ### 3.9 Autonomy & trust (Kognition-specific)
@@ -429,7 +429,8 @@ of Kubernetes.
 |---|---|---|---|
 | `AutonomyClass` | (no direct analog) | ⚪ | Declares the autonomy tier (e.g., advisory, supervised, autonomous) and the approval policy that applies. |
 | `TrustProfile` | (no direct analog) | ⚪ | Aggregated trust signals for an identity (behavioral history, risk score). |
-| `AutonomyReview` | (no direct analog; analogous to a manual `Approval` in CD pipelines) | ⚪ | A pending human-in-the-loop decision gating an agent action. |
+| `AutonomyReview` | (no direct analog; analogous to a manual `Approval` in CD pipelines) | ⚪ | Human review for autonomy-tier promotion, not authorization for an individual action. |
+| `RuntimeApproval` | (no direct analog) | ⚪ | Approval bound to an exact governed runtime effect. The responsible gateway still checks live authorization and applies Gate 3 before dispatch. |
 | `ApprovalDecision` | `CertificateSigningRequest` approval update | 🟡 | Records an authenticated approve or deny decision for a pending gate. |
 
 ### 3.10 Secrets, prompts, configuration
@@ -482,13 +483,19 @@ metadata:
   namespace: team-alpha
 spec:
   hard:
-    tokens.daily: "1000000"
-    workflowruns: "50"
-    cost.monthly.usd: "500"
+    agents: 30
+    workflows: 15
+  tokenBudget:
+    maxTotalTokens: 1000000
+  costBudget:
+    maxCostPerPeriod: 500000000
+  resetInterval: 24h
 ```
 
-Quota lives next to `ResourceQuota`. Admission webhook denies submissions
-that exceed it. Same model the cluster already uses for CPU and memory.
+Admission checks the integer object counts in `hard` for supported resource
+creates. Runtime accounting applies the token and cost budgets at supported
+dispatch points over the configured period. Cost is in normalized micro-USD:
+`500000000` is USD 500 per 24-hour period.
 
 **Network governance**
 
@@ -496,21 +503,21 @@ that exceed it. Same model the cluster already uses for CPU and memory.
 apiVersion: kognition.dev/v1alpha1
 kind: AgentCommunicationPolicy
 metadata:
-  name: writer-egress
+  name: researcher-to-writer
+  namespace: team-alpha
 spec:
-  podSelector:
-    matchLabels:
-      kognition.dev/agent: writer
-  egress:
-    - to:
-        - models:
-            matchLabels: { provider: foundry }
-        - tools:
-            matchNames: [web-search]
+  defaultDeny: true
+  allowFrom:
+    - name: researcher
+  allowTo:
+    - name: writer
 ```
 
-The shape is `NetworkPolicy`. The vocabulary is cognitive. The operator
-intuition transfers one-to-one.
+This policy allows messages from `researcher` to `writer` in `team-alpha`.
+Delivery is denied without a matching allow policy. The communication gateway
+also checks live authorization; cross-namespace delivery requires a separate
+grant. Use model and tool grants for those capabilities and Kubernetes
+`NetworkPolicy` for pod traffic.
 
 ---
 

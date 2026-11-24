@@ -19,6 +19,7 @@ import (
 	"github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/runtime"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval"
 	"github.com/kognition-ai/kognition/internal/store"
 )
 
@@ -125,6 +126,39 @@ func TestWorkflowRunReconciler_StoreBoundaries(t *testing.T) {
 			t.Fatal("finalizer persisted despite injected update failure")
 		}
 	})
+}
+
+func TestWorkflowRunReconciler_ProtectedRunCannotEnterLegacyGraph(t *testing.T) {
+	for _, running := range []bool{false, true} {
+		t.Run(fmt.Sprintf("retained snapshot=%v", running), func(t *testing.T) {
+			ctx := context.Background()
+			storage := newEventMemStore()
+			run := makeWorkflowRun("team-a", "protected-run", "workflow")
+			run.ObjectMeta.Annotations = map[string]string{runtimeapproval.WorkflowRunAcceptanceRequiredAnnotation: "true"}
+			if running {
+				workflow := makeWorkflow("team-a", "workflow")
+				run.ObjectMeta.Finalizers = []string{WorkflowRunFinalizer}
+				run.Status.SnapshotSpec = &workflow.Spec
+				run.Status.Phase = v1alpha1.PhaseRunning
+			}
+			storeWorkflowRun(t, storage, run)
+			before := getWorkflowRun(t, storage, "team-a", "protected-run")
+			reconciler := NewWorkflowRunReconciler(storage, zaptest.NewLogger(t))
+			for attempt := 0; attempt < 2; attempt++ {
+				if _, err := reconciler.Reconcile(ctx, Request{Namespace: "team-a", Name: "protected-run"}); !errors.Is(err, runtimeapproval.ErrWorkflowDispatchUnsupported) {
+					t.Fatalf("protected run entered legacy reconciliation: %v", err)
+				}
+			}
+			after := getWorkflowRun(t, storage, "team-a", "protected-run")
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("legacy reconciliation mutated protected run: before=%#v after=%#v", before, after)
+			}
+			jobs, err := storage.List(ctx, "AgentJob", store.ListOptions{Namespace: "team-a"})
+			if err != nil || len(jobs) != 0 {
+				t.Fatalf("protected run produced legacy AgentJobs: count=%d error=%v", len(jobs), err)
+			}
+		})
+	}
 }
 
 func (s *workflowRunConflictStore) Update(ctx context.Context, kind, namespace, name string, data []byte, resourceVersion int64) error {

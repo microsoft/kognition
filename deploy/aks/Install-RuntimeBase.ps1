@@ -14,15 +14,25 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^sha256:[a-f0-9]{64}$')][string]$ControllerImageDigest,
     [ValidatePattern('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')][string]$Release = 'kognition',
     [string]$StateDirectory = '.local/kognition-install',
+    [Nullable[guid]]$WorkflowBindingAdminGroupId = $null,
+    [switch]$CreateWorkflowBindingAdminGroup,
+    [switch]$EnableWorkflowCollaboration,
     [switch]$Exclusive
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if (-not $Exclusive) { throw 'Use -Exclusive after confirming no other writer targets the selected installation namespaces.' }
+if ($CreateWorkflowBindingAdminGroup -and $null -ne $WorkflowBindingAdminGroupId) { throw 'Use either -CreateWorkflowBindingAdminGroup or -WorkflowBindingAdminGroupId, not both.' }
+if ($CreateWorkflowBindingAdminGroup) {
+    $WorkflowBindingAdminGroupId = [guid](& (Join-Path $PSScriptRoot 'Initialize-BindingAdminGroup.ps1'))
+}
+$groupArguments = @{}
+if ($null -ne $WorkflowBindingAdminGroupId) { $groupArguments.WorkflowBindingAdminGroupId = $WorkflowBindingAdminGroupId }
+if ($EnableWorkflowCollaboration) { $groupArguments.EnableWorkflowCollaboration = $true }
 $values = & (Join-Path $PSScriptRoot 'New-RuntimeValues.ps1') `
-    -ImageRegistry $ImageRegistry -ImageTag $ImageTag -ReleaseFullname $Release `
-    -WorkloadNamespace $WorkloadNamespace -ControllerImageDigest $ControllerImageDigest -GenerateCredentials
+    -ImageRegistry $ImageRegistry -ImageTag $ImageTag -ReleaseFullname $Release -Namespace $Namespace `
+    -WorkloadNamespace $WorkloadNamespace -ControllerImageDigest $ControllerImageDigest -GenerateCredentials @groupArguments
 $valuesPath = [IO.Path]::GetTempFileName()
 try {
     $values | Set-Content -LiteralPath $valuesPath -Encoding utf8

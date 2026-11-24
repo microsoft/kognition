@@ -103,20 +103,23 @@ func applyResource(ctx context.Context, resource map[string]any) error {
 	// Extract kind, metadata.namespace, metadata.name.
 	kind, _ := resource["kind"].(string)
 	metadata, _ := resource["metadata"].(map[string]any)
-	namespace, _ := metadata["namespace"].(string)
+	targetNamespace, _ := metadata["namespace"].(string)
 	name, _ := metadata["name"].(string)
 
 	if kind == "" || name == "" {
 		return fmt.Errorf("resource must have kind and metadata.name")
 	}
-	if namespace == "" {
-		namespace = "default"
+	if targetNamespace == "" {
+		targetNamespace = namespace
+		if targetNamespace == "" {
+			targetNamespace = "default"
+		}
 	}
 
 	// --- K8s mode: use client-go dynamic client ---
 	if k8sMode {
 		// Try Get to detect if it already exists.
-		existing, getErr := k8sGet(namespace, kind, name)
+		existing, getErr := k8sGet(targetNamespace, kind, name)
 		if getErr == nil && len(existing) > 0 {
 			// Exists → inject resourceVersion and Update.
 			var existObj map[string]any
@@ -128,12 +131,12 @@ func applyResource(ctx context.Context, resource map[string]any) error {
 					}
 				}
 			}
-			if _, err := k8sUpdate(namespace, resource); err != nil {
+			if _, err := k8sUpdate(targetNamespace, resource); err != nil {
 				return err
 			}
 		} else {
 			// Does not exist → Create.
-			if _, err := k8sCreate(namespace, resource); err != nil {
+			if _, err := k8sCreate(targetNamespace, resource); err != nil {
 				return err
 			}
 		}
@@ -150,7 +153,7 @@ func applyResource(ctx context.Context, resource map[string]any) error {
 	// Build URL — pluralize kind using the known-resources map.
 	plural := pluralize(kind)
 	resourceURL := fmt.Sprintf("%s/apis/kognition.dev/v1alpha1/namespaces/%s/%s/%s",
-		serverURL, namespace, plural, name)
+		serverURL, targetNamespace, plural, name)
 
 	// GET to determine if the resource already exists; if so, inject its
 	// current resourceVersion into the body for optimistic concurrency.
@@ -185,7 +188,7 @@ func applyResource(ctx context.Context, resource map[string]any) error {
 	} else if getResp.StatusCode == http.StatusNotFound {
 		// Resource does not exist — POST to create.
 		createURL := fmt.Sprintf("%s/apis/kognition.dev/v1alpha1/namespaces/%s/%s",
-			serverURL, namespace, plural)
+			serverURL, targetNamespace, plural)
 		resp, err = doHTTP(ctx, "POST", createURL, jsonData)
 		if err != nil {
 			return err

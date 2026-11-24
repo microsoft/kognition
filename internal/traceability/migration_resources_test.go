@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"os/exec"
+	"slices"
 	"testing"
 	"time"
 
@@ -25,10 +26,16 @@ func TestMigrationContainersHaveResourceBudgets(test *testing.T) {
 		name         string
 		values       []string
 		initializers int
+		pullSecrets  []corev1.LocalObjectReference
 	}{
 		{name: "standalone", initializers: 1},
 		{name: "kubernetes", values: []string{"mode=kubernetes"}, initializers: 1},
 		{name: "external-postgres", values: []string{"postgres.enabled=false"}},
+		{name: "registry-credentials", values: []string{
+			"global.imagePullSecrets[0].name=registry",
+			"imagePullSecrets[0].name=registry",
+			"imagePullSecrets[1].name=legacy",
+		}, initializers: 1, pullSecrets: []corev1.LocalObjectReference{{Name: "registry"}, {Name: "legacy"}}},
 		{name: "custom-budgets", values: []string{
 			"migrations.resources.requests.cpu=75m",
 			"migrations.resources.requests.memory=96Mi",
@@ -62,6 +69,9 @@ func TestMigrationContainersHaveResourceBudgets(test *testing.T) {
 			pod := job.Spec.Template.Spec
 			if job.Kind != "Job" || len(pod.Containers) != 1 || len(pod.InitContainers) != scenario.initializers {
 				test.Fatal("unexpected migration job containers")
+			}
+			if !slices.Equal(pod.ImagePullSecrets, scenario.pullSecrets) {
+				test.Errorf("migration image pull secrets = %v, want %v", pod.ImagePullSecrets, scenario.pullSecrets)
 			}
 			for _, container := range append(pod.InitContainers, pod.Containers...) {
 				for _, name := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {

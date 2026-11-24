@@ -58,6 +58,11 @@ authorization and installation controls.
   validation/digest code as `invocation-profile-digest`. It performs no inference.
 - Invocation profiles are immutable in the editor. Use **Create new profile
   revision** to copy a spec into a new named resource.
+- In Kubernetes mode the Workflow builder's **Team** step edits a collaboration
+  step: strategy, members, allowed interactions and limits. It shows the
+  admission rules as problems and updates references when a member is renamed.
+  In standalone mode it is read-only. See
+  [Workflow collaboration](workflow-collaboration.md).
 
 YAML view and structured editing preserve unrelated imported fields, explicit
 zero/false values and empty collections. Server-owned identity/version fields

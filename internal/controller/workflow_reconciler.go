@@ -88,6 +88,9 @@ type WorkflowReconciler struct {
 	// May be nil if the controller does not enable workflow tool steps.
 	toolInvoker WorkflowToolInvoker
 
+	// collaborationRunner drives collaboration-typed steps; nil disables them.
+	collaborationRunner WorkflowCollaborationRunner
+
 	tracer    *observability.Tracer
 	collector *observability.Collector
 }
@@ -323,7 +326,7 @@ func (r *WorkflowReconciler) executeWorkflow(ctx context.Context, wf *v1alpha1.W
 		return Result{Requeue: true}, nil
 	}
 
-	plan, err := buildWorkflowPlan(wf)
+	plan, err := buildWorkflowPlan(wf, r.collaborationRunner != nil)
 	if err != nil {
 		wf.Status.Phase = v1alpha1.PhaseFailed
 		lc := lifecycle.SetCondition(
@@ -714,7 +717,7 @@ type workflowPlan struct {
 	Cyclic       bool
 }
 
-func buildWorkflowPlan(wf *v1alpha1.Workflow) (workflowPlan, error) {
+func buildWorkflowPlan(wf *v1alpha1.Workflow, collaboration bool) (workflowPlan, error) {
 	if len(wf.Spec.Steps) == 0 {
 		return workflowPlan{}, fmt.Errorf("workflow must define at least one step")
 	}
@@ -730,6 +733,9 @@ func buildWorkflowPlan(wf *v1alpha1.Workflow) (workflowPlan, error) {
 		}
 		if _, exists := stepByName[step.Name]; exists {
 			return workflowPlan{}, fmt.Errorf("duplicate workflow step name %q", step.Name)
+		}
+		if step.Type == v1alpha1.WorkflowStepTypeCollaboration && (!collaboration || step.Collaboration == nil) {
+			return workflowPlan{}, fmt.Errorf("workflow step %q: collaboration execution is not enabled", step.Name)
 		}
 		stepByName[step.Name] = step
 		inDegree[step.Name] = 0
@@ -778,6 +784,11 @@ func buildWorkflowPlan(wf *v1alpha1.Workflow) (workflowPlan, error) {
 	}
 
 	if len(orderNames) != len(stepByName) {
+		for _, step := range wf.Spec.Steps {
+			if step.Type == v1alpha1.WorkflowStepTypeCollaboration {
+				return workflowPlan{}, fmt.Errorf("workflow step %q: collaboration steps are not supported in cyclic workflows", step.Name)
+			}
+		}
 		if wf.Spec.Budgets != nil && wf.Spec.Budgets.MaxIterations > 0 {
 			ordered := make([]v1alpha1.WorkflowStep, 0, len(wf.Spec.Steps))
 			ordered = append(ordered, wf.Spec.Steps...)
@@ -891,6 +902,10 @@ func (r *WorkflowReconciler) reconcileAcyclic(ctx context.Context, wf *v1alpha1.
 			completed[ss.Name] = struct{}{}
 		case v1alpha1.PhaseFailed, v1alpha1.PhaseTimedOut:
 			failed[ss.Name] = struct{}{}
+		case v1alpha1.PhaseRunning:
+			if step, ok := stepByName[ss.Name]; ok && step.Type == v1alpha1.WorkflowStepTypeCollaboration {
+				active = append(active, ss.Name)
+			}
 		}
 	}
 
@@ -922,6 +937,11 @@ func (r *WorkflowReconciler) reconcileAcyclic(ctx context.Context, wf *v1alpha1.
 			continue
 		}
 		// Timed out: delete the job, mark failed, emit event.
+		if step.Type == v1alpha1.WorkflowStepTypeCollaboration && r.collaborationRunner != nil {
+			if err := r.collaborationRunner.Stop(ctx, collaborationRunFor(wf, r.ownerKind, step, ss.Attempts, ""), "StepTimedOut"); err != nil {
+				return Result{}, fmt.Errorf("stop timed-out collaboration step %q: %w", name, err)
+			}
+		}
 		if job, ok := jobsByStep[name]; ok {
 			if err := r.store.Delete(ctx, "AgentJob", job.ObjectMeta.Namespace, job.ObjectMeta.Name); err != nil {
 				return Result{}, fmt.Errorf("delete timed-out agent job %q: %w", job.ObjectMeta.Name, err)
@@ -1010,6 +1030,9 @@ func (r *WorkflowReconciler) reconcileAcyclic(ctx context.Context, wf *v1alpha1.
 			}
 		}
 		failedStep := firstSorted(failed)
+		if err := r.stopCollaborations(ctx, wf, "WorkflowFailed"); err != nil {
+			return Result{}, err
+		}
 		wf.Status.Phase = v1alpha1.PhaseFailed
 		wf.Status.ActiveStep = failedStep
 		wf.Status.ActiveSteps = nil
@@ -1125,7 +1148,11 @@ func (r *WorkflowReconciler) reconcileAcyclic(ctx context.Context, wf *v1alpha1.
 		}
 
 		// T-0282: maxParallelSteps throttle — limit concurrent active steps.
-		if wf.Spec.MaxParallelSteps > 0 && int32(len(active)+len(dispatched)) >= wf.Spec.MaxParallelSteps {
+		resuming := false
+		if ss := findStepStatus(wf, step.Name); ss != nil && step.Type == v1alpha1.WorkflowStepTypeCollaboration && ss.Phase == v1alpha1.PhaseRunning {
+			resuming = true
+		}
+		if !resuming && wf.Spec.MaxParallelSteps > 0 && int32(len(active)+len(dispatched)) >= wf.Spec.MaxParallelSteps {
 			continue
 		}
 
@@ -1137,6 +1164,30 @@ func (r *WorkflowReconciler) reconcileAcyclic(ctx context.Context, wf *v1alpha1.
 
 		resolvedStep := step
 		resolvedStep.Input = resolvedInput
+
+		if step.Type == v1alpha1.WorkflowStepTypeCollaboration {
+			outcome, retryDelay, err := r.advanceCollaborationStep(ctx, wf, step, resolvedInput, now, resuming)
+			if err != nil {
+				return Result{}, err
+			}
+			switch outcome {
+			case collaborationRunning:
+				if !resuming {
+					dispatched = append(dispatched, step.Name)
+				}
+			case collaborationSucceeded:
+				completed[step.Name] = struct{}{}
+				terminal[step.Name] = struct{}{}
+				active = withoutString(active, step.Name)
+			case collaborationFailed:
+				failed[step.Name] = struct{}{}
+				active = withoutString(active, step.Name)
+			case collaborationRetrying:
+				updateRequeue(retryDelay)
+				active = withoutString(active, step.Name)
+			}
+			continue
+		}
 
 		// T-0296: Tool-typed steps execute synchronously via WorkflowToolInvoker
 		// instead of creating an AgentJob.

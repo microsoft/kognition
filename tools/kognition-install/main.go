@@ -277,7 +277,7 @@ func execute(mode, path, claimUID, helmUID, helmDigest string, stdout, stderr io
 	}
 	common := []string{"--kubeconfig", plan.Kubeconfig, "--namespace", manifest.Namespace}
 	checkRevision := func(ctx context.Context) error {
-		output, err := command(ctx, append([]string{"list", "--all", "--filter", "^" + regexp.QuoteMeta(plan.Release) + "$", "--output", "json"}, common...)...)
+		output, err := command(ctx, append([]string{"list", "--deployed", "--failed", "--pending", "--superseded", "--uninstalled", "--uninstalling", "--filter", "^" + regexp.QuoteMeta(plan.Release) + "$", "--output", "json"}, common...)...)
 		if err != nil {
 			return err
 		}

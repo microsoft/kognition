@@ -240,6 +240,30 @@ func storeCrossNamespaceGrant(t *testing.T, s *memStore, grant *v1alpha1.CrossNa
 	}
 }
 
+func TestCrossWorkspaceCommunicationDoesNotReuseLocalAgentNames(t *testing.T) {
+	ctx := context.Background()
+	storage := newMemStore()
+	storeCrossNamespaceGrant(t, storage, makeCrossNamespaceGrant("team-b", "reference", "team-b", "team-a", "Agent", "target"))
+	storeCommPolicy(t, storage, makeCommPolicy("team-b", "local", v1alpha1.AgentCommunicationPolicySpec{
+		AllowFrom: []v1alpha1.LocalObjectReference{{Name: "analyst"}}, AllowTo: []v1alpha1.LocalObjectReference{{Name: "target"}}, DefaultDeny: true}))
+	engine := NewCommunicationPolicyEngine(storage, zaptest.NewLogger(t))
+	if allowed, err := engine.EvaluateDispatch(ctx, "team-b", "analyst", "target"); err != nil || !allowed {
+		t.Fatalf("same-namespace baseline: %v %v", allowed, err)
+	}
+	if allowed, err := engine.EvaluateCrossWorkspaceDispatch(ctx, "team-a", "analyst", "team-b", "target"); err != nil || allowed {
+		t.Fatalf("foreign names inherited local permission: %v %v", allowed, err)
+	}
+	storeCommPolicy(t, storage, makeCommPolicy("team-b", "qualified", v1alpha1.AgentCommunicationPolicySpec{
+		AllowFromQualified: []v1alpha1.AgentReference{{Namespace: "team-a", Name: "analyst"}}, AllowTo: []v1alpha1.LocalObjectReference{{Name: "target"}}, DefaultDeny: true}))
+	if allowed, err := engine.EvaluateCrossWorkspaceDispatch(ctx, "team-a", "analyst", "team-b", "target"); err != nil || !allowed {
+		t.Fatalf("qualified source with independent reference grant denied: %v %v", allowed, err)
+	}
+	storeCrossNamespaceGrant(t, storage, makeCrossNamespaceGrant("team-b", "third-reference", "team-b", "team-c", "Agent", "target"))
+	if allowed, err := engine.EvaluateCrossWorkspaceDispatch(ctx, "team-c", "analyst", "team-b", "target"); err != nil || allowed {
+		t.Fatalf("same-named third-namespace source inherited qualified permission: %v %v", allowed, err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TC-0066: Workspace reconciler creates default-deny policy; cross-workspace
 //          access is denied without a grant.
@@ -629,9 +653,9 @@ func TestCommunicationPolicy_CrossWorkspaceRequiresGrant(t *testing.T) {
 	}
 
 	storeCommPolicy(t, s, makeCommPolicy("ws-b", "allow-agent-1", v1alpha1.AgentCommunicationPolicySpec{
-		DefaultDeny: true,
-		AllowFrom:   []v1alpha1.LocalObjectReference{{Name: "agent-1"}},
-		AllowTo:     []v1alpha1.LocalObjectReference{{Name: "agent-2"}},
+		DefaultDeny:        true,
+		AllowFromQualified: []v1alpha1.AgentReference{{Namespace: "ws-a", Name: "agent-1"}},
+		AllowTo:            []v1alpha1.LocalObjectReference{{Name: "agent-2"}},
 	}))
 
 	// Both the boundary grant and target policy now allow the dispatch.
@@ -687,6 +711,54 @@ func TestCommunicationPolicy_LegacyDefaultAllowDoesNotBypassIsolation(t *testing
 	}
 	if allowed {
 		t.Fatal("legacy defaultDeny=false policy allowed unrelated communication")
+	}
+}
+
+type communicationPolicyRowsStore struct {
+	store.Store
+	rows [][]byte
+}
+
+func (storage communicationPolicyRowsStore) List(context.Context, string, store.ListOptions) ([][]byte, error) {
+	return storage.rows, nil
+}
+
+func TestCommunicationPolicy_InvalidRowsCannotBeMaskedByAllow(t *testing.T) {
+	allow, err := json.Marshal(makeCommPolicy("ns1", "allow", v1alpha1.AgentCommunicationPolicySpec{
+		AllowFrom: []v1alpha1.LocalObjectReference{{Name: "planner"}},
+		AllowTo:   []v1alpha1.LocalObjectReference{{Name: "coder"}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		row  json.RawMessage
+	}{
+		{name: "malformed JSON", row: json.RawMessage(`{`)},
+		{name: "null", row: json.RawMessage(`null`)},
+		{name: "foreign namespace", row: json.RawMessage(`{"metadata":{"namespace":"foreign","name":"policy"},"spec":{}}`)},
+		{name: "duplicate field", row: json.RawMessage(`{"metadata":{"namespace":"ns1","name":"policy"},"spec":{"allowTo":[],"allowTo":[{"name":"coder"}]}}`)},
+		{name: "empty rule", row: json.RawMessage(`{"metadata":{"namespace":"ns1","name":"policy"},"spec":{"allowFrom":[{"name":""}]}}`)},
+		{name: "unqualified source", row: json.RawMessage(`{"metadata":{"namespace":"ns1","name":"policy"},"spec":{"allowFromQualified":[{"name":"planner"}]}}`)},
+		{name: "oversized row", row: json.RawMessage(strings.Repeat(" ", 1<<20) + string(allow))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, rows := range [][][]byte{{allow, test.row}, {test.row, allow}} {
+				allowed, err := NewCommunicationPolicyEngine(communicationPolicyRowsStore{rows: rows}, zaptest.NewLogger(t)).EvaluateDispatch(context.Background(), "ns1", "planner", "coder")
+				if allowed || err == nil {
+					t.Fatalf("invalid policy row authorized delivery or hid unavailable policy: allowed=%v err=%v", allowed, err)
+				}
+			}
+		})
+	}
+	rows := make([][]byte, 513)
+	for index := range rows {
+		rows[index] = allow
+	}
+	allowed, err := NewCommunicationPolicyEngine(communicationPolicyRowsStore{rows: rows}, zaptest.NewLogger(t)).EvaluateDispatch(context.Background(), "ns1", "planner", "coder")
+	if allowed || err == nil {
+		t.Fatalf("unbounded policy set authorized delivery: allowed=%v err=%v", allowed, err)
 	}
 }
 

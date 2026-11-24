@@ -52,6 +52,9 @@ func (s *Server) recordOperationDecision(ctx context.Context, claims *runtimeaut
 		Approval:      &observability.TrustDecisionApproval{Status: "not_required"},
 		Execution:     observability.TrustDecisionExecution{Status: executionStatus, TargetReached: boolPointer(targetReached)},
 	}
+	if claims.WorkflowTask != nil {
+		decision.Request.InvocationID = claims.WorkflowTask.InvocationID
+	}
 	if identity != nil {
 		decision.Identity.AgentIdentity = identity.Spec.SPIFFEID
 		decision.Identity.AgentIdentityRef.ResourceVersion = fmt.Sprint(identity.ObjectMeta.ResourceVersion)

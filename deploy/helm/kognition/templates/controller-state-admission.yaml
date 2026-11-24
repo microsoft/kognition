@@ -9,6 +9,7 @@
 {{- fail "Kubernetes mode requires Kubernetes >= 1.30 for API-server-enforced controller state admission" }}
 {{- end }}
 {{- $controllerUser := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kognition.controllerServiceAccountName" .) }}
+{{- $collaborationEnabled := dig "enabled" false (include "kognition.workflowCollaboration" . | fromJson) }}
 {{- $platformUser := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kognition.serviceAccountName" .) }}
 {{- $webhookUser := printf "system:serviceaccount:%s:%s-webhook" .Release.Namespace (include "kognition.fullname" .) }}
 {{- $writers := list }}
@@ -48,6 +49,65 @@ spec:
         request.userInfo.username == {{ $webhookUser | toJson }}{{ end }}{{ if $gatewayUsers }} ||
         request.userInfo.username in {{ $gatewayUsers | toJson }}{{ end }}
   variables:
+    {{- if .Values.k8sController.workflowExecutor.enabled }}
+    - name: workflowRecord
+      expression: >-
+        object != null &&
+        request.operation == 'CREATE' &&
+        request.userInfo.username == {{ $controllerUser | toJson }} &&
+        request.namespace == {{ .Release.Namespace | toJson }} &&
+        object.metadata.namespace == request.namespace &&
+        object.metadata.name.matches('^kognition-workflow-run-(submission|acceptance)-[0-9a-f]{64}$') &&
+        has(object.immutable) && object.immutable &&
+        has(object.metadata.labels) && size(object.metadata.labels) == 1 &&
+        'kognition.dev/internal-record' in object.metadata.labels &&
+        (!has(object.metadata.annotations) || size(object.metadata.annotations) == 0) &&
+        (!has(object.metadata.ownerReferences) || size(object.metadata.ownerReferences) == 0) &&
+        (!has(object.metadata.finalizers) || size(object.metadata.finalizers) == 0) &&
+        (!has(object.binaryData) || size(object.binaryData) == 0) &&
+        has(object.data) && size(object.data) == 1 &&
+        ((object.metadata.name.startsWith('kognition-workflow-run-submission-') &&
+          object.metadata.labels['kognition.dev/internal-record'] == 'workflow-run-submission' &&
+          'receipt.json' in object.data && size(object.data['receipt.json']) <= 1048576) ||
+         (object.metadata.name.startsWith('kognition-workflow-run-acceptance-') &&
+          object.metadata.labels['kognition.dev/internal-record'] == 'workflow-run-acceptance' &&
+          'acceptance.json' in object.data && size(object.data['acceptance.json']) <= 1048576))
+    {{- end }}
+    {{- if $collaborationEnabled }}
+    - name: collaborationLedger
+      expression: >-
+        object != null &&
+        request.operation in ['CREATE', 'UPDATE'] &&
+        request.userInfo.username == {{ $controllerUser | toJson }} &&
+        request.namespace in {{ include "kognition.controllerNamespaces" . }} &&
+        [object, oldObject].all(candidate, candidate == null || (
+          candidate.metadata.namespace == request.namespace &&
+          candidate.metadata.name.matches('^wfc-[0-9a-f]{24}(-handles)?$') &&
+          (!has(candidate.immutable) || !candidate.immutable) &&
+          has(candidate.metadata.labels) && size(candidate.metadata.labels) == 3 &&
+          'app.kubernetes.io/component' in candidate.metadata.labels &&
+          candidate.metadata.labels['app.kubernetes.io/component'] == 'workflow-collaboration' &&
+          'kognition.dev/collaboration-run' in candidate.metadata.labels &&
+          candidate.metadata.labels['kognition.dev/collaboration-run'].matches('^[0-9a-f]{16}$') &&
+          'kognition.dev/collaboration-step' in candidate.metadata.labels &&
+          candidate.metadata.labels['kognition.dev/collaboration-step'].matches('^[0-9a-f]{16}$') &&
+          (!has(candidate.metadata.annotations) || size(candidate.metadata.annotations) == 0) &&
+          (!has(candidate.metadata.ownerReferences) || (
+            size(candidate.metadata.ownerReferences) == 1 &&
+            candidate.metadata.ownerReferences.all(owner,
+              owner.apiVersion == 'kognition.dev/v1alpha1' &&
+              owner.kind in ['Workflow', 'WorkflowRun'] &&
+              size(owner.name) > 0 && size(owner.uid) > 0 &&
+              (!has(owner.controller) || !owner.controller) &&
+              (!has(owner.blockOwnerDeletion) || !owner.blockOwnerDeletion))
+          )) &&
+          (!has(candidate.metadata.finalizers) || size(candidate.metadata.finalizers) == 0) &&
+          (!has(candidate.binaryData) || size(candidate.binaryData) == 0) &&
+          has(candidate.data) && size(candidate.data) > 0 &&
+          (candidate.metadata.name.endsWith('-handles') ||
+           (size(candidate.data) == 1 && 'state' in candidate.data && size(candidate.data['state']) <= 1048576))
+        ))
+    {{- end }}
     - name: auditBatch
       expression: >-
         object != null &&
@@ -128,6 +188,12 @@ spec:
                 candidate.metadata.name == 'kognition-knowledge-gateway-ca' &&
                 'app.kubernetes.io/managed-by' in candidate.metadata.labels &&
                 candidate.metadata.labels['app.kubernetes.io/managed-by'] == 'kognition') ||
+              {{- if .Values.k8sController.workflowExecutor.enabled }}
+              variables.workflowRecord ||
+              {{- end }}
+              {{- if $collaborationEnabled }}
+              variables.collaborationLedger ||
+              {{- end }}
               (candidate.metadata.name.startsWith('kognition-cost-') &&
                 'kognition.dev/cost-record' in candidate.metadata.labels &&
                 candidate.metadata.labels['kognition.dev/cost-record'] == 'true') ||

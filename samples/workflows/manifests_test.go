@@ -4,7 +4,9 @@
 package workflows_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -15,6 +17,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
+
+	"github.com/kognition-ai/kognition/api/v1alpha1"
+	"github.com/kognition-ai/kognition/internal/admission"
 )
 
 func TestHTTPToolWorkflowDefinesRequiredRBAC(t *testing.T) {
@@ -84,6 +89,35 @@ func TestSolutionSamplesAllowOnlyTheirWorkflowEdges(t *testing.T) {
 			}
 			requireExactLocalObjectReference(t, policy, "allowFrom", edge.from)
 			requireExactLocalObjectReference(t, policy, "allowTo", edge.to)
+		})
+	}
+}
+
+func TestCollaborationSampleWorkflowsAreAdmitted(t *testing.T) {
+	objects := loadManifestObjects(t, "collaboration.yaml")
+	validator := admission.NewWorkflowValidator(admission.WithCollaborationEnabled(true))
+	disabled := admission.NewWorkflowValidator()
+
+	for _, name := range []string{"wfdemo-team-parallel", "wfdemo-team-supervisor"} {
+		t.Run(name, func(t *testing.T) {
+			object := requireManifestObject(t, objects, "Workflow/"+name)
+			raw, err := json.Marshal(object.Object)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var strict v1alpha1.Workflow
+			decoder := json.NewDecoder(bytes.NewReader(raw))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&strict); err != nil {
+				t.Fatalf("sample does not match the Workflow schema: %v", err)
+			}
+			request := &admission.Request{Operation: admission.OperationCreate, Kind: "Workflow", Namespace: object.GetNamespace(), Name: name, Object: raw}
+			if response := validator.Validate(context.Background(), request); !response.Allowed {
+				t.Fatalf("sample rejected with collaboration enabled: %s", response.Reason)
+			}
+			if response := disabled.Validate(context.Background(), request); response.Allowed {
+				t.Fatal("sample must be rejected when collaboration is disabled")
+			}
 		})
 	}
 }

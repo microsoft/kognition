@@ -77,6 +77,7 @@ protocol test. Stop the port-forward with Ctrl+C afterward.
 ```
 samples/workflows/
 ├── _agents.yaml                # shared agents (apply first)
+├── collaboration.yaml          # collaboration (team) steps; needs the collaboration Helm flag
 ├── conditional-branching.yaml  # CEL edge conditions
 ├── parallel-dispatch.yaml      # fan-out / fan-in + maxParallelSteps
 ├── tool-sandbox.yaml           # in-cluster OpenAPI+MCP tool server (apply before tool-steps-http)
@@ -96,11 +97,17 @@ samples/workflows/
 Prepare these prerequisites explicitly; installing the platform does not create
 them or authorize sample execution.
 
+`collaboration.yaml` additionally requires
+`k8sController.workflowExecutor.collaboration.enabled=true`; admission rejects its
+workflows otherwise, so the apply-everything commands below skip it. Apply it
+separately on an installation that enables collaboration. See
+[Workflow collaboration](../../docs/workflow-collaboration.md).
+
 ## Apply everything
 
 ```powershell
 kubectl apply -f samples/workflows/_agents.yaml
-Get-ChildItem samples/workflows/*.yaml -Exclude _agents.yaml |
+Get-ChildItem samples/workflows/*.yaml -Exclude _agents.yaml, collaboration.yaml |
   ForEach-Object { kubectl apply -f $_.FullName }
 ```
 
@@ -109,7 +116,7 @@ Get-ChildItem samples/workflows/*.yaml -Exclude _agents.yaml |
 ```bash
 kubectl apply -f samples/workflows/_agents.yaml
 for manifest in samples/workflows/*.yaml; do
-  [ "$manifest" = 'samples/workflows/_agents.yaml' ] && continue
+  case "$manifest" in samples/workflows/_agents.yaml|samples/workflows/collaboration.yaml) continue ;; esac
   kubectl apply -f "$manifest" || exit 1
 done
 ```

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
@@ -48,7 +47,12 @@ const (
 	// AgentDelegationCapabilityIdentityNameContextKey binds an Agent
 	// Communication Gateway session capability to the selected identity.
 	AgentDelegationCapabilityIdentityNameContextKey = "agent-delegation.capability-identity-name"
-	DefaultAgentInvocationTimeout                   = 30 * time.Second
+	// CollaborationDispatchAnnotation marks AgentJobs (and the AgentInstances
+	// they create) that run one dispatch of a workflow collaboration. Such runs
+	// reach other members only through the collaboration protocol, never through
+	// the AgentService delegation tool.
+	CollaborationDispatchAnnotation = "kognition.dev/collaboration-dispatch"
+	DefaultAgentInvocationTimeout   = v1alpha1.DefaultAgentInvocationTimeout
 )
 
 // RuntimeDispatcher is the interface for dispatching agent instances to a runtime.
@@ -805,24 +809,7 @@ func (r *AgentInstanceReconciler) agentInvocationTimeout(ctx context.Context, in
 
 // ParseAgentInvocationTimeout accepts a positive Go duration or bare seconds.
 func ParseAgentInvocationTimeout(raw string) (time.Duration, error) {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return 0, nil
-	}
-	if timeout, err := time.ParseDuration(value); err == nil {
-		if timeout <= 0 {
-			return 0, fmt.Errorf("must be positive")
-		}
-		return timeout, nil
-	}
-	seconds, err := strconv.ParseFloat(value, 64)
-	if err != nil {
-		return 0, err
-	}
-	if seconds <= 0 {
-		return 0, fmt.Errorf("must be positive")
-	}
-	return time.Duration(seconds * float64(time.Second)), nil
+	return v1alpha1.ParseAgentInvocationTimeout(raw)
 }
 
 func parseAgentInvocationTimeout(raw string) (time.Duration, error) {

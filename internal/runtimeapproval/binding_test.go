@@ -77,6 +77,51 @@ func TestBindingCanonicalizationReplayAndRotation(t *testing.T) {
 	}
 }
 
+func TestBindingWorkflowContextIsExactAndOptional(t *testing.T) {
+	_, keys, _ := executorActionFixture(t)
+	action := bindingAction(`{"a":1}`)
+	action.WorkflowContext = &api.WorkflowActionContext{Workspace: "origin", RunUID: "run-uid", Step: "team",
+		ActivationID: "visit-1", Attempt: 1, OwnerEpoch: 1, BindingDigest: strings.Repeat("a", 64)}
+	binding, err := Bind(context.Background(), keys, action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(*api.WorkflowActionContext){
+		"workspace":  func(context *api.WorkflowActionContext) { context.Workspace = "foreign" },
+		"run":        func(context *api.WorkflowActionContext) { context.RunUID = "other-run" },
+		"step":       func(context *api.WorkflowActionContext) { context.Step = "other-step" },
+		"activation": func(context *api.WorkflowActionContext) { context.ActivationID = "visit-2" },
+		"attempt":    func(context *api.WorkflowActionContext) { context.Attempt++ },
+		"epoch":      func(context *api.WorkflowActionContext) { context.OwnerEpoch++ },
+		"binding":    func(context *api.WorkflowActionContext) { context.BindingDigest = strings.Repeat("b", 64) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := action
+			changed.WorkflowContext = cloneWorkflowActionContext(action.WorkflowContext)
+			change(changed.WorkflowContext)
+			if err := Verify(context.Background(), keys, changed, binding); err == nil {
+				t.Fatalf("changed Workflow %s retained execution binding", name)
+			}
+		})
+	}
+	stripped := action
+	stripped.WorkflowContext = nil
+	if err := Verify(context.Background(), keys, stripped, binding); err == nil {
+		t.Fatal("removing collaboration context retained action authority")
+	}
+	for _, invalid := range []api.WorkflowActionContext{
+		{Workspace: "origin", RunUID: "run-uid", Step: "team", ActivationID: "visit-1", Attempt: 1, OwnerEpoch: 0, BindingDigest: strings.Repeat("a", 64)},
+		{Workspace: "*", RunUID: "run-uid", Step: "team", ActivationID: "visit-1", Attempt: 1, OwnerEpoch: 1, BindingDigest: strings.Repeat("a", 64)},
+		{Workspace: "origin", RunUID: "run-uid", Step: "team", ActivationID: "visit-1", Attempt: 1, OwnerEpoch: 1, BindingDigest: "*"},
+	} {
+		changed := action
+		changed.WorkflowContext = &invalid
+		if _, err := Bind(context.Background(), keys, changed); err == nil {
+			t.Fatal("invalid Workflow context received an action binding")
+		}
+	}
+}
+
 func TestBindingKeyBoundaryRejectsMissingStaleRetiredAndInvalidMetadata(t *testing.T) {
 	active, err := NewStaticBindingKeyStore([]BindingKey{{Version: 2, Algorithm: BindingAlgorithmV1, Domain: BindingDomainV1, Status: BindingKeyActive, Material: []byte("abcdef0123456789abcdef0123456789")}})
 	if err != nil {

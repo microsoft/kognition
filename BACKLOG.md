@@ -142,6 +142,7 @@ All identifiers follow the schema defined in PROJECT.md Section 0.5.
 | EPIC-0021 | Evaluation Pipelines | Post-MVP | US-0085 | EPIC-0012, EPIC-0013, EPIC-0014, EPIC-0017 | Done |
 | EPIC-0022 | Demo Trustworthiness Hardening | MVP-3, MVP-4, MVP-7 | US-0088..US-0090 | EPIC-0008, EPIC-0009, EPIC-0014, EPIC-0018 | In progress |
 | EPIC-0023 | Kognition Studio Authoring Completion | MVP-1, MVP-3, MVP-4, MVP-7 | US-0092..US-0099 | Existing API slices of EPIC-0001, EPIC-0004, EPIC-0005, EPIC-0006, EPIC-0008, EPIC-0009, EPIC-0013, EPIC-0018, EPIC-0021 | In progress: authoring and core tutorial locally verified; installed/protected-action and pilot qualification open |
+| EPIC-0024 | External A2A Agents (ExternalAgent) | MVP-3, MVP-4 (security support) | US-0100..US-0113 | EPIC-0003, EPIC-0004, EPIC-0006, EPIC-0008, EPIC-0009, EPIC-0019, EPIC-0023 | Planned: v1 (US-0100..US-0106) approved; later evolution (US-0107..US-0113) designed, not approved |
 
 ---
 
@@ -171,6 +172,7 @@ graph TD
     E20[EPIC-0020<br>Memory Recall Quality]
     E21[EPIC-0021<br>Evaluation Pipelines]
     E22[EPIC-0022<br>Trustworthiness Hardening]
+    E24[EPIC-0024<br>External A2A Agents]
 
     E01 --> E02
     E01 --> E04
@@ -213,6 +215,11 @@ graph TD
     E10 --> E22
     E14 --> E22
     E18 --> E22
+
+    E19 --> E24
+    E08 --> E24
+    E09 --> E24
+    E06 --> E24
 
     E01 -.-> E15
     E02 -.-> E15
@@ -3233,6 +3240,301 @@ are follow-on work.
 
 ---
 
+### EPIC-0024 - External A2A Agents (ExternalAgent) - PLANNED
+
+> **Goal:** Let a Workflow collaboration member or step call an agent that Kognition does not run, through an explicit, governed trust boundary, and grow that boundary into a complete recommended interop capability.
+> **Design:** [ExternalAgent plan](docs/development-plans/features/external-agent/plan.md) and [ADR-0030](docs/adr/0030-external-agent-outbound-a2a.md) (Proposed). Requirements: FR-0617..FR-0623 in [PROJECT.md](PROJECT.md).
+> **Builds on:** [workflow collaboration](docs/workflow-collaboration.md), [ADR-0029](docs/adr/0029-workflow-execution-boundaries.md), the Studio catalog (EPIC-0023) and the existing `SecretRef`, grant and quota mechanisms.
+> **Scope approved:** v1 only (US-0100..US-0106), 2026-11-18: static endpoint, pinned Agent Card digest, bearer-token credential through `SecretRef`, operator egress allow-list. US-0107..US-0113 record the intended later evolution and are **not approved for implementation**; each needs its own approval and security review.
+> **Direction:** outbound only. Inbound federation (exposing Kognition Agents over A2A) remains FR-0616 and is aligned in US-0113. MCP stays a `Tool`; `ExternalAgent.spec.protocol` accepts `A2A` only until US-0113.
+
+**Release map**
+
+| Release | Stories | Capability |
+|---|---|---|
+| v1 | US-0100..US-0106 | Resource, credential, governance, A2A client transport, workflow integration, Studio/docs, acceptance |
+| v1.1 | US-0107 | mTLS with custom CA and workload-identity-derived credentials |
+| v1.2 | US-0108 | OAuth 2.0 client credentials, token exchange and rotation |
+| v1.3 | US-0109 | Agent Card refresh, signature verification and drift policy |
+| v1.4 | US-0110 | Probes, metrics, cost/quota attribution and Trust Explorer |
+| v2 | US-0111..US-0113 | Data classification, long-running/streaming/resilience, further protocols and conformance |
+
+**Final-state definition of done (all releases):** an operator can register a remote
+A2A agent with strong mutual authentication or an exchanged short-lived credential,
+see its verified identity, capability set and health, restrict who may use it and
+what data may be sent, run it in any collaboration strategy or step with bounded
+cost and time, resume or cancel it correctly after a restart, and audit every call
+by ExternalAgent, card digest and remote task ID. No secret is visible to workflow
+authors or persisted outside the Secret store.
+
+**Dependencies between stories:** US-0100 first; US-0101 and US-0102 can proceed
+after US-0100; US-0103 needs US-0101 and US-0102; US-0104 needs US-0103; US-0105
+needs US-0104; US-0106 closes v1. US-0107..US-0113 need US-0106 acceptance.
+Recommended order: US-0109 before wide unattended partner use, then US-0107,
+US-0108, US-0110, US-0111, US-0112, US-0113.
+
+**Use-case coverage:** UC-1..UC-8 in the plan map to stories as follows: UC-1..UC-4
+US-0103/US-0104/US-0106; UC-5 US-0104; UC-6 US-0102; UC-7 US-0102/US-0110; UC-8
+US-0109/US-0108.
+
+#### US-0100 - ExternalAgent Resource, Card Pin and Endpoint Admission - PLANNED
+
+> As **Patricia**, I want to register a remote A2A agent as an `ExternalAgent` with a static endpoint and a pinned Agent Card digest, so that I know exactly which remote service Kognition may call and what card it was approved against.
+
+**Traces:** FR-0617, FR-0004, FR-0008 | MVP-3 (security support; not an MVP gate)
+
+| ID | Task | US |
+|---|---|---|
+| T-0395 | Add the namespaced `ExternalAgent` type to [api/v1alpha1](api/v1alpha1/): required `protocol` (`A2A`), `endpoint`, `card.digest`, optional `card.skills`, `credentialRef`, `limits` with platform defaults and ceilings, `status.observedCardDigest` and conditions. Register the kind, regenerate the CRD, schema, deepcopy and the Helm chart CRD, and update the kind inventory and Studio catalog test expectations. Traces: FR-0617. | US-0100 |
+| T-0396 | Implement the canonical Agent Card digest (RFC 8785 JSON canonicalisation, SHA-256) and the endpoint classifier in a new internal package: DNS-name-plus-port only; reject IP literals, userinfo, paths, schemes, loopback, link-local, cluster-internal and metadata ranges; provide the connect-time resolved-address check. Traces: FR-0617, FR-0618. | US-0100 |
+| T-0397 | Add the `ExternalAgent` validator and immutability rules to the admission webhook for both modes: required fields, limit ceilings, `protocol` enum, `endpoint` rules, `credentialRef` existence, and `protocol`/`endpoint`/`card.digest` immutability while referenced by a running collaboration. Add the reconciler that sets `CardPinned`, `Reachable` and `Ready` conditions; a failed probe affects readiness only. Traces: FR-0617, FR-0004. | US-0100 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0345 | **Pending:** Schema, defaults and canonical digest: round-trip an `ExternalAgent`, verify limit defaults/ceilings, reject missing or unknown `protocol`, and prove the digest is stable across field order and whitespace and changes with any card field. | FR-0617 |
+| TC-0346 | **Pending:** Endpoint safety: admission rejects IP literals, userinfo, paths, schemes and names resolving to loopback, link-local, private-cluster or metadata addresses. The transport re-checks the resolved address at connect time and refuses a name that rebinds after admission and any redirect. | FR-0617, FR-0618, MVP-3 |
+| TC-0347 | **Pending:** Immutability and status: `protocol`, `endpoint` and `card.digest` cannot change while referenced by a running collaboration; a card mismatch sets `CardPinned=False` without deleting the resource; a failed probe sets `Reachable=False` and leaves reconciliation intact. | FR-0617, FR-0004 |
+
+#### US-0101 - Bearer Credential Through SecretRef - PLANNED
+
+> As **Gabriela**, I want the remote credential held only in a Secret and read only by the call path, so that workflow authors, Studio, logs and ledgers never see it.
+
+**Traces:** FR-0201, FR-0617, FR-0618 | MVP-3
+
+| ID | Task | US |
+|---|---|---|
+| T-0398 | Resolve `credentialRef` through the existing `SecretRef` path inside the transport only, at call time, and attach it as a bearer token to the pinned endpoint's connection. Never copy it into status, events, ledger, handles, logs, traces, errors or metrics; redact it in any error that wraps a transport failure. Traces: FR-0201, FR-0618. | US-0101 |
+| T-0399 | Refuse to send the credential to any host other than the pinned endpoint: no redirects, no card-supplied URLs and no endpoint substitution. Add a secret-scanning assertion helper used by the transport, admission and Studio tests. Traces: FR-0618. | US-0101 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0348 | **Pending:** Run a full call with a sentinel token and assert it appears in no status, event, ledger or handle ConfigMap, log, trace attribute, metric label, error string, Studio response or exported manifest. A redirect or card URL pointing elsewhere receives no token. | FR-0201, FR-0618, MVP-3 |
+
+#### US-0102 - Grant, Egress Allow-List, Data Limits and Audit - PLANNED
+
+> As **Gabriela**, I want explicit authorisation, an operator allow-list and an audit trail for every outbound call, so that no workflow reaches a remote agent or releases data without a recorded decision.
+
+**Traces:** FR-0618, FR-0008, FR-0405, FR-0702, FR-0311 | MVP-3, MVP-4, MVP-7
+
+| ID | Task | US |
+|---|---|---|
+| T-0400 | Resolve OD-1 and add the grant: an `ExternalAgentGrant` kind (or equivalent `invoke` verb) modelled on `ToolGrant`, enforced at admission for the reference and re-checked at runtime before every send. Cross-namespace use also requires a `CrossNamespaceGrant`. Revocation stops later sends and cancels in-flight tasks. Traces: FR-0618, FR-0008, FR-0405. | US-0102 |
+| T-0401 | Resolve OD-2 and add the operator egress allow-list: a Helm value rendered to a controller-read ConfigMap plus a `NetworkPolicy` that limits controller egress to the listed hosts. Admission rejects an `ExternalAgent` whose endpoint is not on the list and sets `EgressAllowed`. Add the Helm flag that enables the feature (default off). Traces: FR-0618. | US-0102 |
+| T-0402 | Add chart RBAC: the controller may read only the Secrets referenced by admitted `ExternalAgent` resources, with admission or a scoped Role preventing broader reads. Update the chart package, notices and sample hardening expectations. Traces: FR-0618, FR-0201. | US-0102 |
+| T-0403 | Send only the member or step's declared input, enforce `maxRequestBytes`, and write an audit entry before send containing ExternalAgent, namespace, card digest, member and run, with the remote task ID added on receipt. Treat persistence failure as blocking, matching the write-before-effect rule. Traces: FR-0618, FR-0702, FR-0311. | US-0102 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0349 | **Pending:** Without a grant, admission rejects `externalAgentRef`; with a grant for one workflow identity, another namespace's workflow remains rejected. No implicit access exists. | FR-0618, FR-0405, MVP-7 |
+| TC-0350 | **Pending:** Cross-namespace reference needs a `CrossNamespaceGrant`. Revoking the grant mid-run blocks the next send, cancels the in-flight remote task and fails the member with a distinct reason. | FR-0618, FR-0008, MVP-3 |
+| TC-0351 | **Pending:** Only the declared input is sent; a payload over `maxRequestBytes` fails before any network call; prior outputs and unrelated workflow data never appear in the captured request. | FR-0618, MVP-3 |
+| TC-0352 | **Pending:** The rendered chart grants Secret read only for referenced names, and an attempt to read another Secret fails. With the flag off, no ExternalAgent RBAC or policy is rendered. | FR-0618, FR-0201, MVP-3 |
+| TC-0353 | **Pending:** An endpoint outside the allow-list is rejected at admission, `EgressAllowed` is false, and the rendered NetworkPolicy matches the list. In the AKS fixture, egress to an unlisted host is blocked. | FR-0618, MVP-3 |
+| TC-0354 | **Pending:** Every send produces an audit entry before the network call and a completed entry with the remote task ID; a failed audit write blocks the send. The entries contain no payload or secret. | FR-0618, FR-0702, FR-0311, MVP-4 |
+
+#### US-0103 - Client-Only A2A Wire Transport - PLANNED
+
+> As **Diego**, I want an ExternalAgent member to behave like a local member for restart, cancel, timeout and token limits, so that collaboration stays predictable when a member is remote.
+
+**Traces:** FR-0619, FR-0456, FR-0700, FR-0311 | MVP-3, MVP-4
+
+| ID | Task | US |
+|---|---|---|
+| T-0404 | Implement the remote mode of the `driver.Transport` in [a2atransport](internal/collaboration/a2atransport/) with the a2a-go client (gRPC, `a2a-version: 1.0`, TLS required): fetch and verify the card against the pin, `SendMessage`, bounded `GetTask` polling and terminal-state mapping. No server or listener. Traces: FR-0619. | US-0103 |
+| T-0405 | Persist the remote task ID in the ledger's `-handles` ConfigMap before the first observation; resume `GetTask` after a restart; mark an ambiguous send `Unknown` and never resend it. Add the ledger member `kind` discriminator and make older controllers reject unknown kinds. Traces: FR-0619. | US-0103 |
+| T-0406 | Enforce `taskTimeout`, `maxResponseBytes` and `maxConcurrentTasks` locally; map cancel and timeout to the remote cancel call (best effort, result recorded); fail the member on `input-required`, `auth-required`, non-text or malformed replies with `InvalidPayload`. Traces: FR-0619. | US-0103 |
+| T-0407 | Implement usage accounting: reserve the allowance before send, charge `kognition.dev/usage` when present capped at the allowance, otherwise the whole allowance; settle through the existing quota path. Traces: FR-0619, FR-0456. | US-0103 |
+| T-0408 | Mark the remote reply as untrusted data throughout: it is only message content for the next local member or the final result, never a tool call, grant, instruction to the platform or template input without the existing escaping. Add OpenTelemetry spans and metrics with the ExternalAgent as an attribute and no payload. Traces: FR-0619, FR-0700. | US-0103 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0355 | **Pending:** Using the a2a-go bufconn fixture, a card whose digest differs from the pin fails closed before any message is sent. A matching card proceeds. | FR-0617, FR-0619, MVP-3 |
+| TC-0356 | **Pending:** Timeout, oversized response, oversized request and concurrency-cap cases each fail with the documented reason, call remote cancel where applicable and release the reservation. | FR-0619, MVP-3 |
+| TC-0357 | **Pending:** Kill the controller after the task ID is persisted and verify resume without a second `SendMessage`; kill it before the ID is persisted and verify the member is `Unknown` and not resent. A completed turn is never repeated. | FR-0619, MVP-3 |
+| TC-0358 | **Pending:** A hostile reply containing instructions, tool-call-shaped JSON, template syntax and oversized or non-text parts is treated as data, fails or is escaped as specified, and cannot change permissions, limits or the next member's tools. | FR-0619, MVP-3 |
+| TC-0359 | **Pending:** Usage cases: reported within allowance, reported above allowance (capped), absent (full allowance) and negative or malformed. Settlement matches the rule and the quota projection stays consistent after restart. | FR-0619, FR-0456, MVP-3 |
+| TC-0360 | **Pending:** Cancelling or deleting the WorkflowRun cancels the remote task, records the outcome and leaves no task handle in a runnable state. A cancel that fails remotely is recorded and not retried indefinitely. | FR-0619, MVP-3 |
+
+#### US-0104 - ExternalAgent Members and Steps in Workflows - PLANNED
+
+> As **Diego**, I want to name an ExternalAgent as a collaboration member or as a step target, so that remote agents can take part in any strategy without learning a new workflow model.
+
+**Traces:** FR-0620, FR-0103, FR-0104 | MVP-1
+
+| ID | Task | US |
+|---|---|---|
+| T-0409 | Add `externalAgentRef` to the collaboration member and to `WorkflowStep` in the API types, mutually exclusive with `agentRef` and, for steps, with `toolRef`. Update the distinct-member rule to count distinct Agent or ExternalAgent, and keep all strategy rules unchanged. Resolve OD-5: Kubernetes only, with a clear standalone-mode rejection. Traces: FR-0620. | US-0104 |
+| T-0410 | Extend the [workflow collaboration validator](internal/admission/workflow_collaboration_validator.go) and the step validator: reference existence, grant, allow-list, feature flag off, and cross-namespace rules. Traces: FR-0620, FR-0618. | US-0104 |
+| T-0411 | Route members and steps to the remote transport in the [collaboration controller](internal/controller/workflow_collaboration.go) and the step executor, keeping `Agent` members on the AgentJob transport. Include external members in turn, message, delegation and token accounting, and in the final outcome. Traces: FR-0620, FR-0103. | US-0104 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0361 | **Pending:** Admission matrix: both refs set, neither set, duplicate ExternalAgent members, mixed Agent and ExternalAgent distinct rule, flag off, standalone mode, missing grant and missing resource. Each fails with a specific message. | FR-0620, FR-0618, MVP-1 |
+| TC-0362 | **Pending:** An ordinary step with `externalAgentRef` runs through the bufconn fixture, returns its result to the next step and honours timeout, retry exclusion and cancel. | FR-0620, FR-0103, MVP-1 |
+| TC-0363 | **Pending:** Strategy matrix: Supervisor, Parallel, Handoff and Peer each pass with one external member and with a mixed team, covering delegation counts, handoff ownership, peer finalizer completion and token limits. | FR-0620, FR-0104, MVP-1 |
+
+#### US-0105 - Studio, kognitionctl, Documentation and Sample - PLANNED
+
+> As **Diego**, I want to create and reference an ExternalAgent from Studio and learn it from the documentation, so that interop does not require hand-written YAML.
+
+**Traces:** FR-0623, FR-0001 | MVP-1
+
+| ID | Task | US |
+|---|---|---|
+| T-0412 | Add an ExternalAgent builder to the [Studio client](cmd/kognitionctl/cmd/studio_assets/app.js) and catalog, with typed fields, card digest entry, grant and allow-list hints, no secret values, and an ExternalAgent picker in the Team step and ordinary step forms. Show the Problems-panel messages for the admission rules. Traces: FR-0623, FR-0001. | US-0105 |
+| T-0413 | Add `kognitionctl`/`kubectl-kognition` kind mappings, print columns (endpoint, digest prefix, conditions) and a card-digest helper command that fetches a card and prints its canonical digest for review. Traces: FR-0623. | US-0105 |
+| T-0414 | Write the user guide (extend [workflow collaboration](docs/workflow-collaboration.md) and add an ExternalAgent guide), update the Helm and security guides, and add a runnable sample with a local A2A test endpoint plus its manifest-admission test in [samples/workflows](samples/workflows/). Traces: FR-0623. | US-0105 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0364 | **Pending:** Studio browser tests: create and reload an ExternalAgent, pick it in a collaboration member and a step, see Problems-panel errors, and confirm no secret value is rendered, stored or exported. | FR-0623, FR-0001, MVP-1 |
+| TC-0365 | **Pending:** The sample and documentation snippets are admitted by the real validator, and the digest helper output matches the canonical digest used by admission. | FR-0623, MVP-1 |
+
+#### US-0106 - v1 Acceptance and Interop Qualification - PLANNED
+
+> As **Sam**, I want the v1 feature proven end to end on a real cluster against a real A2A endpoint, so that I can operate it with known limits and failure modes.
+
+**Traces:** FR-0617, FR-0618, FR-0619, FR-0620, FR-0623 | MVP-3
+
+| ID | Task | US |
+|---|---|---|
+| T-0415 | Add the full security and strategy regression suite to the race run and chart tests, and a release-gate checklist in the plan. Add chart tests for flag off/on. Traces: FR-0617..FR-0620. | US-0106 |
+| T-0416 | Deploy a second a2a-go test service in a separate namespace of the approved AKS cluster, register it as an ExternalAgent with allow-list, grant and bearer Secret, and run all four strategies plus a step against it, including a restart and a cancel. Record the evidence and clean up. Traces: FR-0617..FR-0620. | US-0106 |
+| T-0417 | Run a fresh install in a new namespace with the flag on and off, then run one third-party A2A endpoint check if the owner supplies one. Record operational limits, failure modes and runbook notes, and update the traceability totals. Traces: FR-0617..FR-0623. | US-0106 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0366 | **Pending:** Chart flag off renders no ExternalAgent RBAC, CRD enablement or NetworkPolicy changes and admission rejects every reference; flag on renders them as specified. | FR-0617, FR-0618, MVP-3 |
+| TC-0367 | **Pending:** Live interop on AKS: all four strategies and a single step reach the second service, survive a controller restart, cancel and time out correctly, and respect grant revocation and the allow-list. Evidence and cleanup recorded. | FR-0617..FR-0620, MVP-3 |
+| TC-0368 | **Pending:** Fresh-install check with the feature on and off in a new namespace; existing collaboration with local Agents behaves unchanged. | FR-0617, FR-0620, MVP-1 |
+
+#### US-0107 - mTLS and Workload-Identity-Derived Credentials - NOT APPROVED
+
+> As **Patricia**, I want mutual TLS and platform-derived credentials for a remote agent, so that both sides authenticate each other and no long-lived bearer token is needed.
+
+**Traces:** FR-0621, FR-0401 | MVP-3
+
+| ID | Task | US |
+|---|---|---|
+| T-0418 | Add `tls` to `ExternalAgent`: custom CA bundle reference, server name, client certificate `SecretRef`, minimum TLS version; admission rules and status condition for certificate expiry. Traces: FR-0621. | US-0107 |
+| T-0419 | Implement mTLS in the transport and certificate reload without restart; reuse the platform's SPIFFE/workload-identity issuer where the remote accepts it (ADR-0018) and record the verified peer identity in audit. Traces: FR-0621, FR-0401. | US-0107 |
+| T-0420 | Add an ADR for the authentication contract, chart wiring and documentation. Traces: FR-0621. | US-0107 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0369 | **Not scheduled:** Handshake succeeds with the configured CA and client certificate, fails for an untrusted CA, wrong server name, expired certificate and revoked certificate, and reloads a rotated certificate without dropping an in-flight task. | FR-0621, MVP-3 |
+| TC-0370 | **Not scheduled:** A workload-identity credential is derived per call, never persisted, and the audit entry records the verified peer identity. | FR-0621, FR-0401, MVP-3 |
+
+#### US-0108 - OAuth 2.0 Client Credentials, Token Exchange and Rotation - NOT APPROVED
+
+> As **Patricia**, I want short-lived tokens obtained from the partner's identity provider and rotated without disruption, so that credential theft has a small blast radius.
+
+**Traces:** FR-0621, FR-0201 | MVP-3
+
+| ID | Task | US |
+|---|---|---|
+| T-0421 | Add an `auth` union (`bearer`, `oauth2ClientCredentials`, `tokenExchange`) with endpoint, scope and audience fields, allow-listed token endpoints and SSRF rules equal to the main endpoint. Traces: FR-0621. | US-0108 |
+| T-0422 | Implement token acquisition, in-memory caching bounded by expiry, single-flight refresh and exchange of the workload token; never persist tokens. Traces: FR-0621, FR-0201. | US-0108 |
+| T-0423 | Support credential rotation: dual-valid `SecretRef` versions, rotation condition and metrics, and no in-flight task failure on rotation. Traces: FR-0621. | US-0108 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0371 | **Not scheduled:** Token acquired, cached, refreshed before expiry under concurrency with a single upstream request, and discarded on failure; token endpoint outside the allow-list is rejected. | FR-0621, MVP-3 |
+| TC-0372 | **Not scheduled:** Token exchange scopes audience and scope to the ExternalAgent; a token for another audience is rejected by the fixture. | FR-0621, MVP-3 |
+| TC-0373 | **Not scheduled:** Rotating the secret during active tasks causes no failures and later calls use the new credential; the old one is never reused after the overlap window. | FR-0621, FR-0201, MVP-3 |
+
+#### US-0109 - Agent Card Refresh, Signature Verification and Drift Policy - NOT APPROVED
+
+> As **Gabriela**, I want card changes detected and reviewed under a policy, so that a partner cannot silently change what a remote agent claims to do.
+
+**Traces:** FR-0622, FR-0305 | MVP-3
+
+| ID | Task | US |
+|---|---|---|
+| T-0424 | Add scheduled card refresh with backoff and a `cardPolicy` (`Pin`, `AcceptCompatible`, `RequireApproval`); store the observed digest and a bounded history in status. Traces: FR-0622. | US-0109 |
+| T-0425 | Verify Agent Card signatures where present, with an operator-pinned trust configuration modelled on ADR-0017; reject invalid signatures. Traces: FR-0622, FR-0305. | US-0109 |
+| T-0426 | Detect skill-set and security-scheme changes, hold the ExternalAgent in `CardReviewRequired` until approved through an authenticated decision path, and block new sends meanwhile without cancelling in-flight tasks. Traces: FR-0622. | US-0109 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0374 | **Not scheduled:** A changed card under `Pin` blocks sends; under `AcceptCompatible` a compatible change updates the observed digest and an incompatible one blocks; history stays bounded. | FR-0622, MVP-3 |
+| TC-0375 | **Not scheduled:** Valid, invalid, missing and rotated-key signatures behave per the trust configuration. | FR-0622, FR-0305, MVP-3 |
+| TC-0376 | **Not scheduled:** An added skill or changed security scheme requires an authenticated approval; unapproved changes never reach production calls. | FR-0622, MVP-3 |
+
+#### US-0110 - Operations: Probes, Metrics, Cost, Quota and Trust Explorer - NOT APPROVED
+
+> As **Sam**, I want visibility into the health, cost and use of each remote agent, so that I can operate and budget for it.
+
+**Traces:** FR-0623, FR-0453, FR-0701, FR-0702 | MVP-4
+
+| ID | Task | US |
+|---|---|---|
+| T-0427 | Add periodic reachability and card probes with conditions, backoff and per-ExternalAgent metrics (latency, errors, tasks, bytes, charged tokens). Traces: FR-0623. | US-0110 |
+| T-0428 | Attribute cost and quota to the ExternalAgent, workspace and workflow; add an optional per-ExternalAgent `CognitiveQuota` dimension and reporting of charged versus reported usage. Traces: FR-0453, FR-0701. | US-0110 |
+| T-0429 | Surface external calls in the Trust Decision query API and Trust Explorer (ADR-0011) and add dashboards and alerts. Traces: FR-0702, FR-0623. | US-0110 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0377 | **Not scheduled:** Probe outcomes drive conditions and metrics; an unreachable remote does not stall reconciliation. | FR-0623, MVP-4 |
+| TC-0378 | **Not scheduled:** Cost and quota attribution match expected charges for reported, absent and capped usage, and a quota denial blocks the send. | FR-0453, FR-0701, MVP-4 |
+| TC-0379 | **Not scheduled:** Allow, deny, failure and cancel decisions appear in the query API and explorer with redacted content. | FR-0702, MVP-4 |
+
+#### US-0111 - Data Classification and Release Policy - NOT APPROVED
+
+> As **Gabriela**, I want data classes and a release policy for outbound calls, so that restricted data can never reach a remote agent not approved for it.
+
+**Traces:** FR-0618, FR-0450, FR-0451 | MVP-3
+
+| ID | Task | US |
+|---|---|---|
+| T-0430 | Define a minimal classification taxonomy and `ExternalAgent.spec.data.allowedClasses`, with an ADR covering how classes attach to Workflow inputs, Memory, Knowledge and step outputs. Traces: FR-0618, FR-0450. | US-0111 |
+| T-0431 | Propagate classes through collaboration lineage (ADR-0029) and block a send when any contributing source exceeds the allowed classes; make the decision auditable. Traces: FR-0618, FR-0451. | US-0111 |
+| T-0432 | Add `CognitiveAdmissionPolicy` hooks and Studio controls for the policy. Traces: FR-0451, FR-0623. | US-0111 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0380 | **Not scheduled:** Admission rejects a workflow that binds a restricted input to a member not allowed to receive it; the runtime gate blocks a lineage that gains a restricted source after admission. | FR-0618, FR-0451, MVP-3 |
+| TC-0381 | **Not scheduled:** Class changes on a source take effect for later sends; audit shows the decision. | FR-0618, MVP-3 |
+
+#### US-0112 - Long-Running Tasks, Streaming and Resilience - NOT APPROVED
+
+> As **Sam**, I want long tasks, streaming updates and sensible failure handling, so that slow or flaky partners do not stall or duplicate work.
+
+**Traces:** FR-0619, FR-0500 | MVP-2
+
+| ID | Task | US |
+|---|---|---|
+| T-0433 | Support task subscription or push notification where the remote advertises it, with the same limits, handle persistence and cancel rules as polling. Traces: FR-0619. | US-0112 |
+| T-0434 | Add a per-ExternalAgent circuit breaker and exponential backoff; retries only for operations proven not to have created a task. Traces: FR-0619, FR-0500. | US-0112 |
+| T-0435 | Support multiple endpoints with failover that never duplicates a task, and document the semantics. Traces: FR-0619. | US-0112 |
+| T-0436 | Extend the step timeout contract to tasks longer than 24 hours behind an explicit opt-in and approval. Traces: FR-0619. | US-0112 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0382 | **Not scheduled:** Streaming and push updates yield the same final result as polling, survive reconnects and enforce byte and time limits. | FR-0619, MVP-2 |
+| TC-0383 | **Not scheduled:** The breaker opens after the configured failures, recovers, and never retries an ambiguous send. | FR-0619, FR-0500, MVP-2 |
+| TC-0384 | **Not scheduled:** Failover between endpoints never creates two tasks for one turn and records which endpoint ran it. | FR-0619, MVP-2 |
+
+#### US-0113 - Additional Protocols, Inbound Alignment and Conformance - NOT APPROVED
+
+> As **Patricia**, I want a conformance suite and a clear path to other protocols and inbound A2A, so that interop claims can be tested and extended.
+
+**Traces:** FR-0616, FR-0617, FR-0613 | MVP-5
+
+| ID | Task | US |
+|---|---|---|
+| T-0437 | Build an A2A conformance suite for the outbound client (versions, task states, errors, size limits) usable against third-party agents. Traces: FR-0617, FR-0613. | US-0113 |
+| T-0438 | Define the extension mechanism for a second `protocol` value (ADR) without changing the Workflow API, and decide whether protocol-specific fields move into typed sub-blocks. Traces: FR-0617. | US-0113 |
+| T-0439 | Align outbound and inbound A2A (FR-0616): shared card model, version negotiation and an end-to-end Kognition-to-Kognition interop test across two clusters. Traces: FR-0616, FR-0617. | US-0113 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0385 | **Not scheduled:** The conformance suite passes against the bufconn fixture and the reference A2A SDK server, and reports unsupported versions explicitly. | FR-0617, FR-0613, MVP-5 |
+| TC-0386 | **Not scheduled:** A second protocol value can be added with no change to the Workflow API and no regression of the A2A path. | FR-0617, MVP-5 |
+| TC-0387 | **Not scheduled:** Two clusters interoperate in both directions with the same card model. | FR-0616, MVP-5 |
+
+---
+
 ## 4.2 Verified Remaining Implementation Work
 
 > **Status reconciled:** Current source and approved disposable installed runtime acceptance, recorded in the linked backlog review. Historical receipts retain their original profile and date. Isolated evaluators and test-only helpers do not count as production completion.
@@ -3405,6 +3707,7 @@ write-before-effect evidence within its supported scope.
 | FR-0320..FR-0323 | Model Provider (ModelClass) | US-0063..US-0064 |
 | FR-0610..FR-0613 | CPI & Integration | US-0065..US-0066 |
 | FR-0308, FR-0311, FR-0403..FR-0404, FR-0700, FR-0702 | Demo Trust Evidence | US-0088..US-0090 |
+| FR-0617..FR-0623 | ExternalAgent (outbound A2A) | US-0100..US-0113 |
 
 The cross-cutting reference-documentation story US-0091 traces NFR-0001,
 NFR-0004, NFR-0007, NFR-0008, NFR-0010, NFR-0012, NFR-0013, MVP-3, and MVP-4.
@@ -3419,10 +3722,10 @@ criteria.
 
 | Artifact | Count |
 |---|---|
-| Epics | 23 |
-| User Stories | 99 |
-| Tasks (distinct IDs) | 394 across 398 definition rows; historical ID collisions remain |
-| Test Cases (distinct IDs) | 332 across 342 definition rows; historical ID collisions remain |
+| Epics | 24 |
+| User Stories | 113 |
+| Tasks (distinct IDs) | 439 across 443 definition rows; historical ID collisions remain |
+| Test Cases (distinct IDs) | 375 across 385 definition rows; historical ID collisions remain |
 | MVP FRs covered | 97 |
 | NFRs covered | 13 |
 | DIFFs covered | 4 |

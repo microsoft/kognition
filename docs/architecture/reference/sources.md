@@ -49,12 +49,12 @@ verification of every external page or every source-linked incident.
 | S21 | OWASP, [LLM06:2025 Excessive Agency](https://genai.owasp.org/llmrisk/llm062025-excessive-agency/) | Minimize functionality, privileges, and autonomy; user-scoped downstream authorization; human approval for high-impact effects; malicious tool/peer risks. | 2025 edition. Logging and rate limiting limit damage but do not replace preventive controls. |
 | S22 | SLSA, [Build: Provenance](https://slsa.dev/spec/v1.2/build-provenance) | Artifact subjects, builder identity, build definitions, parameters, and dependencies. | Version 1.2; provenance predicate v1. Software origin/integrity evidence does not establish runtime safety or answer correctness. |
 | S23 | SLSA, [Build: Verifying artifacts](https://slsa.dev/spec/v1.2/verifying-artifacts) | Verify signature, subject digest, predicate, trusted builder, and expected source/build parameters. | Version 1.2. Verifier-owned trust roots are required; a declared level is insufficient. |
-| S24 | OWASP Gen AI Security Project, Agentic Security Initiative, [OWASP Top 10 for Agentic Applications 2026](../ext_sources/OWASP-Top-10-for-Agentic-Applications-2026-12.6-1.pdf) | Verified ASI01 through ASI10 descriptions and mitigations: goal hijack, tool misuse, identity abuse, dynamic supply chain, unexpected code execution, memory poisoning, peer communication, cascading failures, human trust exploitation, and rogue agents. | Cover identifies Version 2026, December 2025. Full local publication reviewed; risk sections are printed pp. 9-38. Guidance is not a compliance standard or proof that any control eliminates the risk. |
+| S24 | OWASP Gen AI Security Project, Agentic Security Initiative, [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) | Verified ASI01 through ASI10 descriptions and mitigations: goal hijack, tool misuse, identity abuse, dynamic supply chain, unexpected code execution, memory poisoning, peer communication, cascading failures, human trust exploitation, and rogue agents. | The reviewed copy is Version 2026, December 2025; risk sections are printed pp. 9-38. Guidance is not a compliance standard or proof that any control eliminates the risk. |
 
 ## Supplied OWASP publication verification
 
-The user supplied the PDF linked in S24, resolving the earlier download
-limitation. It contains 57 PDF pages; the cover is unnumbered, so **printed page
+The review used a supplied PDF, not a copy tracked in this repository. S24 links
+to the publisher's page. The reviewed copy contains 57 PDF pages; the cover is unnumbered, so **printed page
 N is PDF page N + 1**. The [OWASP coverage map](owasp-coverage.md) cites individual
 risk sections and connects them to this reference's controls and acceptance cases.
 

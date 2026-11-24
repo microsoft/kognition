@@ -26,24 +26,28 @@ type RuntimeApprovalTombstone struct {
 	Spec              RuntimeApprovalTombstoneSpec `json:"spec"`
 }
 
-// +kubebuilder:validation:XValidation:rule="self.agentRef.kind == 'Agent' && self.agentRef.scope == 'Namespaced' && self.agentRef.__namespace__ == self.workspace",message="agentRef must identify an Agent namespaced to the RuntimeApprovalTombstone workspace"
+// +kubebuilder:validation:XValidation:rule="has(self.actorKind) ? (has(self.executorAction) && !has(self.agentRef)) : (has(self.agentRef) && self.agentRef.kind == 'Agent' && self.agentRef.scope == 'Namespaced' && self.agentRef.__namespace__ == self.workspace)",message="replay fence must preserve its actual Agent or executor actor"
 // +kubebuilder:validation:XValidation:rule="self.compactedAt >= self.createdAt",message="compactedAt must not precede createdAt"
 // +kubebuilder:validation:XValidation:rule="self.retentionDeadline > self.compactedAt",message="retentionDeadline must follow compactedAt"
 // +kubebuilder:validation:XValidation:rule="self.decisionState in ['Rejected', 'Expired'] ? self.executionState == 'NotStarted' : self.executionState in ['Completed', 'Failed']",message="decision and execution states must describe a terminal action"
 // +kubebuilder:validation:XValidation:rule="self.executionState == 'NotStarted' ? !has(self.executionDisposition) : has(self.executionDisposition)",message="only terminal execution states require an execution disposition"
 type RuntimeApprovalTombstoneSpec struct {
+	// +kubebuilder:validation:Enum=WorkflowExecutor
+	ActorKind       string                           `json:"actorKind,omitempty"`
+	ExecutorAction  *WorkflowExecutorActionReference `json:"executorAction,omitempty"`
+	WorkflowContext *WorkflowActionContext           `json:"workflowContext,omitempty"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	Workspace string `json:"workspace"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
 	InvocationID string `json:"invocationID"`
-	// +kubebuilder:validation:Enum=Tool;Memory;Communication
+	// +kubebuilder:validation:Enum=Tool;Memory;Communication;Workflow
 	Plane string `json:"plane"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
 	Operation string                   `json:"operation"`
-	AgentRef  RuntimeApprovalReference `json:"agentRef"`
+	AgentRef  RuntimeApprovalReference `json:"agentRef,omitzero"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
 	RuntimeApprovalUID string `json:"runtimeApprovalUID"`

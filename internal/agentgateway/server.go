@@ -557,6 +557,9 @@ func (s *Server) validateSource(ctx context.Context, source sourceBinding) (*v1a
 	if err != nil {
 		return nil, fmt.Errorf("load source Agent: %w", err)
 	}
+	if err := runtimeauth.RequireAgentWorkloadPeer(ctx, agent); err != nil {
+		return nil, err
+	}
 	identity, err := loadResource[v1alpha1.AgentIdentity](ctx, s.store, "AgentIdentity", source.namespace, source.identity)
 	if err != nil {
 		return nil, fmt.Errorf("load source AgentIdentity: %w", err)

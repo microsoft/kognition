@@ -243,13 +243,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	timeout := v1alpha1.DefaultAgentInvocationTimeout
+	if runtime := authorized.Agent.Spec.Runtime; runtime != nil {
+		configured, err := v1alpha1.ParseAgentInvocationTimeout(runtime.Timeout)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "model invocation timeout is invalid")
+			return
+		}
+		if configured > 0 {
+			timeout = configured
+		}
+	}
 	if err := s.recordDecision(r.Context(), claims, authorized, identity, runID, "allowed", "authorized", "not_started", false, true); err != nil {
 		s.logger.Error("record model authorization before provider dispatch", zap.Error(err))
 		writeError(w, http.StatusServiceUnavailable, "model audit evidence is unavailable")
 		return
 	}
 	span := s.startModelSpan(r.Context(), claims, identity.Spec.SPIFFEID, authorized, auth.Provider)
-	usage, responseBody, contentType, err := s.proxy(w, r, body, authorized.Model, auth)
+	providerContext, cancel := context.WithTimeout(r.Context(), timeout)
+	usage, responseBody, contentType, err := s.proxy(w, r.WithContext(providerContext), body, authorized.Model, auth)
+	cancel()
 	if err != nil {
 		_ = s.endModelSpan(r.Context(), span, authorized.ModelClass, cpi.Usage{}, observability.StatusError, err.Error())
 		if auditErr := s.recordDecision(r.Context(), claims, authorized, identity, runID, "failed", "target_failed", "failed", true, false); auditErr != nil {
@@ -275,6 +288,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authorize(ctx context.Context, claims *runtimeauth.ModelSessionCapabilityClaims) (*AuthorizedModel, *v1alpha1.AgentIdentity, upstreamAuth, error) {
 	agent, err := loadResource[v1alpha1.Agent](ctx, s.core.store, "Agent", claims.Namespace, claims.AgentName)
 	if err != nil {
+		return nil, nil, upstreamAuth{}, err
+	}
+	if err := runtimeauth.RequireAgentWorkloadPeer(ctx, agent); err != nil {
 		return nil, nil, upstreamAuth{}, err
 	}
 	identity, err := loadResource[v1alpha1.AgentIdentity](ctx, s.core.store, "AgentIdentity", claims.Namespace, claims.AgentIdentityName)

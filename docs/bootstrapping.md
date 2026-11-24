@@ -22,6 +22,13 @@ existing-secret or database references, and select dedicated workload namespaces
 Pin the controller image by digest and make all configured images available to
 the nodes.
 
+The fresh installer generates a release-managed runtime authentication Secret by
+default. Set `runtimeAuth.existingSecret` to use an operator-managed Secret in
+the installation namespace instead. An explicit `runtimeAuth.create: false`
+without an external Secret opts out of creation; ensure the release's expected
+Secret exists before enabling components that depend on it. Direct Helm renders
+do not enable Secret creation by default.
+
 Keep values and captured installation state private. A model provider or `.env`
 file is not required to install the platform.
 

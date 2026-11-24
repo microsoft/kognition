@@ -1,20 +1,271 @@
 # Workflow Collaboration Implementation Plan
 
+> **Superseded in part.** The shipped design runs each member turn as an
+> AgentJob and keeps the run ledger in an owner-referenced ConfigMap. The
+> receiver, task-plane and receipt stack described below was not built and has
+> been removed. See the [workflow collaboration guide](../../../workflow-collaboration.md)
+> for the implemented behavior. This plan is retained as history.
+
 - Status: approved implementation plan. All decision gates resolved on 2026-11-17.
 - Date: 2026-11-16. Gates resolved: 2026-11-17.
 - Scope: extend Workflow with governed, A2A-based multi-agent collaboration.
 - Delivery boundary: implementation proceeds on a feature branch behind a
   disabled feature. No interoperability, deployment, security-owner approval, or
   release acceptance is established here.
-- Readiness: dependent implementation may begin in delivery order. The
-  [decision gates](#decision-gates) are resolved; the A2A SDK compatibility
-  spike (gate 13) must pass before transport implementation.
+- Readiness: the [decision gates](#decision-gates) are resolved, and the A2A
+  SDK compatibility spike (gate 13) passed on the candidate graph below.
+  Dependent implementation may proceed in delivery order behind the disabled
+  feature. The SDK is now a root dependency for an unwired executor adapter.
+- SDK preflight: `github.com/a2aproject/a2a-go/v2@v2.9.0` passed its upstream
+  gRPC, card cryptography, and extension tests on Go `1.26.10`.
+  `govulncheck` reported [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859)
+  on that toolchain. A repeat on `1.26.11` found no reachable vulnerabilities
+  in the scanned SDK packages. The root dependency was added on 2026-11-22.
+- SDK qualification evidence, 2026-11-19: the [isolated gRPC probe](../../../../tools/a2a-qualification/grpc_test.go)
+  passed six race-enabled tests on Go `1.26.11`. It verified task, context and
+  artifact serialization across reconnects, typed errors, card signing,
+  extension negotiation, and task access and list isolation for fixture
+  principals. Resending a message ID created a new task and context; persist
+  Kognition operation identity and do not resubmit ambiguous operations.
+  `govulncheck` found no reachable or imported-package vulnerabilities; the
+  two module-only findings, [GO-2026-6866](https://pkg.go.dev/vuln/GO-2026-6866)
+  and [GO-2026-6860](https://pkg.go.dev/vuln/GO-2026-6860), are in `golang.org/x/net`.
+  The probe's 11 dependency modules have Apache-2.0 or BSD-3-Clause texts, with
+  the applicable gRPC notice and Go patent grants present.
+- Release toolchain qualification, 2026-11-19: the root Go pin and both
+  digest-pinned release builders moved to `1.26.11`. The 15 Linux/amd64
+  application commands built without changes to their 104 dependency module
+  selections, and the separate Linux/amd64 ingester transport built. The
+  release command scan and the Linux root `./...` scan no longer report
+  `GO-2026-6859`. They report no reachable or imported-package findings and
+  one existing module-only finding,
+  [GO-2026-5932](https://pkg.go.dev/vuln/GO-2026-5932).
+  The refreshed [Go notice inventory](../../../../go-notice-inventory.json)
+  matches the root manifest and records legal texts for 111 modules.
+- SDK candidate graph: in a disposable workspace with the root selections
+  (`x/net` `v0.62.0`, gRPC `v1.83.2`, protobuf `v1.36.12`), all six probe
+  tests passed with `-race` and the Linux probe scan reported no findings.
+  The SDK and `x/mod` were the only additions to the tested command module
+  set, with Apache-2.0 and BSD-3-Clause legal texts respectively. This is SDK
+  compatibility evidence, not production authorization or interoperability.
+  The root graph was subsequently scanned and notices regenerated for the unwired
+  adapter described below. These checks do not qualify built images or approve
+  deployment.
+- Unwired A2A adapter progress, 2026-11-22: the official SDK now sends exact raw
+  signed payload bytes behind the existing fresh-commit gate and polls immutable
+  retained task/context IDs without resend. A calibrated retry-policy control
+  proves ordinary SDK retry while the gated lost-acknowledgment case sends once.
+  Coordinator-owned observations preserve the existing effect and claim owners.
+  Both backend contracts, real PostgreSQL revocation regressions, and five affected
+  full consumer suites passed with race detection and standard vet. The actual
+  Linux adapter source graph scan found no vulnerabilities across 49 modules.
+  The refreshed notice inventory records legal texts for 113 modules and zero
+  unresolved texts, but distribution review remains pending. Production wiring,
+  receiving-runtime qualification, real transport identity and extension
+  enforcement, strategy/member execution, accounting, retention, deployed
+  qualification, and independent approval remain unfinished. Tasks 1 through 5
+  remain open. See the [adapter evidence](execution-contract.md#unwired-a2a-adapter-and-task-observations-2026-11-22).
+- Unwired receiving-store progress: PostgreSQL and native ConfigMap adapters now
+  share the official SDK task contract and the same server-restart test. Polling
+  preserves exact task/context/artifact/raw payload without another execution.
+  PostgreSQL uses real database persistence; native restart and concurrent-version
+  tests use a fake client. Native task metadata is reserved by installed private
+  admission and remains deny-by-default, with no controller write exemption.
+  Receiving identities, real authenticated runtime wiring, installed native task
+  persistence, recovery across stop/uncertainty, and retention remain unqualified.
+  The execution contract records the exact test evidence and its boundaries.
+- Unwired receiving-scope progress: fresh dispatch carries a bounded signed
+  initiation capability, and strict verification rejects ambiguous metadata and
+  caller injection. A read-only resolver derives the exact action from protected
+  approval evidence and rejects unsigned message/configuration scope. It checks
+  live authority and the existing committed claim, bounds authorization by the
+  capability lifetime, and reverifies controller identity and expiry afterward.
+  Thirty-three scope cases and the official SDK-decoded request fixture pass.
+  The four affected full consumer suites pass with race detection and standard
+  vet. No new dispatch owner or grant is introduced. Durable receiving assembly,
+  genuine receiver identity, TLS, extensions, and deployment remain unfinished.
+- Unwired receiving-handler progress: duplicate SDK initiation after restart
+  reproduced a second member execution despite a task-store duplicate error.
+  Initial task persistence now precedes SDK dispatch, with protected owner checks
+  and signed-action revalidation after creation and at executor entry. A separate
+  task-load revocation reproducer passes after repair. Native concurrent SDK
+  handlers accept one initiation and execute once, and unsupported methods fail
+  closed. All four affected consumer suites and all four real PostgreSQL receiving
+  tests pass with race detection and standard vet. Production
+  runtime assembly, real receiver identity, TLS, extension qualification, and
+  recovery remain unfinished. No task or dispatch owner is replaced.
+- Unwired trusted task-scope progress: scope derivation now binds protected action,
+  activation, invocation, owner, and approved byte/message limits. The scoped task
+  authenticator verifies current executor/controller identity and retained effect
+  evidence without reusing initiation capabilities. The receiving SDK fixture
+  uses both helpers and rejects post-create identity and limit changes. A final
+  effect-read controller race was reproduced and repaired with live revalidation.
+  All four full consumer suites pass. The unwired receiving assembly rejects
+  unsupported or mismatched backends, enforces the protected authenticator, and
+  revalidates scope after construction under the signed initiation deadline.
+  Eight constructor checks and the existing receiving checks pass. The final full
+  RuntimeApproval suite and consumer compile checks pass after formatting.
+  Native task writes remain denied, and receiving runtime,
+  receiver/TLS authentication, and maintenance recovery remain unqualified.
+- Sender polling now revalidates live activation authority and the original
+  controller incarnation after the SDK response before returning content. Three
+  in-flight revocation, stop, and replacement regressions were reproduced and
+  repaired through the official gRPC SDK. Each denial performs one poll and no
+  resend. All four full consumer suites pass with race detection and standard vet
+  after formatting. Injected authority and insecure
+  loopback transport do not qualify deployed receiving or stopped-run recovery.
+- Unwired polling reconstruction now authenticates a retained protected scope,
+  signed payload, exact owner, fixed Agent/AgentService, and approved limits before
+  and after bounded backend construction. Its SDK handler has no executor and
+  polls the same task without initiation capability or mutation. Reconstruction
+  and eleven denial cases pass, including late revocation and a backend attempting
+  to replace the protected authenticator. All four affected full suites pass with
+  race detection and standard vet. The official gRPC SDK also polls the same task,
+  context, state, and signed payload without initiation metadata and cannot
+  initiate or mutate the retained record. The final full RuntimeApproval suite
+  passes after that wire check. Its injected authentication, in-memory store, and
+  insecure loopback transport do not qualify a deployed receiver or TLS identity.
+  Active authority and unexpired action evidence
+  remain required, so stopped, revoked, and long-term recovery are unqualified.
+- Unwired per-RPC receiving progress: sender polling supplies a bounded canonical
+  retained-task locator which grants no authority. The SDK receiving handler
+  requires genuine private live workload proof before lookup, uses the existing
+  signed initiation constructor for send, and derives polling ownership and
+  limits from protected evidence before reading a candidate record. It verifies
+  the retained signed payload, exact task/context, action digest, effect and live
+  authority before disclosure without a new capability or execution. Eighteen
+  parser cases, twenty-seven dispatch/poll scenarios and an official SDK receiving
+  test with ten denial cases pass. The latter uses injected token verification,
+  fake Kubernetes objects, in-memory persistence and insecure loopback transport.
+  All five formatted auth/consumer suites pass with race detection and standard
+  vet. See the [receiving and lookup evidence](execution-contract.md#unwired-per-rpc-receiving-and-retained-lookup).
+  The same SDK fixture now denies a separate committed initiation when genuine
+  Pod proof is revoked during backend construction, before task creation or
+  execution. Restoring readiness cannot resend that initiation or change its
+  retained activation. The focused check and formatted full RuntimeApproval suite
+  pass with race detection and standard vet after correcting the fixture's
+  retained-commit expectation.
+  Production wiring, protected native writer, receiver/TLS/extensions, member
+  execution, recovery, strategies, accounting, retention and independent approval
+  remain unfinished. Tasks 1 through 5 remain open and collaboration stays disabled.
+- Dedicated-receiver preparation: read-only discovery in context `kognition`
+  identified `research-service` and `summarizer-service` in `kognition-work`.
+  Their current Deployments use the shared default ServiceAccount. The user
+  authorized a [disabled dedicated-receiver design](execution-contract.md#disabled-dedicated-receiver-design),
+  not principal approval, RBAC, schema changes, deployment or activation. The
+  draft separates native receiver identities from a protected control-plane task
+  writer, requires independent per-write admission, original-owner preservation
+  and real CAS, and records executable qualification gates for both stores.
+  Actual image provenance, AgentInstance/runtime binding, receipt schema and
+  independent security-owner approval remain open. No live workload changed.
+  Tasks 1 through 5 remain open and collaboration stays disabled.
+- Isolated native task receipt progress: the user authorized the unwired contract
+  and bounded record derivation. Exact mutation HMAC, canonical encoding,
+  expiry and shared history/version transition checks pass focused and full
+  RuntimeApproval tests plus all five native and four real PostgreSQL receiving
+  adapter tests with race detection and standard vet. The [receipt evidence](execution-contract.md#isolated-native-task-mutation-receipt-contract)
+  distinguishes injected authorization and raw-record binding from full ConfigMap
+  metadata, live writer authorization, key custody and installed admission.
+  Native task writes remain denied. Tasks 1 through 5 remain open and collaboration
+  stays disabled. No principal, RBAC, deployment or activation approval is inferred.
+- Full ConfigMap receipt progress: the user's subsequent finalization request
+  authorized advancing the [reviewed representation](execution-contract.md#proposed-full-configmap-receipt-representation)
+  to unwired source code. The dedicated annotation, v2 domain, bounded canonical
+  envelope, exact raw-record digest and actual prior UID/resourceVersion/digests
+  are implemented. Focused adversarial receipt tests, the formatted full
+  RuntimeApproval suite, all five native adapter checks and two installed
+  deny-by-default admission tests pass with race detection and standard vet.
+  All four real PostgreSQL receiving checks also pass with clean fixture shutdown.
+  See the [source evidence and AKS hold](execution-contract.md#full-object-receipt-source-evidence-and-aks-hold).
+  Read-only AKS revalidation still finds default-ServiceAccount candidates on
+  the prior runtime digest. Genuine writer/key custody, positive installed v2
+  acceptance, native receiving runtime/TLS/extensions, member execution,
+  recovery, strategies, accounting, retention and independent approval remain
+  unfinished. No accepted execution gate, native admission rule or cluster
+  resource changed. Tasks 1 through 5 remain open and collaboration stays disabled.
+- Writer/admission remediation: the confirmed ambiguous-field parser defect and
+  canonical integer receipt-decoding defect are repaired with permanent
+  regressions. The protected writer's public source contract covers signed
+  CREATE/UPDATE, non-consuming preflight, lost-acknowledgement no-resend and denied
+  writes. Shared marker persistence and concurrent CAS now pass against real
+  PostgreSQL and a real Kubernetes API server. The
+  [current review disposition](security-review-code.md#implementation-follow-up)
+  keeps the high finding open for transport/startup, positive installed admission,
+  all-writer admission selection, deployment custody and native provenance.
+  No AKS resource changed, tasks 1 through 5 remain open, and collaboration stays
+  disabled pending qualification and independent activation approvals.
+- Unwired gRPC caller-admission progress: paired unary and stream interceptors
+  require one bounded same-token live-controller credential for send and polling
+  and deny streaming before SDK execution. Anonymous streaming and malformed
+  control/whitespace credential regressions were reproduced and repaired. The
+  official SDK fixture covers exact authenticated task polling and unsupported
+  methods without granting ownership. Actual signed bound-token installed checks
+  cover both methods, distinct Pod/ServiceAccount UIDs, rotation, wrong audience,
+  unbound tokens, and live readiness revocation. Full consumer suites pass with
+  race detection and standard vet after the parser repair, including the final
+  installed webhook suite in 26.525 seconds. The [caller-admission evidence](execution-contract.md#unwired-grpc-caller-admission-2026-11-22)
+  distinguishes installed source proof from injected SDK authentication and
+  in-memory persistence. No production listener is wired or receiver/TLS profile
+  qualified. Tasks 1 through 5 remain open and collaboration remains disabled.
 - Finding remedies: the [execution contract](execution-contract.md) specifies
   the authority, data-release, and final dispatch-admission designs under
   [Accepted ADR-0029](../../../adr/0029-workflow-execution-boundaries.md).
-- Implementation progress: a typed, unwired activation-gate persistence slice is
+- Implementation progress: a typed activation-gate persistence foundation is
   recorded in the [execution contract](execution-contract.md#disabled-persistence-foundation-2026-11-16).
-  No new Workflow execution, capability, or deployment behavior is enabled.
+  The shared Workflow planner rejects disabled collaboration before scheduling.
+  No collaboration execution, capability, or deployment behavior is enabled.
+- Implementation progress, 2026-11-20: the administrator-protected standalone
+  policy API accepts separately typed, exact `Workflow/use` and `Agent/invoke`
+  execution rules. Race-enabled API and authorization tests pass. The
+  [policy evidence and proposed executor-action schema](execution-contract.md#standalone-execution-policy-foundation-2026-11-20)
+  keep schema review, dispatcher implementation, all-plane enforcement, and
+  independent production approval explicitly outstanding. Collaboration remains
+  disabled.
+- Disabled execution foundation, 2026-11-20: a typed executor-action binding,
+  signed member activation context, shared claimed-effect dispatch primitive,
+  and fail-closed Gate3 integration now have race and backend persistence tests.
+  See the [implementation evidence and outstanding work](execution-contract.md#disabled-executor-binding-and-dispatch-foundation-2026-11-20).
+  The primitive is not wired into production gateways and the four-strategy
+  runtime is not implemented. This progress does not enable collaboration.
+- Disabled foundation progress, 2026-11-21: private stores, atomic standalone
+  acceptance with final Workflow/use authorization, explicit native identity
+  assembly, live pinned-step member preflight, and real PostgreSQL HTTP
+  decision/preparation/claim/non-replay evidence are implemented. Nine affected
+  suites and the focused PostgreSQL integration passed with `-race`. Native
+  signed submission receipts, verified finalization, and acceptance-only public
+  reconciliation are now assembled. Installed race tests prove actual resource
+  UID, bound JWT identity, protected private writes, and rendered state policy
+  enforcement. The disabled opt-in chart profile supplies explicit identity,
+  rotating token, review RBAC, separate admission routing, and certificate SANs.
+  Its 31 focused regressions pass, and the installed private-record filter keeps
+  ordinary bootstrap state available during executor webhook downtime.
+  Standalone controller attestation and initiation authorization are now assembled
+  under an explicit bound-token profile and consume a private live proof. Default
+  initiation and unqualified target dispatch stay unavailable. Installed signature,
+  rotation, readiness, and cancellation checks and production claim-only denial
+  regressions pass. Production A2A transport, member interaction and delegation,
+  cumulative accounting, and deployed qualification remain unfinished. Envtest pod
+  readiness and authority remain fixtures. See the
+  [standalone evidence](execution-contract.md#standalone-bound-token-attestation-and-initiation).
+  The latest full native suites, focused real PostgreSQL acceptance test, and full
+  API-server suite passed with race detection and standard vet. The standalone
+  binding API now independently rejects stale live Workflow definitions before
+  audit and persistence and preserves revocation after Workflow deletion. All
+  546 chart regressions and the six-chart notice freshness check passed.
+  The expanded PostgreSQL regression passed with all four binding/source-use
+  revocation orderings against atomic acceptance. Installed native tests now
+  prove actual operator administration and durable attribution, and four
+  channel-controlled acceptance orderings through the real private admission
+  boundary. The full native webhook integration suite passed with race detection
+  and standard vet. This does not establish native cross-resource atomicity or
+  deployed runtime qualification.
+  Selected tasks 1 through 5 are not closed. See the
+  [current evidence](execution-contract.md#disabled-executor-authorization-progress-2026-11-21).
+- Design elaboration, 2026-11-18: the execution contract now details
+  [governance and trust enforcement](execution-contract.md#governance-and-trust-enforcement),
+  [strategy safety](execution-contract.md#strategy-safety-and-runtime-state), and
+  [governance acceptance scenarios](execution-contract.md#governance-acceptance-scenarios).
+  These elaborate the approved gates without substituting for runtime evidence.
 
 ## Recommendation And Confirmed Requirements
 
@@ -33,10 +284,11 @@ The following requirements were confirmed during design discussion:
 - Workflow and WorkflowRun provide those definition and execution boundaries.
   AgentPool and AgentPoolRun are deferred.
 
-Strategy-specific rules, schema names, limits, and storage choices below are
-proposals until the [decision gates](#decision-gates) are resolved. Completing an
-implementation phase does not remove any of the four strategies from release
-scope.
+The [approved resolutions](decision-gate-resolutions.md) govern strategy rules,
+schema names, limits, and release scope. Older proposed wording below is design
+history where the resolution supplies a precise choice. Implementation details
+must satisfy that choice or receive a recorded amendment. Completing a phase
+does not remove any of the four strategies from release scope.
 
 ## Scope And Boundaries
 
@@ -90,21 +342,21 @@ definition snapshot and evolving execution plan need separate persisted records.
 | Separate fixed definition from evolving task state | Enables restart recovery and reproducible configuration binding | Mutating the template or hiding history in annotations loses execution evidence. |
 | Defer a separate team resource | No independent team lifecycle requirement has been established | A definition-only resource may later support separately owned reusable teams. |
 
-These are planning decisions, not newly accepted ADRs. ADR-0029 now records the
-recommended execution-boundary choices as Proposed. Review that decision before
-dependent implementation and record remaining lifecycle/protocol decisions
-through the repository's ADR process. Existing gateway and recovery decisions
-remain authoritative.
+ADR-0029 and the gate resolutions were accepted by the feature owner on
+2026-11-17. Dependent implementation may proceed under their disabled-feature
+and evidence boundaries. New authority or policy semantics require the existing
+ADR/amendment process. Existing gateway and recovery decisions remain authoritative.
 
 ## API Proposal
 
 ### Workflow authoring
 
-The following is a proposed API example. The current schema does not accept it.
-The numeric limits illustrate explicit finite configuration and are not defaults.
-It illustrates the collaboration block rather than a complete executable
-fixture. Required explicit dataflow declarations and operator execution bindings
-are omitted while their exact schema remains gated.
+The following illustrates the selected collaboration shape, not an enabled or
+complete executable fixture. API types and validation are being implemented, and
+collaboration remains disabled pending qualification. The numeric limits are
+explicit examples rather than defaults. Required dataflow declarations and
+operator execution bindings are omitted here and must satisfy the approved
+contract before dispatch can be enabled.
 
 ```yaml
 apiVersion: kognition.dev/v1alpha1
@@ -151,6 +403,23 @@ An ordinary WorkflowRun references this Workflow and supplies its input through
 the existing API. Applying the definition does not start execution. Existing
 edges connect `investigate` to other steps without exposing its internal message
 graph as Workflow dependency edges.
+
+### Parallel Review Draft
+
+Open the [Parallel review draft](parallel-review.draft.yaml) in the Studio
+Workflow YAML tab, then select **Apply YAML** to load it into the Builder.
+Select `review-request` in the graph to edit the team. This sample references
+three existing Agents in the Workflow namespace. Replace the Agent names with
+those in your workspace. Two required branches review the same task and a
+separate synthesizer combines their results. Parallel does not declare direct
+member-to-member interactions.
+
+This example is for authoring only. The default admission policy rejects it,
+and Studio disables deployment and invocation. The Dashboard Teams tab shows
+declared configuration for collaboration definitions returned by the API. It
+does not attest to agent reachability, Agent Card discovery, or execution.
+After qualification and activation, an authorized `WorkflowRun` is the intended
+on-demand trigger. The Workflow definition itself does not start a team.
 
 ### Proposed schema rules
 

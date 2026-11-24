@@ -43,17 +43,20 @@ const (
 // It marshals/unmarshals K8s resources to []byte using the internal types via
 // the convert layer, allowing existing reconcilers to operate unchanged.
 type StoreAdapter struct {
-	client                      client.Client
-	runtimeApprovalReader       client.Reader
-	controlNamespace            string
-	toolInvocationReceiptWriter string
-	now                         func() time.Time
-	maximumClockSkew            time.Duration
-	runtimeApprovalQuota        RuntimeApprovalQuotaLimits
-	runtimeApprovalClockHealth  func() error
-	runtimeApprovalBindingMu    sync.RWMutex
-	runtimeApprovalActivationMu sync.Mutex
-	runtimeApprovalBindingKeys  runtimeapproval.BindingKeyStore
+	client                        client.Client
+	runtimeApprovalReader         client.Reader
+	workflowExecutorReader        client.Reader
+	workflowExecutorAuthorization *WorkflowExecutorKubernetesAuthorization
+	workflowExecutorRecords       *WorkflowExecutorRecordStore
+	controlNamespace              string
+	toolInvocationReceiptWriter   string
+	now                           func() time.Time
+	maximumClockSkew              time.Duration
+	runtimeApprovalQuota          RuntimeApprovalQuotaLimits
+	runtimeApprovalClockHealth    func() error
+	runtimeApprovalBindingMu      sync.RWMutex
+	runtimeApprovalActivationMu   sync.Mutex
+	runtimeApprovalBindingKeys    runtimeapproval.BindingKeyStore
 }
 
 var _ runtimeapproval.TrustProfileIndexValidator = (*StoreAdapter)(nil)

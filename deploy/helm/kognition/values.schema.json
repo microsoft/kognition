@@ -137,6 +137,19 @@
             }
           },
           "additionalProperties": false
+        },
+        "workflowExecutor": {
+          "type": "object",
+          "properties": {
+            "collaboration": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": true
         }
       },
       "additionalProperties": true

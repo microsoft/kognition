@@ -60,6 +60,10 @@ credentials once instead of regenerating them during repeated Helm renders.
 
 The state directory contains credentials and recovery artifacts. Keep it private.
 
+Add `-CreateWorkflowBindingAdminGroup` (or `-WorkflowBindingAdminGroupId <guid>`)
+to enable Workflow execution with a Microsoft Entra group as binding administrator.
+See [Workflow binding administrators](../../docs/getting-started/aks.md#workflow-binding-administrators).
+
 ## Image preparation and providers
 
 - Build application images with the repository Dockerfiles or use a published

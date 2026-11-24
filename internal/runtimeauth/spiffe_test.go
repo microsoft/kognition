@@ -295,8 +295,16 @@ func TestWorkloadProxyPinsPeerAndForwardsCapabilities(test *testing.T) {
 	calls := 0
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		calls++
-		if request.URL.Path != "/v1/chat/completions" || request.Header.Get("Authorization") != "Bearer scoped-model-capability" {
+		paths := []string{"/v1/chat/completions", "/v1/memory/store", "/v1/memory/search"}
+		if calls > len(paths) || request.URL.Path != paths[calls-1] || request.Header.Get("Authorization") != "Bearer scoped-capability" {
 			test.Error("proxy changed gateway authority or operation")
+		}
+		wantInvocation := ""
+		if request.URL.Path == "/v1/memory/store" {
+			wantInvocation = "review-invocation"
+		}
+		if got := request.Header.Get(MemoryInvocationIDHeader); got != wantInvocation {
+			test.Errorf("%s invocation header = %q, want %q", request.URL.Path, got, wantInvocation)
 		}
 		if request.Header.Get(observability.TrustDecisionRunIDHeader) != "review-run" || request.Header.Get("traceparent") != "00-11111111111111111111111111111111-2222222222222222-01" {
 			test.Error("proxy dropped trusted run or trace correlation")
@@ -318,7 +326,8 @@ func TestWorkloadProxyPinsPeerAndForwardsCapabilities(test *testing.T) {
 	defer proxy.Close()
 	invoke := func(path string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"bound"}`))
-		request.Header.Set("Authorization", "Bearer scoped-model-capability")
+		request.Header.Set("Authorization", "Bearer scoped-capability")
+		request.Header.Set(MemoryInvocationIDHeader, "review-invocation")
 		request.Header.Set(observability.TrustDecisionRunIDHeader, "review-run")
 		request.Header.Set("traceparent", "00-11111111111111111111111111111111-2222222222222222-01")
 		response := httptest.NewRecorder()
@@ -328,7 +337,13 @@ func TestWorkloadProxyPinsPeerAndForwardsCapabilities(test *testing.T) {
 	if response := invoke("/model/v1/chat/completions"); response.Code != http.StatusOK || calls != 1 {
 		test.Fatalf("verified gateway proxy status=%d calls=%d", response.Code, calls)
 	}
-	if response := invoke("/model/admin"); response.Code != http.StatusNotFound || calls != 1 {
+	if response := invoke("/memory/v1/memory/store"); response.Code != http.StatusOK || calls != 2 {
+		test.Fatalf("memory store proxy status=%d calls=%d", response.Code, calls)
+	}
+	if response := invoke("/memory/v1/memory/search"); response.Code != http.StatusOK || calls != 3 {
+		test.Fatalf("memory search proxy status=%d calls=%d", response.Code, calls)
+	}
+	if response := invoke("/model/admin"); response.Code != http.StatusNotFound || calls != 3 {
 		test.Fatal("proxy accepted an unregistered operation")
 	}
 	wrong := endpoints["model"]
@@ -343,11 +358,11 @@ func TestWorkloadProxyPinsPeerAndForwardsCapabilities(test *testing.T) {
 	request.Header.Set("Authorization", "Bearer scoped-model-capability")
 	response := httptest.NewRecorder()
 	wrongProxy.ServeHTTP(response, request)
-	if response.Code != http.StatusBadGateway || calls != 1 {
+	if response.Code != http.StatusBadGateway || calls != 3 {
 		test.Fatal("proxy accepted another gateway peer")
 	}
 	source.OnX509ContextWatchError(errors.New("issuer offline"))
-	if response := invoke("/model/v1/chat/completions"); response.Code != http.StatusUnauthorized || calls != 1 {
+	if response := invoke("/model/v1/chat/completions"); response.Code != http.StatusUnauthorized || calls != 3 {
 		test.Fatal("proxy dispatched while workload identity was unavailable")
 	}
 }

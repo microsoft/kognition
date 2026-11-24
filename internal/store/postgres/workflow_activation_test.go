@@ -48,3 +48,42 @@ func TestPostgresWorkflowActivationCreateRetainsOneRecord(test *testing.T) {
 		test.Fatalf("soft-deleted activation was recreated: %v", err)
 	}
 }
+
+func TestPostgresWorkflowActivationRejectsGenericWrites(test *testing.T) {
+	storage := newTestStore(test)
+	ctx := context.Background()
+	data := []byte(`{}`)
+	spec := store.WorkflowActivationSpec{
+		Key:           store.WorkflowActivationKey{Workspace: "work", RunUID: "run", Step: "team", ActivationID: "visit", Attempt: 1},
+		BindingDigest: strings.Repeat("a", 64), Actors: []string{strings.Repeat("b", 64)}, MaxEffects: 2, MaxBytes: 16384, ExpiresAt: time.Now().Add(time.Hour),
+	}
+	created, err := storage.CreateWorkflowActivation(ctx, spec)
+	if err != nil {
+		test.Fatal(err)
+	}
+	name := workflowActivationRecordName(spec.Key)
+	checks := map[string]func() error{
+		"create": func() error { return storage.Create(ctx, workflowActivationRecordKind, "work", name, data) },
+		"create-and-get": func() error {
+			_, err := storage.CreateAndGet(ctx, workflowActivationRecordKind, "work", name, data)
+			return err
+		},
+		"update": func() error { return storage.Update(ctx, workflowActivationRecordKind, "work", name, data, 1) },
+		"update-and-get": func() error {
+			_, err := storage.UpdateAndGet(ctx, workflowActivationRecordKind, "work", name, data, 1)
+			return err
+		},
+		"delete": func() error { return storage.Delete(ctx, workflowActivationRecordKind, "work", name) },
+	}
+	for name, check := range checks {
+		test.Run(name, func(test *testing.T) {
+			if err := check(); !errors.Is(err, store.ErrConflict) {
+				test.Fatalf("generic write returned %v, want ErrConflict", err)
+			}
+		})
+	}
+	retained, err := storage.GetWorkflowActivation(ctx, spec.Key)
+	if err != nil || retained.Version != created.Version || retained.Spec.BindingDigest != created.Spec.BindingDigest {
+		test.Fatalf("retained activation = %+v, error = %v", retained, err)
+	}
+}

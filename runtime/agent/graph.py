@@ -250,8 +250,15 @@ def build_agent_graph(config: AgentConfig):
         with model_runtime_session_capability(state.get("model_session_capability", "")):
             active_model = create_model(config) if config.model_gateway_url else model
         assert active_model is not None
-        if tools:
-            active_model = active_model.bind_tools(tools)
+        # The graph is shared by a runtime Pod, but the delegation capability is
+        # per invocation (workflow collaboration members get none). Offer the
+        # delegation tool only when this invocation can use it.
+        bound_tools = [
+            t for t in tools
+            if t is not delegation_tool or state.get("agent_delegation_session_capability", "")
+        ]
+        if bound_tools:
+            active_model = active_model.bind_tools(bound_tools)
 
         with runtime_tracing.start_span(
             "kognition.runtime.agent.model",

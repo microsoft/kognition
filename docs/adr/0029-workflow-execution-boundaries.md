@@ -4,6 +4,10 @@
 - Date: 2026-11-16. Accepted: 2026-11-17.
 - Scope: Workflow collaboration initiation, content release, and stop/handoff
   dispatch admission.
+- Implementation note: the delivered design uses AgentJob member turns and an
+  owner-referenced ledger ConfigMap rather than the receiver and task-plane
+  mechanisms discussed below; see the
+  [workflow collaboration guide](../workflow-collaboration.md).
 - Approval boundary: accepted by the feature owner on 2026-11-17 together with
   the [decision gate resolutions](../development-plans/features/workflow-collaboration/decision-gate-resolutions.md)
   (gates 2, 3, and 11). This permits dependent implementation behind a disabled

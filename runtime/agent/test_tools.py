@@ -17,6 +17,7 @@ import json
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 
 pytest.importorskip("langchain_core")
@@ -539,6 +540,47 @@ def test_agent_delegation_tool_returns_pending_approval_without_invoking(monkeyp
     assert len(calls) == 1
     assert calls[0][0] == "http://agent-gateway:8094/v1/agent-services/capabilities"
     assert calls[0][1]["message"] == "review this"
+
+
+def test_agent_delegation_continuation_reuses_exact_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    ids = iter(["delegation-1", "delegation-2"])
+
+    def fake_post(endpoint: str, *, json: dict, timeout: float, headers: dict[str, str]) -> httpx.Response:
+        calls.append((endpoint.rsplit("/", 1)[-1], json["invocation_id"], headers["Authorization"]))
+        if len(calls) == 1:
+            return httpx.Response(202, json={"runtime_approval_state": "Pending"})
+        if endpoint.endswith("/capabilities"):
+            return httpx.Response(200, json={"capability": "exact-delegation"}, request=httpx.Request("POST", endpoint))
+        if len(calls) == 3:
+            raise httpx.ReadTimeout("response lost")
+        return httpx.Response(200, json={"session_id": json["invocation_id"]})
+
+    monkeypatch.setattr("tools.httpx.post", fake_post)
+    monkeypatch.setattr("tools.uuid.uuid4", lambda: next(ids))
+    tool = build_agent_delegation_tool("http://agent-gateway:8094")
+    assert tool is not None
+    arguments = {"target_namespace": "team-b", "target_agent_service": "review-service", "message": "review this"}
+    with agent_delegation_runtime_session_capability("source-session"):
+        pending = json.loads(tool.invoke(arguments))
+        continuation = {**arguments, "invocation_id": pending["invocation_id"]}
+        assert "does not match" in tool.invoke({**continuation, "message": "changed"})
+        with agent_delegation_runtime_session_capability("other-session"):
+            assert "does not match" in tool.invoke(continuation)
+        with agent_delegation_runtime_session_capability("source-session"):
+            assert json.loads(tool.invoke(continuation))["invocation_id"] == "delegation-1"
+        assert json.loads(tool.invoke(continuation))["session_id"] == "delegation-1"
+        assert "does not match" in tool.invoke(continuation)
+        assert json.loads(tool.invoke(arguments))["session_id"] == "delegation-2"
+
+    assert calls == [
+        ("capabilities", "delegation-1", "Bearer source-session"),
+        ("capabilities", "delegation-1", "Bearer source-session"),
+        ("invoke", "delegation-1", "Bearer exact-delegation"),
+        ("invoke", "delegation-1", "Bearer exact-delegation"),
+        ("capabilities", "delegation-2", "Bearer source-session"),
+        ("invoke", "delegation-2", "Bearer exact-delegation"),
+    ]
 
 
 def test_search_empty_query_falls_back_to_first_chunks() -> None:

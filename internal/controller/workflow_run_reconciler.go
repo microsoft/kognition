@@ -20,6 +20,7 @@ import (
 	"github.com/kognition-ai/kognition/internal/lifecycle"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/requestid"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval"
 	"github.com/kognition-ai/kognition/internal/store"
 )
 
@@ -83,6 +84,7 @@ type WorkflowRunReconciler struct {
 	audit               *observability.CognitiveAuditLog
 	tracer              *observability.Tracer
 	collector           *observability.Collector
+	collaborationRunner WorkflowCollaborationRunner
 }
 
 // NewWorkflowRunReconciler creates a new WorkflowRunReconciler.
@@ -199,6 +201,9 @@ func (r *WorkflowRunReconciler) Reconcile(ctx context.Context, req Request) (Res
 	if run.ObjectMeta.DeletionTimestamp != nil {
 		return r.handleDeletion(ctx, &run, log)
 	}
+	if run.ObjectMeta.Annotations[runtimeapproval.WorkflowRunAcceptanceRequiredAnnotation] == "true" {
+		return Result{}, runtimeapproval.ErrWorkflowDispatchUnsupported
+	}
 
 	// Terminal phases – nothing left to reconcile.
 	if run.Status.Phase == v1alpha1.PhaseReady || run.Status.Phase == v1alpha1.PhaseFailed {
@@ -300,6 +305,7 @@ func (r *WorkflowRunReconciler) Reconcile(ctx context.Context, req Request) (Res
 		ownerKind:           "WorkflowRun",
 		workflowInput:       run.Spec.Input,
 		toolInvoker:         r.toolInvoker,
+		collaborationRunner: r.collaborationRunner,
 		communicationPolicy: r.communicationPolicy,
 		audit:               r.audit,
 		tracer:              r.tracer,
@@ -636,6 +642,14 @@ func workflowRunOutput(spec v1alpha1.WorkflowSpec, statuses []v1alpha1.WorkflowS
 func (r *WorkflowRunReconciler) handleDeletion(ctx context.Context, run *v1alpha1.WorkflowRun, log *zap.Logger) (Result, error) {
 	if !lifecycle.HasFinalizer(run.ObjectMeta.Finalizers, WorkflowRunFinalizer) {
 		return Result{}, nil
+	}
+	if r.collaborationRunner != nil && run.Status.Phase != v1alpha1.PhaseReady && run.Status.Phase != v1alpha1.PhaseFailed {
+		spec, err := r.resolveSpec(ctx, run, log)
+		if err != nil {
+			log.Warn("collaboration steps not stopped: workflow spec unavailable", zap.Error(err))
+		} else if err := stopWorkflowCollaborations(ctx, r.collaborationRunner, r.buildSyntheticWorkflow(run, spec), "WorkflowRun", "WorkflowRunDeleted"); err != nil {
+			return Result{}, err
+		}
 	}
 	if run.Status.Phase != v1alpha1.PhaseReady && run.Status.Phase != v1alpha1.PhaseFailed {
 		originalStatus, originalAnnotations, originalFinalizers := snapshotWorkflowRun(run)

@@ -7,33 +7,64 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/kognition-ai/kognition/api/v1alpha1"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval"
 )
 
 // WorkflowValidator validates Workflow resources on CREATE and UPDATE.
-type WorkflowValidator struct{}
+type WorkflowValidator struct {
+	collaborationEnabled bool
+}
+
+// WorkflowValidatorOption customizes a WorkflowValidator.
+type WorkflowValidatorOption func(*WorkflowValidator)
+
+// WithCollaborationEnabled controls whether collaboration steps are admitted.
+// Collaboration is disabled by default: execution is not qualified, so the
+// structure is validated but the step is rejected.
+func WithCollaborationEnabled(enabled bool) WorkflowValidatorOption {
+	return func(v *WorkflowValidator) { v.collaborationEnabled = enabled }
+}
 
 // NewWorkflowValidator creates a new WorkflowValidator.
-func NewWorkflowValidator() *WorkflowValidator {
-	return &WorkflowValidator{}
+func NewWorkflowValidator(opts ...WorkflowValidatorOption) *WorkflowValidator {
+	v := &WorkflowValidator{}
+	for _, opt := range opts {
+		opt(v)
+	}
+	return v
 }
 
 func (v *WorkflowValidator) Name() string { return "workflow-validator" }
 
 func (v *WorkflowValidator) Handles(kind string, op Operation) bool {
-	return kind == "Workflow" && (op == OperationCreate || op == OperationUpdate)
+	return (kind == "Workflow" || kind == "WorkflowRun") && (op == OperationCreate || op == OperationUpdate)
 }
 
 func (v *WorkflowValidator) Validate(_ context.Context, req *Request) *Response {
+	if req.Kind == "WorkflowRun" {
+		return validateProtectedWorkflowRun(req)
+	}
 	var wf v1alpha1.Workflow
 	if err := json.Unmarshal(req.Object, &wf); err != nil {
 		return &Response{Allowed: false, Reason: fmt.Sprintf("invalid workflow JSON: %v", err)}
 	}
 
 	var errs []string
+
+	previousSteps := map[string]v1alpha1.WorkflowStep{}
+	if req.Operation == OperationUpdate && len(req.OldObject) > 0 {
+		var oldWF v1alpha1.Workflow
+		if err := json.Unmarshal(req.OldObject, &oldWF); err == nil {
+			for _, s := range oldWF.Spec.Steps {
+				previousSteps[s.Name] = s
+			}
+		}
+	}
 
 	// At least one step must exist.
 	if len(wf.Spec.Steps) == 0 {
@@ -92,8 +123,17 @@ func (v *WorkflowValidator) Validate(_ context.Context, req *Request) *Response 
 			if step.ToolRef.Name == "" {
 				errs = append(errs, fmt.Sprintf("spec.steps[%d(%s)].toolRef.name is required when type=%q", i, step.Name, v1alpha1.WorkflowStepTypeTool))
 			}
+		case v1alpha1.WorkflowStepTypeCollaboration:
+			// An unchanged step was already admitted; re-validating it would
+			// block unrelated updates (finalizers, metadata) while disabled.
+			if prev, ok := previousSteps[step.Name]; !ok || !reflect.DeepEqual(prev, step) {
+				errs = append(errs, v.validateCollaborationStep(i, step, wf.ObjectMeta.Namespace)...)
+			}
 		default:
-			errs = append(errs, fmt.Sprintf("spec.steps[%d(%s)].type %q is invalid (must be %q or %q)", i, step.Name, step.Type, v1alpha1.WorkflowStepTypeAgent, v1alpha1.WorkflowStepTypeTool))
+			errs = append(errs, fmt.Sprintf("spec.steps[%d(%s)].type %q is invalid (must be %q, %q or %q)", i, step.Name, step.Type, v1alpha1.WorkflowStepTypeAgent, v1alpha1.WorkflowStepTypeTool, v1alpha1.WorkflowStepTypeCollaboration))
+		}
+		if step.Type != v1alpha1.WorkflowStepTypeCollaboration && step.Collaboration != nil {
+			errs = append(errs, fmt.Sprintf("spec.steps[%d(%s)].collaboration must be empty unless type=%q", i, step.Name, v1alpha1.WorkflowStepTypeCollaboration))
 		}
 
 		// Validate per-step Timeout (must be a valid Go duration).
@@ -224,6 +264,32 @@ func (v *WorkflowValidator) Validate(_ context.Context, req *Request) *Response 
 		return &Response{Allowed: false, Reason: strings.Join(errs, "; ")}
 	}
 
+	return &Response{Allowed: true}
+}
+
+func validateProtectedWorkflowRun(req *Request) *Response {
+	var current v1alpha1.WorkflowRun
+	if err := json.Unmarshal(req.Object, &current); err != nil {
+		return &Response{Allowed: false, Reason: "invalid WorkflowRun JSON"}
+	}
+	if req.Operation != OperationUpdate {
+		return &Response{Allowed: true}
+	}
+	var prior v1alpha1.WorkflowRun
+	if len(req.OldObject) == 0 {
+		if current.Annotations[runtimeapproval.WorkflowRunAcceptanceRequiredAnnotation] == "true" {
+			return &Response{Allowed: false, Reason: "protected run update requires the persisted prior definition"}
+		}
+		return &Response{Allowed: true}
+	}
+	if err := json.Unmarshal(req.OldObject, &prior); err != nil {
+		return &Response{Allowed: false, Reason: "invalid prior WorkflowRun JSON"}
+	}
+	protected := prior.Annotations[runtimeapproval.WorkflowRunAcceptanceRequiredAnnotation] == "true"
+	if protected != (current.Annotations[runtimeapproval.WorkflowRunAcceptanceRequiredAnnotation] == "true") || protected &&
+		(prior.Name != current.Name || prior.Namespace != current.Namespace || prior.UID != current.UID || !reflect.DeepEqual(prior.Spec, current.Spec)) {
+		return &Response{Allowed: false, Reason: "protected run execution mode, identity, and accepted spec are immutable"}
+	}
 	return &Response{Allowed: true}
 }
 

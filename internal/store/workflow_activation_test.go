@@ -35,6 +35,71 @@ func workflowGateApply(test *testing.T, gate store.WorkflowActivation, mutation 
 	return result
 }
 
+func TestWorkflowActivationTaskCreateAdmissionIsSingleUse(test *testing.T) {
+	gate, effect, claim, now := workflowGateFixture(test)
+	effect.Plane = "communication"
+	registered := workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateRegister, Effect: effect}, now).Activation
+	committed := workflowGateApply(test, registered, store.WorkflowActivationMutation{Kind: store.WorkflowGateCommit, Effect: effect, Claim: claim}, now).Activation
+	observation := store.WorkflowTaskObservation{Protocol: store.WorkflowTaskA2AGRPC, ActionDigest: strings.Repeat("d", 64), TaskID: "task-1", ContextID: "context-1"}
+	mutation := store.WorkflowActivationMutation{Kind: store.WorkflowGateAdmitTaskCreate, Effect: effect, Claim: claim, TaskObservation: observation, TaskCreateReceiptDigest: strings.Repeat("e", 64)}
+	admitted := workflowGateApply(test, committed, mutation, now)
+	if !admitted.Changed || admitted.DispatchGranted || admitted.OwnerActivated || len(admitted.Activation.Effects) != 1 || admitted.Activation.Owner != committed.Owner || admitted.Activation.Epoch != committed.Epoch || admitted.Activation.Effects[effect.ID].Claim != claim {
+		test.Fatal("task admission granted dispatch, replaced ownership or discarded the existing claim")
+	}
+	if committed.Effects[effect.ID].TaskObservation != nil || committed.Effects[effect.ID].TaskCreateReceiptDigest != "" {
+		test.Fatal("admission mutated the independent prior snapshot")
+	}
+	for _, digest := range []string{strings.Repeat("e", 64), strings.Repeat("f", 64)} {
+		mutation.ExpectedVersion, mutation.TaskCreateReceiptDigest = admitted.Activation.Version, digest
+		if result, err := store.ApplyWorkflowActivation(admitted.Activation, mutation, now); !errors.Is(err, store.ErrConflict) || result.Changed || result.DispatchGranted {
+			test.Fatalf("consumed CREATE authorization was reused: %v", err)
+		}
+	}
+	mutation.ExpectedVersion = committed.Version
+	if _, err := store.ApplyWorkflowActivation(admitted.Activation, mutation, now); !errors.Is(err, store.ErrConflict) {
+		test.Fatal("racing stale CREATE admission won")
+	}
+	settled := workflowGateApply(test, admitted.Activation, store.WorkflowActivationMutation{Kind: store.WorkflowGateSettle, Effect: effect, Claim: claim, Disposition: "Succeeded", EvidenceDigest: strings.Repeat("f", 64)}, now).Activation
+	if settled.Effects[effect.ID].TaskCreateReceiptDigest != strings.Repeat("e", 64) || *settled.Effects[effect.ID].TaskObservation != observation || store.ValidateWorkflowActivation(settled) != nil {
+		test.Fatal("settlement discarded CREATE replay evidence")
+	}
+	for name, change := range map[string]func(*store.WorkflowActivation, *store.WorkflowActivationMutation){
+		"uncommitted": func(current *store.WorkflowActivation, _ *store.WorkflowActivationMutation) { *current = registered },
+		"stopped": func(current *store.WorkflowActivation, _ *store.WorkflowActivationMutation) {
+			*current = workflowGateApply(test, committed, store.WorkflowActivationMutation{Kind: store.WorkflowGateStop, StopID: "cancel", StopMode: store.WorkflowGateStopping}, now).Activation
+		},
+		"wrong-owner": func(_ *store.WorkflowActivation, changed *store.WorkflowActivationMutation) {
+			changed.Effect.Actor = strings.Repeat("f", 64)
+		},
+		"wrong-claim": func(_ *store.WorkflowActivation, changed *store.WorkflowActivationMutation) {
+			changed.Claim.ProcessNonce = "foreign"
+		},
+		"wrong-epoch": func(_ *store.WorkflowActivation, changed *store.WorkflowActivationMutation) { changed.Effect.Epoch++ },
+		"unbounded-marker": func(_ *store.WorkflowActivation, changed *store.WorkflowActivationMutation) {
+			changed.TaskCreateReceiptDigest = strings.Repeat("f", 65)
+		},
+		"foreign-task": func(current *store.WorkflowActivation, _ *store.WorkflowActivationMutation) {
+			changedObservation := observation
+			changedObservation.TaskID = "foreign"
+			*current = workflowGateApply(test, committed, store.WorkflowActivationMutation{Kind: store.WorkflowGateObserveTask, Effect: effect, Claim: claim, TaskObservation: changedObservation}, now).Activation
+		},
+	} {
+		test.Run(name, func(test *testing.T) {
+			current, changed := committed, mutation
+			changed.TaskCreateReceiptDigest = strings.Repeat("e", 64)
+			change(&current, &changed)
+			changed.ExpectedVersion = current.Version
+			if result, err := store.ApplyWorkflowActivation(current, changed, now); !errors.Is(err, store.ErrConflict) || result.Changed || result.DispatchGranted {
+				test.Fatalf("invalid task admission accepted: %v", err)
+			}
+		})
+	}
+	mutation.ExpectedVersion = committed.Version
+	if _, err := store.ApplyWorkflowActivation(committed, mutation, committed.Spec.ExpiresAt); !errors.Is(err, store.ErrConflict) {
+		test.Fatal("expired CREATE admission accepted")
+	}
+}
+
 func TestWorkflowActivationStopPreventsDispatch(test *testing.T) {
 	gate, effect, claim, now := workflowGateFixture(test)
 	registered := workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateRegister, Effect: effect}, now)
@@ -104,6 +169,40 @@ func TestWorkflowActivationRejectsStaleAndChangedBindings(test *testing.T) {
 	}
 }
 
+func TestWorkflowActivationRejectsChangedEffectIdentity(test *testing.T) {
+	gate, effect, claim, now := workflowGateFixture(test)
+	registered := workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateRegister, Effect: effect}, now).Activation
+	committed := workflowGateApply(test, registered, store.WorkflowActivationMutation{Kind: store.WorkflowGateCommit, Effect: effect, Claim: claim}, now).Activation
+	uncertain := workflowGateApply(test, committed, store.WorkflowActivationMutation{Kind: store.WorkflowGateSettle, Effect: effect, Claim: claim, Disposition: "Uncertain", EvidenceDigest: strings.Repeat("d", 64)}, now).Activation
+	changes := map[string]func(*store.WorkflowEffect){
+		"actor": func(changed *store.WorkflowEffect) { changed.Actor = strings.Repeat("e", 64) },
+		"plane": func(changed *store.WorkflowEffect) { changed.Plane = "model" },
+		"epoch": func(changed *store.WorkflowEffect) { changed.Epoch++ },
+	}
+	for name, change := range changes {
+		test.Run(name, func(test *testing.T) {
+			changed := effect
+			change(&changed)
+			cases := []struct {
+				gate     store.WorkflowActivation
+				mutation store.WorkflowActivationMutation
+			}{
+				{registered, store.WorkflowActivationMutation{Kind: store.WorkflowGateCommit, Effect: changed, Claim: claim}},
+				{committed, store.WorkflowActivationMutation{Kind: store.WorkflowGateCommit, Effect: changed, Claim: claim}},
+				{committed, store.WorkflowActivationMutation{Kind: store.WorkflowGateSettle, Effect: changed, Claim: claim, Disposition: "Succeeded", EvidenceDigest: strings.Repeat("d", 64)}},
+				{uncertain, store.WorkflowActivationMutation{Kind: store.WorkflowGateResolve, Effect: changed, Claim: claim, Disposition: "Succeeded", EvidenceDigest: strings.Repeat("d", 64), ProofDigest: strings.Repeat("f", 64)}},
+			}
+			for _, item := range cases {
+				item.mutation.ExpectedVersion = item.gate.Version
+				result, err := store.ApplyWorkflowActivation(item.gate, item.mutation, now)
+				if !errors.Is(err, store.ErrConflict) || result.DispatchGranted || result.Changed {
+					test.Fatalf("%s accepted changed %s: result=%+v error=%v", item.mutation.Kind, name, result, err)
+				}
+			}
+		})
+	}
+}
+
 func TestWorkflowActivationRequiresFiniteBounds(test *testing.T) {
 	gate, effect, _, now := workflowGateFixture(test)
 	for _, maxEffects := range []int{0, store.WorkflowGateMaxEffects + 1} {
@@ -153,6 +252,44 @@ func TestWorkflowActivationReservesRoomForStopAndSettlement(test *testing.T) {
 	}
 }
 
+func TestWorkflowActivationTaskObservationMaintainsSnapshotAndCapacity(test *testing.T) {
+	gate, effect, claim, now := workflowGateFixture(test)
+	effect.Plane = "communication"
+	observation := store.WorkflowTaskObservation{Protocol: store.WorkflowTaskA2AGRPC, ActionDigest: strings.Repeat("e", 64),
+		TaskID: strings.Repeat("<", 128), ContextID: strings.Repeat("<", 128)}
+	gate = workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateRegister, Effect: effect}, now).Activation
+	claim.Kind, claim.Namespace, claim.UID = strings.Repeat("<", 64), strings.Repeat("<", 63), strings.Repeat("<", 128)
+	claim.Claimant, claim.ProcessNonce = strings.Repeat("<", 128), strings.Repeat("<", 128)
+	gate = workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateCommit, Effect: effect, Claim: claim}, now).Activation
+	for _, malformed := range []store.WorkflowTaskObservation{
+		{Protocol: "rest", ActionDigest: observation.ActionDigest, TaskID: "task", ContextID: "context"},
+		{Protocol: store.WorkflowTaskA2AGRPC, TaskID: "task", ContextID: "context"},
+		{Protocol: store.WorkflowTaskA2AGRPC, ActionDigest: observation.ActionDigest, TaskID: strings.Repeat("a", 129), ContextID: "context"},
+		{Protocol: store.WorkflowTaskA2AGRPC, ActionDigest: observation.ActionDigest, TaskID: "task", ContextID: "context\tother"},
+		{Protocol: store.WorkflowTaskA2AGRPC, ActionDigest: observation.ActionDigest, TaskID: string([]byte{0xff}), ContextID: "context"},
+	} {
+		if _, err := store.ApplyWorkflowActivation(gate, store.WorkflowActivationMutation{ExpectedVersion: gate.Version, Kind: store.WorkflowGateObserveTask, Effect: effect, Claim: claim, TaskObservation: malformed}, now); !errors.Is(err, store.ErrConflict) {
+			test.Fatalf("malformed observation accepted: %+v %v", malformed, err)
+		}
+	}
+	observed := workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateObserveTask, Effect: effect, Claim: claim, TaskObservation: observation}, gate.Spec.ExpiresAt.Add(time.Hour))
+	if observed.DispatchGranted || observed.OwnerActivated || gate.Effects[effect.ID].TaskObservation != nil {
+		test.Fatal("expired observation granted execution or modified its prior snapshot")
+	}
+	gate = observed.Activation
+	repeated := workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateObserveTask, Effect: effect, Claim: claim, TaskObservation: observation}, now)
+	repeated.Activation.Effects[effect.ID].TaskObservation.TaskID = "caller-mutated"
+	if *gate.Effects[effect.ID].TaskObservation != observation {
+		test.Fatal("returned observation aliases the caller's prior snapshot")
+	}
+	gate = workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateStop, StopID: strings.Repeat("<", 128), StopMode: store.WorkflowGateStopping}, now).Activation
+	gate = workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateSettle, Effect: effect, Claim: claim, Disposition: "Succeeded", EvidenceDigest: strings.Repeat("d", 64)}, now).Activation
+	gate = workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateDrain, StopID: strings.Repeat("<", 128)}, now).Activation
+	if store.ValidateWorkflowActivation(gate) != nil || *gate.Effects[effect.ID].TaskObservation != observation {
+		test.Fatal("maximum observation exhausted reserved stop and settlement capacity")
+	}
+}
+
 func TestWorkflowActivationRejectsMalformedRetainedState(test *testing.T) {
 	gate, effect, claim, now := workflowGateFixture(test)
 	gate = workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateRegister, Effect: effect}, now).Activation
@@ -171,5 +308,46 @@ func TestWorkflowActivationRejectsMalformedRetainedState(test *testing.T) {
 	}
 	if result, err := store.ApplyWorkflowActivation(gate, store.WorkflowActivationMutation{ExpectedVersion: gate.Version, Kind: store.WorkflowGateCommit, Effect: effect, Claim: claim}, now); !errors.Is(err, store.ErrConflict) || result.DispatchGranted {
 		test.Fatal("malformed retained state produced dispatch authority")
+	}
+}
+
+func TestWorkflowActivationCancellationSupersedesQuiescence(test *testing.T) {
+	for _, state := range []string{"quiescing", "drained", "uncertain", "legacy"} {
+		test.Run(state, func(test *testing.T) {
+			gate, effect, claim, now := workflowGateFixture(test)
+			gate = workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateRegister, Effect: effect}, now).Activation
+			gate = workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateCommit, Effect: effect, Claim: claim}, now).Activation
+			gate = workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateStop, StopID: "handoff-1", StopMode: store.WorkflowGateQuiescing}, now).Activation
+			if state == "drained" {
+				gate = workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateSettle, Effect: effect, Claim: claim, Disposition: "Succeeded", EvidenceDigest: strings.Repeat("d", 64)}, now).Activation
+				gate = workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateDrain, StopID: "handoff-1"}, now).Activation
+			}
+			if state == "uncertain" {
+				gate = workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateSettle, Effect: effect, Claim: claim, Disposition: "Uncertain", EvidenceDigest: strings.Repeat("d", 64)}, now).Activation
+			}
+			if state == "legacy" {
+				gate.QuiesceID = ""
+			}
+			if _, err := store.ApplyWorkflowActivation(gate, store.WorkflowActivationMutation{ExpectedVersion: gate.Version, Kind: store.WorkflowGateStop, StopID: "handoff-1", StopMode: store.WorkflowGateStopping}, now); !errors.Is(err, store.ErrConflict) {
+				test.Fatal("handoff operation ID was reused for a different cancellation")
+			}
+			cancelled := workflowGateApply(test, gate, store.WorkflowActivationMutation{Kind: store.WorkflowGateStop, StopID: "cancel-1", StopMode: store.WorkflowGateStopping}, now)
+			if cancelled.DispatchGranted || cancelled.Activation.StopID != "cancel-1" || cancelled.Activation.StopMode != store.WorkflowGateStopping || cancelled.Activation.Epoch != gate.Epoch+1 {
+				test.Fatal("cancellation did not durably fence the handoff")
+			}
+			if cancelled.Activation.QuiesceID != "handoff-1" {
+				test.Fatal("cancellation discarded the original quiescence identity")
+			}
+			if state == "uncertain" && cancelled.Activation.Mode != store.WorkflowGateUncertain {
+				test.Fatal("cancellation hid an uncertain effect")
+			}
+			if _, err := store.ApplyWorkflowActivation(cancelled.Activation, store.WorkflowActivationMutation{ExpectedVersion: cancelled.Activation.Version, Kind: store.WorkflowGateDrain, StopID: "handoff-1"}, now); !errors.Is(err, store.ErrConflict) {
+				test.Fatal("superseded handoff still controlled drain")
+			}
+			repeated := workflowGateApply(test, cancelled.Activation, store.WorkflowActivationMutation{Kind: store.WorkflowGateStop, StopID: "cancel-1", StopMode: store.WorkflowGateStopping}, now)
+			if repeated.Changed || repeated.DispatchGranted {
+				test.Fatal("matching cancellation retry changed the fence")
+			}
+		})
 	}
 }

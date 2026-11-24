@@ -112,3 +112,41 @@ func TestModelSessionCapabilityCarriesExactCandidateBinding(t *testing.T) {
 		t.Fatal("invalid candidate digest accepted")
 	}
 }
+
+func TestModelSessionCapabilityBindsOneWorkflowTaskAndItsExpiry(t *testing.T) {
+	issuer, err := NewModelSessionCapabilityIssuer(capabilityKey(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.November, 23, 13, 0, 0, 0, time.UTC)
+	issuer.now = func() time.Time { return now }
+	task := &ModelSessionWorkflowTask{Workspace: "team-a", RunUID: "run-uid", Step: "plan", ActivationID: "act-1", Attempt: 1, InvocationID: "inv-1", TaskID: "task-1"}
+	binding := ModelSessionCapabilityBinding{Namespace: "team-a", AgentName: "planner", AgentIdentityName: "agent-identity-planner", InstanceName: "planner-r1", InstanceUID: "instance-uid", SessionID: "session-1", ModelName: "gpt-4o", ModelResourceVersion: 9, WorkflowTask: task}
+	token, err := issuer.IssueUntil(binding, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := issuer.VerifyClaims(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.WorkflowTask == nil || *claims.WorkflowTask != *task || !claims.ExpiresAt.Time.Equal(now.Add(2*time.Minute)) {
+		t.Fatalf("claims task=%#v expires=%v", claims.WorkflowTask, claims.ExpiresAt)
+	}
+	later, err := issuer.IssueUntil(binding, now.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims, err := issuer.VerifyClaims(later); err != nil || !claims.ExpiresAt.Time.Equal(now.Add(time.Hour)) {
+		t.Fatalf("a later bound extended the TTL: %v %v", claims, err)
+	}
+	if _, err := issuer.IssueUntil(binding, now); err == nil {
+		t.Fatal("issuer accepted a bound that already passed")
+	}
+	partial := *task
+	partial.TaskID = ""
+	binding.WorkflowTask = &partial
+	if _, err := issuer.IssueUntil(binding, now.Add(time.Minute)); err == nil {
+		t.Fatal("issuer accepted an incomplete workflow task binding")
+	}
+}
