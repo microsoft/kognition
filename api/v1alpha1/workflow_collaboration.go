@@ -68,16 +68,22 @@ type WorkflowCollaboration struct {
 	Peer       *CollaborationPeer       `json:"peer,omitempty" yaml:"peer,omitempty"`
 }
 
-// CollaborationMember binds a step-local alias to an Agent.
+// CollaborationMember binds a step-local alias to an Agent or to an ExternalAgent.
+// Exactly one of AgentRef and ExternalAgentRef is set.
 type CollaborationMember struct {
 	// Name is the stable step-local alias.
 	Name string `json:"name" yaml:"name"`
 
 	// AgentRef references the member Agent.
-	AgentRef AgentReference `json:"agentRef" yaml:"agentRef"`
+	AgentRef AgentReference `json:"agentRef,omitzero" yaml:"agentRef,omitempty"`
+
+	// ExternalAgentRef references a remote A2A agent declared by an ExternalAgent in
+	// the Workflow namespace. Data sent to it leaves the platform, so an
+	// ExternalAgentGrant is required.
+	ExternalAgentRef *LocalObjectReference `json:"externalAgentRef,omitempty" yaml:"externalAgentRef,omitempty"`
 
 	// ServiceRef optionally pins one AgentService, in the Agent namespace, when
-	// the Agent has several serving configurations.
+	// the Agent has several serving configurations. It is not valid with ExternalAgentRef.
 	ServiceRef *LocalObjectReference `json:"serviceRef,omitempty" yaml:"serviceRef,omitempty"`
 }
 

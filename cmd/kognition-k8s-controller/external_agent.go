@@ -9,8 +9,12 @@ import (
 
 	"github.com/kognition-ai/kognition/internal/admission"
 	"github.com/kognition-ai/kognition/internal/collaboration/externaltransport"
+	"github.com/kognition-ai/kognition/internal/collaboration/router"
 	intctrl "github.com/kognition-ai/kognition/internal/controller"
 	"github.com/kognition-ai/kognition/internal/externalagent"
+	"github.com/kognition-ai/kognition/internal/gateway"
+	"github.com/kognition-ai/kognition/internal/observability"
+	"github.com/kognition-ai/kognition/internal/store"
 )
 
 const (
@@ -58,6 +62,32 @@ func externalAgentReconcilerOptions(lookup func(string) string) []intctrl.Extern
 		intctrl.WithExternalAgentEgressPolicy(allowList),
 		intctrl.WithExternalAgentCardObserver(externaltransport.CardObserver{Resolver: externalagent.DefaultResolver()}),
 	}
+}
+
+// externalAgentTransportFactory returns the transport factory for ExternalAgent collaboration members, or nil when
+// external agents are disabled. Its limiter is shared by every activation of the process. An audit log is required:
+// without one the transport could contact a remote agent unrecorded.
+func externalAgentTransportFactory(lookup func(string) string, st store.Store, audit *observability.CognitiveAuditLog) (router.TransportFactory, error) {
+	enabled, err := externalAgentsEnabled(lookup)
+	if err != nil || !enabled {
+		return nil, err
+	}
+	if st == nil || audit == nil {
+		return nil, fmt.Errorf("external agents require the resource store and the audit log")
+	}
+	allowList, err := externalAgentAllowList(lookup)
+	if err != nil {
+		return nil, err
+	}
+	return externaltransport.Factory{
+		Store:       st,
+		Allow:       allowList,
+		Resolver:    externalagent.DefaultResolver(),
+		Credentials: gateway.NewStoreAPIKeyResolver(st, nil),
+		Client:      externaltransport.NewRemoteClient(externaltransport.RemoteOptions{}),
+		Audit:       &externaltransport.Auditor{Log: audit},
+		Limiter:     externaltransport.NewLimiter(),
+	}, nil
 }
 
 // enableExternalAgentAdmission makes the ExternalAgent validator enforce the operator egress allow-list. It

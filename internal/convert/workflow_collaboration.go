@@ -31,6 +31,10 @@ func workflowCollaborationToK8s(in *api.WorkflowCollaboration) *k8s.WorkflowColl
 				Name:     m.Name,
 				AgentRef: k8s.AgentReference{Name: m.AgentRef.Name, Namespace: m.AgentRef.Namespace},
 			}
+			if m.ExternalAgentRef != nil {
+				ref := localRefToK8s(m.ExternalAgentRef.Name)
+				out.Members[i].ExternalAgentRef = &ref
+			}
 			if m.ServiceRef != nil {
 				ref := localRefToK8s(m.ServiceRef.Name)
 				out.Members[i].ServiceRef = &ref
@@ -86,6 +90,9 @@ func workflowCollaborationFromK8s(in *k8s.WorkflowCollaboration) *api.WorkflowCo
 			out.Members[i] = api.CollaborationMember{
 				Name:     m.Name,
 				AgentRef: api.AgentReference{Name: m.AgentRef.Name, Namespace: m.AgentRef.Namespace},
+			}
+			if m.ExternalAgentRef != nil {
+				out.Members[i].ExternalAgentRef = &api.LocalObjectReference{Name: m.ExternalAgentRef.Name}
 			}
 			if m.ServiceRef != nil {
 				out.Members[i].ServiceRef = &api.LocalObjectReference{Name: m.ServiceRef.Name}

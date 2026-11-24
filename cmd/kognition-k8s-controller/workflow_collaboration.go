@@ -18,8 +18,10 @@ import (
 	apiv1alpha1 "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/admission"
 	"github.com/kognition-ai/kognition/internal/collaboration/jobtransport"
+	"github.com/kognition-ai/kognition/internal/collaboration/router"
 	"github.com/kognition-ai/kognition/internal/collaboration/runner"
 	intctrl "github.com/kognition-ai/kognition/internal/controller"
+	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/store"
 )
 
@@ -40,7 +42,7 @@ func workflowCollaborationEnabled(lookup func(string) string) (bool, error) {
 // workflowCollaborationRunnerFromEnv returns nil, nil unless collaboration is enabled. Every member task runs as
 // an AgentJob through the same path as ordinary workflow steps, and the strategy state lives in a ConfigMap
 // ledger beside the run.
-func workflowCollaborationRunnerFromEnv(mgr ctrl.Manager, st store.Store, policy intctrl.CommunicationPolicyAuthorizer, logger *zap.Logger) (intctrl.WorkflowCollaborationRunner, error) {
+func workflowCollaborationRunnerFromEnv(mgr ctrl.Manager, st store.Store, policy intctrl.CommunicationPolicyAuthorizer, audit *observability.CognitiveAuditLog, logger *zap.Logger) (intctrl.WorkflowCollaborationRunner, error) {
 	enabled, err := workflowCollaborationEnabled(os.Getenv)
 	if err != nil || !enabled {
 		return nil, err
@@ -52,20 +54,24 @@ func workflowCollaborationRunnerFromEnv(mgr ctrl.Manager, st store.Store, policy
 	if err != nil {
 		return nil, fmt.Errorf("create collaboration clientset: %w", err)
 	}
-	instance, err := newWorkflowCollaborationRunner(st, clientset.CoreV1().ConfigMaps, policy)
+	external, err := externalAgentTransportFactory(os.Getenv, st, audit)
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("workflow collaboration enabled")
+	instance, err := newWorkflowCollaborationRunner(st, clientset.CoreV1().ConfigMaps, policy, external)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("workflow collaboration enabled", zap.Bool("externalAgents", external != nil))
 	return instance, nil
 }
 
-func newWorkflowCollaborationRunner(st store.Store, configMaps func(string) corev1client.ConfigMapInterface, policy intctrl.CommunicationPolicyAuthorizer) (*runner.Runner, error) {
+func newWorkflowCollaborationRunner(st store.Store, configMaps func(string) corev1client.ConfigMapInterface, policy intctrl.CommunicationPolicyAuthorizer, external router.TransportFactory) (*runner.Runner, error) {
 	factory := jobtransport.Factory{Store: st}
 	if policy != nil {
 		factory.Authorize = policy.EvaluateDispatch
 	}
-	return runner.New(runner.Config{ConfigMaps: configMaps, Transports: factory, Owners: ledgerOwners})
+	return runner.New(runner.Config{ConfigMaps: configMaps, Transports: router.Factory{Internal: factory, External: external}, Owners: ledgerOwners})
 }
 
 // ledgerOwners makes the ledger ConfigMap a dependent of the Workflow or WorkflowRun, so it is garbage-collected
@@ -74,13 +80,14 @@ func ledgerOwners(run intctrl.WorkflowCollaborationRun) []metav1.OwnerReference 
 	return []metav1.OwnerReference{{APIVersion: apiv1alpha1.APIVersion, Kind: run.OwnerKind, Name: run.RunName, UID: types.UID(run.RunUID)}}
 }
 
-// enableCollaborationAdmission lets the Workflow validator admit collaboration steps. It reports whether a
+// enableCollaborationAdmission lets the Workflow validator admit collaboration steps, and ExternalAgent
+// members when externalAgents is true. It reports whether a
 // validator was found.
-func enableCollaborationAdmission(hooks []admission.ValidatingHook) bool {
+func enableCollaborationAdmission(hooks []admission.ValidatingHook, externalAgents bool) bool {
 	found := false
 	for i, hook := range hooks {
 		if _, ok := hook.(*admission.WorkflowValidator); ok {
-			hooks[i] = admission.NewWorkflowValidator(admission.WithCollaborationEnabled(true))
+			hooks[i] = admission.NewWorkflowValidator(admission.WithCollaborationEnabled(true), admission.WithExternalAgentsEnabled(externalAgents))
 			found = true
 		}
 	}

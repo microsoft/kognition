@@ -458,7 +458,7 @@ spec:
                                 by step-local alias.
                               items:
                                 description: CollaborationMember binds a step-local
-                                  alias to an Agent.
+                                  alias to an Agent or to an ExternalAgent.
                                 properties:
                                   agentRef:
                                     description: AgentRef references the member Agent.
@@ -476,6 +476,19 @@ spec:
                                     required:
                                     - name
                                     type: object
+                                  externalAgentRef:
+                                    description: |-
+                                      ExternalAgentRef references a remote A2A agent declared by an ExternalAgent in
+                                      the Workflow namespace. Data sent to it leaves the platform, so an
+                                      ExternalAgentGrant is required.
+                                    properties:
+                                      name:
+                                        description: Name is the name of the referenced
+                                          resource.
+                                        type: string
+                                    required:
+                                    - name
+                                    type: object
                                   name:
                                     description: Name is the stable step-local alias.
                                     pattern: ^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$
@@ -483,7 +496,7 @@ spec:
                                   serviceRef:
                                     description: |-
                                       ServiceRef optionally pins one AgentService, in the Agent namespace, when
-                                      the Agent has several serving configurations.
+                                      the Agent has several serving configurations. It is not valid with externalAgentRef.
                                     properties:
                                       name:
                                         description: Name is the name of the referenced
@@ -493,9 +506,14 @@ spec:
                                     - name
                                     type: object
                                 required:
-                                - agentRef
                                 - name
                                 type: object
+                                x-kubernetes-validations:
+                                - message: exactly one of agentRef and externalAgentRef
+                                    is required
+                                  rule: has(self.agentRef) != has(self.externalAgentRef)
+                                - message: serviceRef is not valid with externalAgentRef
+                                  rule: '!has(self.externalAgentRef) || !has(self.serviceRef)'
                               maxItems: 8
                               minItems: 2
                               type: array

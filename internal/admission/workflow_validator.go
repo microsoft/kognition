@@ -17,11 +17,19 @@ import (
 
 // WorkflowValidator validates Workflow resources on CREATE and UPDATE.
 type WorkflowValidator struct {
-	collaborationEnabled bool
+	collaborationEnabled  bool
+	externalAgentsEnabled bool
 }
 
 // WorkflowValidatorOption customizes a WorkflowValidator.
 type WorkflowValidatorOption func(*WorkflowValidator)
+
+// WithExternalAgentsEnabled controls whether collaboration members may reference
+// an ExternalAgent. It is disabled by default: data sent to an external agent
+// leaves the platform, so the operator must enable the feature.
+func WithExternalAgentsEnabled(enabled bool) WorkflowValidatorOption {
+	return func(v *WorkflowValidator) { v.externalAgentsEnabled = enabled }
+}
 
 // WithCollaborationEnabled controls whether collaboration steps are admitted.
 // Collaboration is disabled by default: execution is not qualified, so the

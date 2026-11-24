@@ -75,17 +75,26 @@ type WorkflowCollaboration struct {
 	Peer *CollaborationPeer `json:"peer,omitempty"`
 }
 
-// CollaborationMember binds a step-local alias to an Agent.
+// CollaborationMember binds a step-local alias to an Agent or to an ExternalAgent.
+// +kubebuilder:validation:XValidation:rule="has(self.agentRef) != has(self.externalAgentRef)",message="exactly one of agentRef and externalAgentRef is required"
+// +kubebuilder:validation:XValidation:rule="!has(self.externalAgentRef) || !has(self.serviceRef)",message="serviceRef is not valid with externalAgentRef"
 type CollaborationMember struct {
 	// Name is the stable step-local alias.
 	// +kubebuilder:validation:Pattern=`^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$`
 	Name string `json:"name"`
 
 	// AgentRef references the member Agent.
-	AgentRef AgentReference `json:"agentRef"`
+	// +optional
+	AgentRef AgentReference `json:"agentRef,omitzero"`
+
+	// ExternalAgentRef references a remote A2A agent declared by an ExternalAgent in
+	// the Workflow namespace. Data sent to it leaves the platform, so an
+	// ExternalAgentGrant is required.
+	// +optional
+	ExternalAgentRef *LocalObjectReference `json:"externalAgentRef,omitempty"`
 
 	// ServiceRef optionally pins one AgentService, in the Agent namespace, when
-	// the Agent has several serving configurations.
+	// the Agent has several serving configurations. It is not valid with externalAgentRef.
 	// +optional
 	ServiceRef *LocalObjectReference `json:"serviceRef,omitempty"`
 }

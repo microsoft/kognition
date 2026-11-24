@@ -60,7 +60,7 @@ func (v *WorkflowValidator) validateCollaborationStep(i int, step v1alpha1.Workf
 		errs = append(errs, fmt.Sprintf("%s.protocol %q is invalid (must be %q)", cpath, c.Protocol, v1alpha1.CollaborationProtocolA2A))
 	}
 
-	aliases, memberErrs := validateCollaborationMembers(cpath, c.Members, workflowNamespace)
+	aliases, memberErrs := v.validateCollaborationMembers(cpath, c.Members, workflowNamespace)
 	errs = append(errs, memberErrs...)
 
 	outgoing, interactionErrs := validateCollaborationInteractions(cpath, c, aliases)
@@ -89,7 +89,7 @@ func validateCollaborationTimeout(path, timeout string) []string {
 	return nil
 }
 
-func validateCollaborationMembers(cpath string, members []v1alpha1.CollaborationMember, workflowNamespace string) (map[string]struct{}, []string) {
+func (v *WorkflowValidator) validateCollaborationMembers(cpath string, members []v1alpha1.CollaborationMember, workflowNamespace string) (map[string]struct{}, []string) {
 	var errs []string
 	aliases := make(map[string]struct{}, len(members))
 
@@ -98,6 +98,7 @@ func validateCollaborationMembers(cpath string, members []v1alpha1.Collaboration
 	}
 
 	agents := make(map[collaborationMemberKey]string, len(members))
+	externals := make(map[string]string, len(members))
 	for j, m := range members {
 		mpath := fmt.Sprintf("%s.members[%d]", cpath, j)
 		if !collaborationAliasPattern.MatchString(m.Name) {
@@ -107,9 +108,30 @@ func validateCollaborationMembers(cpath string, members []v1alpha1.Collaboration
 		}
 		aliases[m.Name] = struct{}{}
 
-		if m.AgentRef.Name == "" {
+		switch {
+		case m.ExternalAgentRef != nil && m.AgentRef.Name != "":
+			errs = append(errs, fmt.Sprintf("%s must set exactly one of agentRef and externalAgentRef", mpath))
+		case m.ExternalAgentRef != nil:
+			if !v.externalAgentsEnabled {
+				errs = append(errs, fmt.Sprintf("%s.externalAgentRef is not enabled: external agents have not been enabled by the operator", mpath))
+			}
+			if m.AgentRef.Namespace != "" {
+				errs = append(errs, fmt.Sprintf("%s.agentRef must be empty when externalAgentRef is set", mpath))
+			}
+			if m.ExternalAgentRef.Name == "" {
+				errs = append(errs, fmt.Sprintf("%s.externalAgentRef.name is required", mpath))
+			} else if prev, dup := externals[m.ExternalAgentRef.Name]; dup {
+				errs = append(errs, fmt.Sprintf("%s.externalAgentRef references ExternalAgent %q already used by member %q", mpath, m.ExternalAgentRef.Name, prev))
+			} else {
+				externals[m.ExternalAgentRef.Name] = m.Name
+			}
+			if m.ServiceRef != nil {
+				errs = append(errs, fmt.Sprintf("%s.serviceRef is not valid with externalAgentRef", mpath))
+			}
+			continue
+		case m.AgentRef.Name == "":
 			errs = append(errs, fmt.Sprintf("%s.agentRef.name is required", mpath))
-		} else {
+		default:
 			ns := m.AgentRef.Namespace
 			if ns == "" {
 				ns = workflowNamespace

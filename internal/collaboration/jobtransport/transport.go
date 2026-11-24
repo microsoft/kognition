@@ -72,6 +72,8 @@ func New(cfg Config) (*Transport, error) {
 	t := &Transport{cfg: cfg, members: map[string]string{}, refused: map[string]string{}}
 	for _, m := range run.Spec.Members {
 		switch {
+		case m.ExternalAgentRef != nil:
+			t.refused[m.Name] = "member is an ExternalAgent, not an Agent"
 		case m.AgentRef.Namespace != "" && m.AgentRef.Namespace != run.Namespace:
 			t.refused[m.Name] = "members must be Agents in the Workflow namespace"
 		case m.ServiceRef != nil:

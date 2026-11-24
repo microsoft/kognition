@@ -33,7 +33,7 @@ func TestWorkflowCollaborationEnabled(t *testing.T) {
 
 func TestNewWorkflowCollaborationRunnerNeedsNoCertificates(t *testing.T) {
 	configMaps := kubefake.NewSimpleClientset().CoreV1().ConfigMaps
-	if _, err := newWorkflowCollaborationRunner(nil, configMaps, nil); err != nil {
+	if _, err := newWorkflowCollaborationRunner(nil, configMaps, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -42,13 +42,13 @@ func TestEnableCollaborationAdmissionReplacesOnlyTheWorkflowValidator(t *testing
 	other := admission.NewAgentValidator()
 	original := admission.NewWorkflowValidator()
 	hooks := []admission.ValidatingHook{other, original}
-	if !enableCollaborationAdmission(hooks) {
+	if !enableCollaborationAdmission(hooks, false) {
 		t.Fatal("workflow validator not found")
 	}
 	if hooks[0] != admission.ValidatingHook(other) || hooks[1] == admission.ValidatingHook(original) {
 		t.Fatal("unexpected hook replacement")
 	}
-	if enableCollaborationAdmission([]admission.ValidatingHook{other}) {
+	if enableCollaborationAdmission([]admission.ValidatingHook{other}, false) {
 		t.Fatal("reported a validator that is absent")
 	}
 }

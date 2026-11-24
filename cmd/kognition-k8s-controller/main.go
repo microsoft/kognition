@@ -394,7 +394,11 @@ func runControllerWithManager(
 			}
 		}
 	}
-	collaborationRunner, err := workflowCollaborationRunnerFromEnv(mgr, st, intctrl.NewCommunicationPolicyEngine(st, logger.Named("workflow-collaboration-policy")), logger)
+	externalOn, err := externalAgentsEnabled(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("configure external agents: %w", err)
+	}
+	collaborationRunner, err := workflowCollaborationRunnerFromEnv(mgr, st, intctrl.NewCommunicationPolicyEngine(st, logger.Named("workflow-collaboration-policy")), auditLog, logger)
 	if err != nil {
 		return fmt.Errorf("configure workflow collaboration: %w", err)
 	}
@@ -407,11 +411,9 @@ func runControllerWithManager(
 				adapter.SetCollaborationRunner(collaborationRunner)
 			}
 		}
-		enableCollaborationAdmission(assembly.validating)
+		enableCollaborationAdmission(assembly.validating, externalOn)
 	}
-	if enabled, err := externalAgentsEnabled(os.Getenv); err != nil {
-		return fmt.Errorf("configure external agents: %w", err)
-	} else if enabled {
+	if externalOn {
 		if _, err := enableExternalAgentAdmission(assembly.validating, os.Getenv); err != nil {
 			return fmt.Errorf("configure external agents: %w", err)
 		}
@@ -524,14 +526,16 @@ func runResourceWebhooksWithManager(options controllerOptions, logger *zap.Logge
 	}
 	mutating, validating := admission.ProductionHooksWithExecutionAuthority(st, opa.NewEngine(), runtimeApprovalDecisionAuthorityFromEnv(), runtimeApprovalExecutionWritersFromEnv(), runtimeApprovalAdmissionUsernamesFromEnv()...)
 	validating = append(validating, cognamespace.NewProductionCrossNamespaceHook(st))
+	externalOn, err := externalAgentsEnabled(os.Getenv)
+	if err != nil {
+		return err
+	}
 	if enabled, err := workflowCollaborationEnabled(os.Getenv); err != nil {
 		return err
 	} else if enabled {
-		enableCollaborationAdmission(validating)
+		enableCollaborationAdmission(validating, externalOn)
 	}
-	if enabled, err := externalAgentsEnabled(os.Getenv); err != nil {
-		return err
-	} else if enabled {
+	if externalOn {
 		if _, err := enableExternalAgentAdmission(validating, os.Getenv); err != nil {
 			return err
 		}

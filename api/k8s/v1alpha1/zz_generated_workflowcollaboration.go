@@ -77,6 +77,11 @@ func (in *CollaborationLimits) DeepCopy() *CollaborationLimits {
 func (in *CollaborationMember) DeepCopyInto(out *CollaborationMember) {
 	*out = *in
 	out.AgentRef = in.AgentRef
+	if in.ExternalAgentRef != nil {
+		in, out := &in.ExternalAgentRef, &out.ExternalAgentRef
+		*out = new(LocalObjectReference)
+		**out = **in
+	}
 	if in.ServiceRef != nil {
 		in, out := &in.ServiceRef, &out.ServiceRef
 		*out = new(LocalObjectReference)
