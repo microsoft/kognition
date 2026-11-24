@@ -776,6 +776,11 @@ kbIngester:
   # must reside for ingestion tasks. Configured via KOGNITION_ALLOWED_TOKEN_FILE_DIR
   # on the ingester container (defaults to /var/run/secrets).
   allowedTokenFileDir: "/var/run/secrets"
+  # Embedding endpoint hostnames that may receive the ingester's own OpenAI key
+  # or Azure AD token (KOGNITION_INGEST_TRUSTED_EMBEDDING_HOSTS). api.openai.com
+  # and Azure OpenAI hosts are always trusted; Models that bring their own
+  # credentialRef key never need an entry.
+  trustedEmbeddingHosts: []
   resources:
     requests:
       cpu: 100m
