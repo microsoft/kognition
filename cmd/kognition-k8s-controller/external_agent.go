@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kognition-ai/kognition/internal/admission"
+	"github.com/kognition-ai/kognition/internal/collaboration/externaltransport"
 	intctrl "github.com/kognition-ai/kognition/internal/controller"
 	"github.com/kognition-ai/kognition/internal/externalagent"
 )
@@ -53,7 +54,10 @@ func externalAgentReconcilerOptions(lookup func(string) string) []intctrl.Extern
 	if err != nil {
 		return nil
 	}
-	return []intctrl.ExternalAgentReconcilerOption{intctrl.WithExternalAgentEgressPolicy(allowList)}
+	return []intctrl.ExternalAgentReconcilerOption{
+		intctrl.WithExternalAgentEgressPolicy(allowList),
+		intctrl.WithExternalAgentCardObserver(externaltransport.CardObserver{Resolver: externalagent.DefaultResolver()}),
+	}
 }
 
 // enableExternalAgentAdmission makes the ExternalAgent validator enforce the operator egress allow-list. It

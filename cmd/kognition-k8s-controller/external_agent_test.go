@@ -58,8 +58,8 @@ func TestExternalAgentReconcilerOptionsFollowTheFlag(t *testing.T) {
 	if got := externalAgentReconcilerOptions(env("false")); len(got) != 0 {
 		t.Fatalf("disabled feature must configure no egress policy, got %d options", len(got))
 	}
-	if got := externalAgentReconcilerOptions(env("true")); len(got) != 1 {
-		t.Fatalf("enabled feature must configure the egress policy, got %d options", len(got))
+	if got := externalAgentReconcilerOptions(env("true")); len(got) != 2 {
+		t.Fatalf("enabled feature must configure the egress policy and the card observer, got %d options", len(got))
 	}
 }
 

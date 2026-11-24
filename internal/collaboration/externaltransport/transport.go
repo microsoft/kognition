@@ -224,6 +224,10 @@ func (t *Transport) Send(ctx context.Context, msg collaboration.Message) error {
 	call := callFor(t.gate.Namespace, target, token)
 	taskID, err := t.cfg.Client.Send(ctx, call, msg.DispatchID, text)
 	if err != nil {
+		if errors.Is(err, ErrNotSent) {
+			// Nothing reached the agent: settle as not sent instead of waiting.
+			return t.notSent(ctx, msg, agent, scrub(err, token))
+		}
 		return scrub(err, token)
 	}
 	if err := t.cfg.Handles.Put(ctx, msg.DispatchID, encodeHandle(handleTask, taskID, t.cfg.Now())); err != nil {
