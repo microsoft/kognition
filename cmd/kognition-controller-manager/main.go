@@ -186,9 +186,9 @@ func newControllerManagerWithWorkloadIdentity(st store.Store, logger *zap.Logger
 
 	var kbIngester *ingestion.HTTPLauncher
 	if endpoint := os.Getenv("KOGNITION_KB_INGESTER_URL"); endpoint != "" {
-		kbIngester = ingestion.NewHTTPLauncher(st, endpoint, nil, logger).
-			WithBearerToken(os.Getenv("KOGNITION_KB_INGESTER_AUTH_TOKEN"))
-		logger.Info("standalone knowledge-base ingestion enabled", zap.String("endpoint", endpoint), zap.Bool("authenticated", strings.TrimSpace(os.Getenv("KOGNITION_KB_INGESTER_AUTH_TOKEN")) != ""))
+		token := strings.TrimSpace(os.Getenv("KOGNITION_KB_INGESTER_AUTH_TOKEN"))
+		kbIngester = ingestion.NewHTTPLauncher(st, endpoint, nil, logger).WithBearerToken(token)
+		logger.Info("standalone knowledge-base ingestion enabled", zap.String("endpoint", endpoint), zap.Bool("authenticated", token != ""))
 	}
 	// Register the AgentIdentity reconciler before the Agent dependency watch.
 	agentIdentityReconciler := controller.NewAgentIdentityReconciler(st, logger.Named("agent-identity-reconciler"))

@@ -253,6 +253,8 @@ class TaskRegistry:
 
 class IngestHandler(BaseHTTPRequestHandler):
     registry = TaskRegistry()
+    # Bound every socket read so an idle or stalled peer cannot hold a thread, including before authentication.
+    timeout = 30
     # Bearer token every caller except /healthz must present; None disables the check.
     auth_token: str | None = None
 
@@ -272,7 +274,11 @@ class IngestHandler(BaseHTTPRequestHandler):
             pending = 0
         if pending > 0:
             self.rfile.read(pending)
-        self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+        self._write_json(
+            HTTPStatus.UNAUTHORIZED,
+            {"error": "unauthorized"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
         return False
 
     def do_GET(self) -> None:
@@ -347,10 +353,14 @@ class IngestHandler(BaseHTTPRequestHandler):
         task_id = urllib.parse.unquote(self.path[len(prefix) :])
         return task_id or None
 
-    def _write_json(self, status: HTTPStatus, value: dict[str, Any]) -> None:
+    def _write_json(
+        self, status: HTTPStatus, value: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> None:
         body = json.dumps(value, separators=(",", ":")).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        for name, header_value in (headers or {}).items():
+            self.send_header(name, header_value)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

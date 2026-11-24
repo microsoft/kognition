@@ -299,7 +299,9 @@ def _fetch_url(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
     uri = source["uri"]
     current_uri = uri
     limit = _max_document_bytes()
-    with _pinned_http_client(timeout=30.0) as client:
+    # A redirect may change the hostname while the pinned address stays the same, so never reuse a
+    # connection whose TLS identity was verified for another hostname.
+    with _pinned_http_client(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=0)) as client:
         for redirect_count in range(_MAX_URL_REDIRECTS + 1):
             _validate_remote_url(current_uri, allow_private_http=True)
             with client.stream("GET", current_uri) as response:
@@ -665,7 +667,7 @@ class Embedder:
 def _build_embedder(cfg: dict[str, Any], dimension: int, env: dict[str, str] | None = None) -> Embedder:
     provider = (cfg.get("provider") or "openai").lower()
     model = cfg.get("model") or "text-embedding-3-small"
-    active_env = {**os.environ, **env} if env is not None else os.environ
+    active_env = {**os.environ, **env} if env is not None else dict(os.environ)
     base_url = cfg.get("baseUrl")
     requested_dimensions = cfg.get("dimensions")
     if requested_dimensions is not None and (
@@ -781,7 +783,7 @@ def _build_azure_credential(env: dict[str, str] | None = None):
     DefaultAzureCredential (default) for secretless auth on Azure. Driven by
     AZURE_CREDENTIAL_TYPE; falls back to a client secret when one is set,
     otherwise DefaultAzureCredential (managed identity / workload identity)."""
-    active_env = {**os.environ, **env} if env is not None else os.environ
+    active_env = {**os.environ, **env} if env is not None else dict(os.environ)
     cred_type = active_env.get("AZURE_CREDENTIAL_TYPE", "").strip().lower()
     tenant_id = active_env.get("AZURE_TENANT_ID", "")
     client_id = active_env.get("AZURE_CLIENT_ID", "")

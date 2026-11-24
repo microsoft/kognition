@@ -1508,3 +1508,31 @@ def test_fetch_url_follows_relative_redirect_on_original_hostname(pinned_env):
     assert documents == [("moved", "https://docs.example/old")]
     assert [r.headers["host"] for r in sent] == ["docs.example", "docs.example"]
     assert [r.url.host for r in sent] == ["93.184.216.34", "93.184.216.34"]
+
+def test_pinned_client_brackets_ipv6_answers(pinned_env):
+    monkeypatch, sent = pinned_env
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2606:2800:220:1::1", 443, 0, 0))],
+    )
+
+    with ingest._pinned_http_client() as client:
+        client.get("https://docs.example:8443/page")
+
+    assert str(sent[0].url) == "https://[2606:2800:220:1::1]:8443/page"
+    assert sent[0].headers["host"] == "docs.example:8443"
+
+
+def test_fetch_url_never_reuses_connections_across_redirect_hostnames(monkeypatch):
+    captured = {}
+
+    def fake_client(**kwargs):
+        captured.update(kwargs)
+        return httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=b"ok")))
+
+    monkeypatch.setattr(ingest, "_pinned_http_client", fake_client)
+    monkeypatch.setattr(ingest, "_validate_remote_url", lambda *_a, **_k: None)
+
+    assert list(ingest._fetch_url({"uri": "https://docs.example/a.txt"}))
+    assert captured["limits"].max_keepalive_connections == 0

@@ -678,3 +678,19 @@ def test_http_requires_bearer_token_except_healthz(monkeypatch):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_unauthorized_responses_challenge_for_a_bearer_token(monkeypatch):
+    server, base = _authenticated_server(monkeypatch)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(base + "/v1/tasks/t1", timeout=5)
+        assert caught.value.code == 401
+        assert caught.value.headers["WWW-Authenticate"] == "Bearer"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_handler_bounds_socket_reads():
+    assert 0 < service.IngestHandler.timeout <= 60
