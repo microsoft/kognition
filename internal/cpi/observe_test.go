@@ -150,30 +150,30 @@ func TestObserveRecordsCompleteAndEmbedOutcomes(t *testing.T) {
 	if observed.Name() != "fake" {
 		t.Fatalf("Name() = %q, want fake", observed.Name())
 	}
-	completed, err := observed.Complete(context.Background(), &CompletionRequest{Model: "model-a"})
+	completed, err := observed.Complete(context.Background(), &CompletionRequest{Model: "model-a", Endpoint: "https://a.example"})
 	if err != nil || completed != driver.completed {
 		t.Fatalf("Complete() = (%v, %v), want the driver's response and nil error", completed, err)
 	}
-	embedded, err := observed.Embed(context.Background(), &EmbedRequest{Model: "model-b"})
+	embedded, err := observed.Embed(context.Background(), &EmbedRequest{Model: "model-b", Endpoint: "https://b.example"})
 	if err != nil || embedded != driver.embedded {
 		t.Fatalf("Embed() = (%v, %v), want the driver's response and nil error", embedded, err)
 	}
 
 	driver.completeErr = &ProviderError{Provider: "fake", Status: http.StatusTooManyRequests, Reason: ReasonRateLimited}
 	driver.embedErr = context.Canceled
-	if _, err := observed.Complete(context.Background(), &CompletionRequest{Model: "model-a"}); !errors.Is(err, driver.completeErr) {
+	if _, err := observed.Complete(context.Background(), &CompletionRequest{Model: "model-a", Endpoint: "https://a.example"}); !errors.Is(err, driver.completeErr) {
 		t.Fatalf("Complete() error = %v, want the driver's error returned unchanged", err)
 	}
-	if _, err := observed.Embed(context.Background(), &EmbedRequest{Model: "model-b"}); !errors.Is(err, context.Canceled) {
+	if _, err := observed.Embed(context.Background(), &EmbedRequest{Model: "model-b", Endpoint: "https://b.example"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Embed() error = %v, want the driver's error returned unchanged", err)
 	}
 
 	got := recorder.all()
 	want := []CallOutcome{
-		{Provider: "fake", Operation: OperationComplete, Model: "model-a"},
-		{Provider: "fake", Operation: OperationEmbed, Model: "model-b"},
-		{Provider: "fake", Operation: OperationComplete, Model: "model-a", Reason: ReasonRateLimited, ProviderFault: true},
-		{Provider: "fake", Operation: OperationEmbed, Model: "model-b", Reason: ReasonCanceled},
+		{Provider: "fake", Operation: OperationComplete, Model: "model-a", Endpoint: "https://a.example"},
+		{Provider: "fake", Operation: OperationEmbed, Model: "model-b", Endpoint: "https://b.example"},
+		{Provider: "fake", Operation: OperationComplete, Model: "model-a", Endpoint: "https://a.example", Reason: ReasonRateLimited, ProviderFault: true},
+		{Provider: "fake", Operation: OperationEmbed, Model: "model-b", Endpoint: "https://b.example", Reason: ReasonCanceled},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("recorded %d outcomes, want %d: %+v", len(got), len(want), got)
@@ -200,11 +200,36 @@ func TestObserveRecordsDurationAndToleratesNilRequests(t *testing.T) {
 		t.Fatalf("Embed(nil) error: %v", err)
 	}
 	for _, outcome := range recorder.all() {
-		if outcome.Model != "" || outcome.Duration < 0 {
-			t.Errorf("outcome = %+v, want an empty model and a non-negative duration", outcome)
+		if outcome.Model != "" || outcome.Endpoint != "" || outcome.Duration < 0 {
+			t.Errorf("outcome = %+v, want an empty model and endpoint and a non-negative duration", outcome)
 		}
 	}
 }
+
+func TestRecordersForwardsToEveryNonNilRecorderInOrder(t *testing.T) {
+	if Recorders() != nil || Recorders(nil, nil) != nil {
+		t.Fatal("Recorders() without any recorder must return nil so that Observe is a no-op")
+	}
+	single := &recordingRecorder{}
+	if got := Recorders(nil, single, nil); got != CallRecorder(single) {
+		t.Fatal("Recorders() with one recorder must return it directly")
+	}
+
+	var order []string
+	first := orderRecorder{name: "first", order: &order}
+	second := orderRecorder{name: "second", order: &order}
+	Recorders(first, nil, second).RecordCall(CallOutcome{Provider: "p"})
+	if len(order) != 2 || order[0] != "first" || order[1] != "second" {
+		t.Fatalf("forwarding order = %v, want [first second]", order)
+	}
+}
+
+type orderRecorder struct {
+	name  string
+	order *[]string
+}
+
+func (r orderRecorder) RecordCall(CallOutcome) { *r.order = append(*r.order, r.name) }
 
 func TestObservePreservesOptionalCapabilities(t *testing.T) {
 	tests := []struct {

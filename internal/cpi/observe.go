@@ -36,6 +36,10 @@ type CallOutcome struct {
 	Operation string
 	// Model is the provider model ID from the request.
 	Model string
+	// Endpoint is the provider endpoint from the request, empty when the driver
+	// default applies. It may carry credentials in its URL, so it must not be
+	// exported to metrics or logs; use it only to derive an opaque key.
+	Endpoint string
 	// Duration is the wall-clock time of the driver call.
 	Duration time.Duration
 	// Reason classifies a failure and is empty on success.
@@ -150,33 +154,61 @@ type observedContractCounterDriver struct {
 func (d *observedDriver) Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error) {
 	start := time.Now()
 	resp, err := d.Driver.Complete(ctx, req)
-	model := ""
+	var model, endpoint string
 	if req != nil {
-		model = req.Model
+		model, endpoint = req.Model, req.Endpoint
 	}
-	d.record(OperationComplete, model, start, err)
+	d.record(OperationComplete, model, endpoint, start, err)
 	return resp, err
 }
 
 func (d *observedDriver) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
 	start := time.Now()
 	resp, err := d.Driver.Embed(ctx, req)
-	model := ""
+	var model, endpoint string
 	if req != nil {
-		model = req.Model
+		model, endpoint = req.Model, req.Endpoint
 	}
-	d.record(OperationEmbed, model, start, err)
+	d.record(OperationEmbed, model, endpoint, start, err)
 	return resp, err
 }
 
-func (d *observedDriver) record(operation, model string, start time.Time, err error) {
+func (d *observedDriver) record(operation, model, endpoint string, start time.Time, err error) {
 	recorder := d.recorder()
 	if recorder == nil {
 		return
 	}
-	outcome := CallOutcome{Provider: d.Name(), Operation: operation, Model: model, Duration: time.Since(start)}
+	outcome := CallOutcome{Provider: d.Name(), Operation: operation, Model: model, Endpoint: endpoint, Duration: time.Since(start)}
 	if err != nil {
 		outcome.Reason, outcome.ProviderFault = ClassifyCallError(err)
 	}
 	recorder.RecordCall(outcome)
+}
+
+// Recorders combines recorders into one that forwards every outcome to each of
+// them in order. Nil recorders are skipped; with none left it returns nil, so the
+// result can be passed to Observe to mean "no observation".
+func Recorders(recorders ...CallRecorder) CallRecorder {
+	var active []CallRecorder
+	for _, recorder := range recorders {
+		if recorder != nil {
+			active = append(active, recorder)
+		}
+	}
+	switch len(active) {
+	case 0:
+		return nil
+	case 1:
+		return active[0]
+	default:
+		return multiRecorder(active)
+	}
+}
+
+type multiRecorder []CallRecorder
+
+func (m multiRecorder) RecordCall(outcome CallOutcome) {
+	for _, recorder := range m {
+		recorder.RecordCall(outcome)
+	}
 }
