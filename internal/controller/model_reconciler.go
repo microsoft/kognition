@@ -58,6 +58,9 @@ func (r *ModelReconciler) Reconcile(ctx context.Context, req Request) (Result, e
 	}
 
 	available, latency, reason, message := r.evaluate(ctx, req.Namespace, &model)
+	// Probe results can carry provider-controlled text; make it safe to persist.
+	reason = sanitizeConditionReason(reason, "ProbeFailed")
+	message = sanitizeConditionMessage(message)
 	model.Status.Available = available
 	model.Status.Latency = latency.String()
 	model.Status.LastCheck = time.Now().UTC().Format(time.RFC3339)

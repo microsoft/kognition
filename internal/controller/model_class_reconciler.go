@@ -770,6 +770,12 @@ func (r *ModelClassReconciler) handleDeletion(ctx context.Context, mc *v1alpha1.
 // probeHealth executes the configured health probe against the CPI driver.
 // Returns (passed bool, reason string, message string).
 func (r *ModelClassReconciler) probeHealth(ctx context.Context, mc *v1alpha1.ModelClass) (bool, string, string) {
+	passed, reason, message := r.runHealthProbe(ctx, mc)
+	// Probe results can carry provider-controlled text; make it safe to persist.
+	return passed, sanitizeConditionReason(reason, "ProbeFailed"), sanitizeConditionMessage(message)
+}
+
+func (r *ModelClassReconciler) runHealthProbe(ctx context.Context, mc *v1alpha1.ModelClass) (bool, string, string) {
 	probe := mc.Spec.HealthProbe
 	if probe == nil {
 		return true, "", ""
