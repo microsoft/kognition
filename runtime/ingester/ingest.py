@@ -421,6 +421,21 @@ def _is_git_text_candidate(filename: str) -> bool:
     return lower in _GIT_TEXT_BASENAMES
 
 
+def _git_subpath(raw: Any) -> str:
+    subpath = (raw or "").strip("/")
+    parts = re.split(r"[\\/]", subpath)
+    if os.path.isabs(subpath) or ".." in parts:
+        raise ValueError("git source path must stay inside the repository")
+    return subpath
+
+
+def _is_within(path: str, root: str) -> bool:
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:
+        return False
+
+
 def _fetch_git(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
     import subprocess
     import tempfile
@@ -428,7 +443,7 @@ def _fetch_git(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
     url = source["url"]
     _validate_remote_url(url)
     branch = source.get("branch") or "main"
-    subpath = (source.get("path") or "").strip("/")
+    subpath = _git_subpath(source.get("path"))
     limit = _max_document_bytes()
     max_documents = _max_documents_per_source()
     document_count = 0
@@ -443,13 +458,19 @@ def _fetch_git(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
             )
         except subprocess.CalledProcessError as exc:  # surface a helpful error
             raise RuntimeError(f"git clone failed: {(exc.stderr or '').strip() or exc}") from exc
-        root = os.path.join(tmp, subpath) if subpath else tmp
+        clone_root = os.path.realpath(tmp)
+        root = os.path.realpath(os.path.join(clone_root, subpath)) if subpath else clone_root
+        if not _is_within(root, clone_root):
+            raise ValueError("git source path must stay inside the repository")
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d != ".git"]
             for fn in sorted(filenames):
                 if not _is_git_text_candidate(fn):
                     continue
                 full = os.path.join(dirpath, fn)
+                # Cloned content is untrusted, so a link must never lead to a file outside the clone.
+                if os.path.islink(full):
+                    continue
                 try:
                     if os.path.getsize(full) > limit:
                         raise ValueError(f"document exceeds {limit} bytes")
@@ -462,7 +483,7 @@ def _fetch_git(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
                     raise ValueError(f"source exceeds {max_documents} documents")
                 text = _extract_text(data, fn)
                 if text.strip():
-                    rel = os.path.relpath(full, tmp)
+                    rel = os.path.relpath(full, clone_root)
                     yield text, f"git+{url}@{branch}#{rel}"
 
 

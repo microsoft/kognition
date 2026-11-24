@@ -424,6 +424,101 @@ def test_fetch_git_bounds_files_and_cleans_temporary_clone(monkeypatch):
     assert all(not os.path.exists(path) for path in clone_directories)
 
 
+def _allow_public_git_host(monkeypatch):
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+
+
+def _fake_git_clone(monkeypatch, populate):
+    import subprocess
+
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        populate(command[-1])
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return commands
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["../outside", "docs/../../outside", "..\\outside", "docs\\..\\..\\outside", ".."],
+)
+def test_fetch_git_rejects_path_that_leaves_the_repository(monkeypatch, path):
+    _allow_public_git_host(monkeypatch)
+    commands = _fake_git_clone(monkeypatch, lambda directory: None)
+
+    with pytest.raises(ValueError, match="inside the repository"):
+        list(ingest._fetch_git({"url": "https://example.test/repo.git", "path": path}))
+
+    assert commands == []
+
+
+def test_fetch_git_does_not_read_symlinked_files_outside_the_clone(monkeypatch, tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOP-SECRET-VALUE", encoding="utf-8")
+
+    def populate(directory):
+        with open(os.path.join(directory, "notes.md"), "w", encoding="utf-8") as notes:
+            notes.write("public notes")
+        try:
+            os.symlink(secret, os.path.join(directory, "stolen.md"))
+        except (OSError, NotImplementedError):
+            pytest.skip("symbolic links are not available")
+
+    _allow_public_git_host(monkeypatch)
+    _fake_git_clone(monkeypatch, populate)
+
+    documents = list(ingest._fetch_git({"url": "https://example.test/repo.git"}))
+
+    assert [text for text, _ in documents] == ["public notes"]
+    assert all("stolen.md" not in citation for _, citation in documents)
+
+
+def test_fetch_git_rejects_symlinked_subpath_outside_the_clone(monkeypatch, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "doc.md").write_text("TOP-SECRET-VALUE", encoding="utf-8")
+
+    def populate(directory):
+        try:
+            os.symlink(outside, os.path.join(directory, "docs"), target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symbolic links are not available")
+
+    _allow_public_git_host(monkeypatch)
+    _fake_git_clone(monkeypatch, populate)
+
+    with pytest.raises(ValueError, match="inside the repository"):
+        list(ingest._fetch_git({"url": "https://example.test/repo.git", "path": "docs"}))
+
+
+def test_fetch_git_reads_documents_below_a_valid_subpath(monkeypatch):
+    def populate(directory):
+        os.makedirs(os.path.join(directory, "docs", "guide"))
+        with open(os.path.join(directory, "docs", "guide", "a.md"), "w", encoding="utf-8") as doc:
+            doc.write("guide text")
+
+    _allow_public_git_host(monkeypatch)
+    _fake_git_clone(monkeypatch, populate)
+
+    documents = list(
+        ingest._fetch_git({"url": "https://example.test/repo.git", "path": "/docs/"})
+    )
+
+    assert [(text, citation.rsplit("#", 1)[1]) for text, citation in documents] == [
+        ("guide text", os.path.join("docs", "guide", "a.md"))
+    ]
+
+
 # --------------------------- _fetch_s3_blob (faked boto3) --------------------
 # Exercises prefix + include/exclude filtering and URI formatting end-to-end
 # without touching AWS.
