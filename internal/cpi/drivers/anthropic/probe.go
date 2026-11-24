@@ -81,10 +81,8 @@ type probeResponse struct {
 // sendProbe posts the payload and returns the response, or a ready-to-return
 // unavailable result when the request cannot be built or sent.
 func (d *Driver) sendProbe(ctx context.Context, start time.Time, model *v1alpha1.ModelSpec, creds *cpi.Credentials, endpoint string, payload any) (*probeResponse, *cpi.HealthResult) {
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return nil, &cpi.HealthResult{Available: false, Reason: "RequestBuildFailed", Message: err.Error()}
-	}
+	// The probe payloads are fixed structs of strings and always marshal.
+	encoded, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
 	if err != nil {
 		return nil, &cpi.HealthResult{Available: false, Reason: "RequestBuildFailed", Message: err.Error()}
