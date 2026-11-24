@@ -501,6 +501,54 @@ def test_fetch_git_rejects_symlinked_subpath_outside_the_clone(monkeypatch, tmp_
         list(ingest._fetch_git({"url": "https://example.test/repo.git", "path": "docs"}))
 
 
+def test_fetch_git_skips_files_reported_as_links(monkeypatch):
+    def populate(directory):
+        for name, text in (("notes.md", "public notes"), ("linked.md", "TOP-SECRET-VALUE")):
+            with open(os.path.join(directory, name), "w", encoding="utf-8") as doc:
+                doc.write(text)
+
+    real_islink = os.path.islink
+    monkeypatch.setattr(
+        ingest.os.path, "islink", lambda p: os.path.basename(p) == "linked.md" or real_islink(p)
+    )
+    _allow_public_git_host(monkeypatch)
+    _fake_git_clone(monkeypatch, populate)
+
+    documents = list(ingest._fetch_git({"url": "https://example.test/repo.git"}))
+
+    assert [text for text, _ in documents] == ["public notes"]
+
+
+def test_fetch_git_rejects_subpath_that_resolves_outside_the_clone(monkeypatch, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "doc.md").write_text("TOP-SECRET-VALUE", encoding="utf-8")
+
+    def populate(directory):
+        os.makedirs(os.path.join(directory, "docs"))
+
+    real_realpath = os.path.realpath
+    monkeypatch.setattr(
+        ingest.os.path,
+        "realpath",
+        lambda p, *a, **k: str(outside) if os.path.basename(p) == "docs" else real_realpath(p, *a, **k),
+    )
+    _allow_public_git_host(monkeypatch)
+    _fake_git_clone(monkeypatch, populate)
+
+    with pytest.raises(ValueError, match="inside the repository"):
+        list(ingest._fetch_git({"url": "https://example.test/repo.git", "path": "docs"}))
+
+
+def test_is_within_treats_unrelated_or_mixed_paths_as_outside(tmp_path):
+    root = os.path.realpath(tmp_path)
+
+    assert ingest._is_within(os.path.join(root, "a", "b"), root)
+    assert ingest._is_within(root, root)
+    assert not ingest._is_within(os.path.dirname(root), root)
+    assert not ingest._is_within("relative", root)
+
+
 def test_fetch_git_reads_documents_below_a_valid_subpath(monkeypatch):
     def populate(directory):
         os.makedirs(os.path.join(directory, "docs", "guide"))

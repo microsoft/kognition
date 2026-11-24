@@ -506,3 +506,60 @@ def test_http_validates_unstripped_exact_values():
     valid, _ = service._validate_environment({"AZURE_CLIENT_ID": "client-123 "})
     assert not valid
 
+
+
+def test_secret_collection_tolerates_malformed_urls_and_partial_userinfo():
+    found = set()
+
+    service._collect_secrets(
+        {"connectionString": ["http://[broken", "https://only-user@host.test/path"]}, False, found
+    )
+
+    assert "http://[broken" in found
+    assert "only-user" in found
+    assert service._redact("failed for only-user at https://x:y@host.test", sorted(found)) == (
+        "failed for [redacted] at https://[redacted]@host.test"
+    )
+
+
+def test_main_configures_trusted_embedding_hosts_from_environment(monkeypatch):
+    served = []
+
+    class FakeServer:
+        def __init__(self, address, handler):
+            served.append((address, handler))
+
+        def serve_forever(self):
+            return None
+
+    ingest = service.ingest
+    monkeypatch.setattr(service, "ThreadingHTTPServer", FakeServer)
+    monkeypatch.setenv("KOGNITION_INGEST_LISTEN", "127.0.0.1:9")
+    monkeypatch.setenv("KOGNITION_INGEST_TRUSTED_EMBEDDING_HOSTS", " Embed.Internal, other.internal ,,")
+    ingest.reset_trusted_service_config()
+    try:
+        service.main()
+        assert ingest._SERVICE_TRUSTED_EMBEDDING_HOSTS == frozenset({"embed.internal", "other.internal"})
+    finally:
+        ingest.reset_trusted_service_config()
+
+    assert served == [(("127.0.0.1", 9), service.IngestHandler)]
+
+
+def test_main_trusts_no_embedding_hosts_by_default(monkeypatch):
+    class FakeServer:
+        def __init__(self, address, handler):
+            pass
+
+        def serve_forever(self):
+            return None
+
+    ingest = service.ingest
+    monkeypatch.setattr(service, "ThreadingHTTPServer", FakeServer)
+    monkeypatch.delenv("KOGNITION_INGEST_TRUSTED_EMBEDDING_HOSTS", raising=False)
+    ingest.reset_trusted_service_config()
+    try:
+        service.main()
+        assert ingest._SERVICE_TRUSTED_EMBEDDING_HOSTS == frozenset()
+    finally:
+        ingest.reset_trusted_service_config()
