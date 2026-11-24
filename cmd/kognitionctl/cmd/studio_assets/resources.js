@@ -30,6 +30,8 @@ const StudioResources = (() => {
     Evaluation: "Evaluate a target against a dataset and graders.",
     EvaluationDataset: "Author reusable evaluation cases.",
     EvaluationRun: "Start a specific evaluation execution.",
+    ExternalAgent: "Register a remote A2A agent that workflow teams can call.",
+    ExternalAgentGrant: "Authorize a workflow to send data to a remote agent.",
     IntentGateway: "Route requests to agent services by intent.",
     KnowledgeBase: "Configure a corpus for knowledge retrieval.",
     KnowledgeBaseClaim: "Reference knowledge for a workload.",

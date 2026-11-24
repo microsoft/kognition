@@ -79,6 +79,7 @@ samples/workflows/
 ├── _agents.yaml                # shared agents (apply first)
 ├── collaboration.yaml          # collaboration (team) steps; needs the collaboration Helm flag
 ├── conditional-branching.yaml  # CEL edge conditions
+├── external-agent.yaml         # remote A2A team member; needs the external agents Helm flag and allow-list
 ├── parallel-dispatch.yaml      # fan-out / fan-in + maxParallelSteps
 ├── tool-sandbox.yaml           # in-cluster OpenAPI+MCP tool server (apply before tool-steps-http)
 ├── tool-sandbox.ps1            # explicit-context sample server install and cleanup
@@ -103,11 +104,17 @@ workflows otherwise, so the apply-everything commands below skip it. Apply it
 separately on an installation that enables collaboration. See
 [Workflow collaboration](../../docs/workflow-collaboration.md).
 
+`external-agent.yaml` additionally requires
+`k8sController.workflowExecutor.collaboration.externalAgents.enabled=true`, an
+`egressAllowList` entry for its endpoint, and a real endpoint, card digest and
+token Secret in place of its placeholders. It sends workflow data outside the
+cluster, so the apply-everything commands skip it too.
+
 ## Apply everything
 
 ```powershell
 kubectl apply -f samples/workflows/_agents.yaml
-Get-ChildItem samples/workflows/*.yaml -Exclude _agents.yaml, collaboration.yaml |
+Get-ChildItem samples/workflows/*.yaml -Exclude _agents.yaml, collaboration.yaml, external-agent.yaml |
   ForEach-Object { kubectl apply -f $_.FullName }
 ```
 
@@ -116,7 +123,7 @@ Get-ChildItem samples/workflows/*.yaml -Exclude _agents.yaml, collaboration.yaml
 ```bash
 kubectl apply -f samples/workflows/_agents.yaml
 for manifest in samples/workflows/*.yaml; do
-  case "$manifest" in samples/workflows/_agents.yaml|samples/workflows/collaboration.yaml) continue ;; esac
+  case "$manifest" in samples/workflows/_agents.yaml|samples/workflows/collaboration.yaml|samples/workflows/external-agent.yaml) continue ;; esac
   kubectl apply -f "$manifest" || exit 1
 done
 ```

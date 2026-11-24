@@ -52,7 +52,7 @@ async function authoringAPI(page, { mode = "standalone", namespace = "default", 
       tools: "Tool", toolgrants: "ToolGrant", knowledgebases: "KnowledgeBase",
       autonomyclasses: "AutonomyClass", memoryclaims: "MemoryClaim", secretrefs: "SecretRef", prompts: "Prompt",
       memoryclasses: "MemoryClass", modelinvocationprofiles: "ModelInvocationProfile", memoryrecords: "MemoryRecord",
-      evaluationruns: "EvaluationRun", workflowruns: "WorkflowRun",
+      evaluationruns: "EvaluationRun", workflowruns: "WorkflowRun", externalagents: "ExternalAgent",
     };
     return route.fulfill({ json: { items: [...stored.values()].filter(record => record.kind === kinds[match[1]]) } });
   });
@@ -318,6 +318,30 @@ test("Workflow Team problems panel reports admission-rule violations", async ({ 
   const panel = page.locator("#workflow-graph-panel");
   await expect(panel.getByText(/maxHandoffs must be between 1 and limits.maxDelegations/)).toBeVisible();
   await expect(panel.getByText(/member "member-1" needs an agent/)).toBeVisible();
+});
+
+test("Workflow Team member can reference an ExternalAgent and drops agent-only fields", async ({ page }) => {
+  const remote = { apiVersion: "kognition.dev/v1alpha1", kind: "ExternalAgent", metadata: { name: "partner", namespace: "default" }, spec: {} };
+  const { mutations, inspector } = await newTeamStep(page, "with-remote", { records: [...teamAgents, remote] });
+  await inspector.getByLabel(/^Agent for member-1/).selectOption("analyst");
+  await inspector.getByLabel("Kind of member-2", { exact: true }).selectOption("external");
+  await expect(inspector.getByLabel(/^Agent for member-2/)).toHaveCount(0);
+  await expect(inspector.getByLabel("AgentService for member-2", { exact: true })).toHaveCount(0);
+  await expect(inspector.getByText(/Prompt data is sent to the remote endpoint/)).toBeVisible();
+  await inspector.getByLabel(/^External agent for member-2/).selectOption("partner");
+  const team = await teamDeployed(page, mutations);
+  expect(team.members[0]).toEqual({ name: "member-1", agentRef: { name: "analyst" } });
+  expect(team.members[1]).toEqual({ name: "member-2", externalAgentRef: { name: "partner" } });
+});
+
+test("Workflow Team problems panel reports incomplete and duplicate external members", async ({ page }) => {
+  const { inspector } = await newTeamStep(page, "bad-remote");
+  await inspector.getByLabel("Kind of member-1", { exact: true }).selectOption("external");
+  await inspector.getByLabel("Kind of member-2", { exact: true }).selectOption("external");
+  await page.locator('[data-graph-panel="problems"]').dispatchEvent("click");
+  const panel = page.locator("#workflow-graph-panel");
+  await expect(panel.getByText(/member "member-1" needs an external agent/)).toBeVisible();
+  await expect(panel.getByText(/member "member-2" needs an external agent/)).toBeVisible();
 });
 
 test("Workflow Team steps can be drafted but not deployed outside the Kubernetes runtime", async ({ page }) => {

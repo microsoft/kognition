@@ -10990,7 +10990,7 @@
                       "members": {
                         "description": "Members are the participating Agents, addressed by step-local alias.",
                         "items": {
-                          "description": "CollaborationMember binds a step-local alias to an Agent.",
+                          "description": "CollaborationMember binds a step-local alias to an Agent or to an ExternalAgent.",
                           "properties": {
                             "agentRef": {
                               "description": "AgentRef references the member Agent.",
@@ -11012,13 +11012,26 @@
                               ],
                               "type": "object"
                             },
+                            "externalAgentRef": {
+                              "description": "ExternalAgentRef references a remote A2A agent declared by an ExternalAgent in\nthe Workflow namespace. Data sent to it leaves the platform, so an\nExternalAgentGrant is required.",
+                              "properties": {
+                                "name": {
+                                  "description": "Name is the name of the referenced resource.",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "name"
+                              ],
+                              "type": "object"
+                            },
                             "name": {
                               "description": "Name is the stable step-local alias.",
                               "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
                               "type": "string"
                             },
                             "serviceRef": {
-                              "description": "ServiceRef optionally pins one AgentService, in the Agent namespace, when\nthe Agent has several serving configurations.",
+                              "description": "ServiceRef optionally pins one AgentService, in the Agent namespace, when\nthe Agent has several serving configurations. It is not valid with externalAgentRef.",
                               "properties": {
                                 "name": {
                                   "description": "Name is the name of the referenced resource.",
@@ -11524,7 +11537,7 @@
                       "members": {
                         "description": "Members are the participating Agents, addressed by step-local alias.",
                         "items": {
-                          "description": "CollaborationMember binds a step-local alias to an Agent.",
+                          "description": "CollaborationMember binds a step-local alias to an Agent or to an ExternalAgent.",
                           "properties": {
                             "agentRef": {
                               "description": "AgentRef references the member Agent.",
@@ -11546,13 +11559,26 @@
                               ],
                               "type": "object"
                             },
+                            "externalAgentRef": {
+                              "description": "ExternalAgentRef references a remote A2A agent declared by an ExternalAgent in\nthe Workflow namespace. Data sent to it leaves the platform, so an\nExternalAgentGrant is required.",
+                              "properties": {
+                                "name": {
+                                  "description": "Name is the name of the referenced resource.",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "name"
+                              ],
+                              "type": "object"
+                            },
                             "name": {
                               "description": "Name is the stable step-local alias.",
                               "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
                               "type": "string"
                             },
                             "serviceRef": {
-                              "description": "ServiceRef optionally pins one AgentService, in the Agent namespace, when\nthe Agent has several serving configurations.",
+                              "description": "ServiceRef optionally pins one AgentService, in the Agent namespace, when\nthe Agent has several serving configurations. It is not valid with externalAgentRef.",
                               "properties": {
                                 "name": {
                                   "description": "Name is the name of the referenced resource.",
@@ -11566,10 +11592,19 @@
                             }
                           },
                           "required": [
-                            "agentRef",
                             "name"
                           ],
-                          "type": "object"
+                          "type": "object",
+                          "x-kubernetes-validations": [
+                            {
+                              "message": "exactly one of agentRef and externalAgentRef is required",
+                              "rule": "has(self.agentRef) != has(self.externalAgentRef)"
+                            },
+                            {
+                              "message": "serviceRef is not valid with externalAgentRef",
+                              "rule": "!has(self.externalAgentRef) || !has(self.serviceRef)"
+                            }
+                          ]
                         },
                         "maxItems": 8,
                         "minItems": 2,

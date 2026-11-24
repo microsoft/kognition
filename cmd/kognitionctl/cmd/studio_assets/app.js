@@ -4119,6 +4119,16 @@ function teamMemberNames(team) {
   return (team.members || []).map((member) => member?.name).filter(Boolean);
 }
 
+function setTeamMemberKind(member, external) {
+  if (external) {
+    delete member.agentRef; delete member.serviceRef;
+    member.externalAgentRef = { name: "" };
+  } else {
+    delete member.externalAgentRef;
+    member.agentRef = { name: "" };
+  }
+}
+
 // Rebuilds the strategy block and interactions for the current members.
 function applyTeamStrategy(team, strategy) {
   const names = teamMemberNames(team);
@@ -4211,6 +4221,15 @@ function teamProblems(step, workflow) {
     if (!TEAM_ALIAS_RE.test(alias)) problems.push(`member name "${alias}" must be a lowercase DNS label of at most 32 characters starting with a letter.`);
     else if (aliases.has(alias)) problems.push(`member name "${alias}" is used more than once.`);
     aliases.add(alias);
+    if (member?.externalAgentRef != null) {
+      const remote = member.externalAgentRef.name;
+      if (member.agentRef?.name) problems.push(`member "${alias}" must set exactly one of an agent and an external agent.`);
+      else if (!remote) problems.push(`member "${alias}" needs an external agent.`);
+      else if (member.serviceRef?.name) problems.push(`member "${alias}" cannot use an AgentService with an external agent.`);
+      else if (agents.has(`external/${remote}`)) problems.push(`members "${agents.get(`external/${remote}`)}" and "${alias}" use the same external agent.`);
+      else agents.set(`external/${remote}`, alias);
+      continue;
+    }
     if (!member?.agentRef?.name) { problems.push(`member "${alias}" needs an agent.`); continue; }
     const key = `${member.agentRef.namespace || workflow.metadata?.namespace || "default"}/${member.agentRef.name}`;
     if (agents.has(key)) problems.push(`members "${agents.get(key)}" and "${alias}" use the same agent.`);
@@ -4373,24 +4392,39 @@ function renderWorkflowTeam(host, step) {
         if (!value || value === member.name || memberNames.includes(value)) { renderEditor(); return; }
         edit("rename team member", () => { renameTeamMember(team, member.name, value); }, true);
       }));
+      const external = member.externalAgentRef != null;
+      body.appendChild(selectField(`Kind of ${member.name}`, external ? "external" : "agent", [
+        { value: "agent", label: "Agent" }, { value: "external", label: "External agent" },
+      ], (value) => edit("change team member kind", () => { setTeamMemberKind(member, value === "external"); }, true)));
+      if (external) {
+        const remoteLabel = `External agent for ${member.name}`;
+        body.appendChild(refSelect(remoteLabel, member.externalAgentRef?.name || "",
+          (state.lists.externalagents || []).filter((remote) => (remote.metadata?.namespace || "default") === workflowNamespace),
+          (value) => edit("change team external agent", () => { member.externalAgentRef = { name: value }; }), true));
+        const hint = document.createElement("p"); hint.className = "hint";
+        hint.textContent = "Prompt data is sent to the remote endpoint. Needs an ExternalAgentGrant for this workflow and an operator allow-list entry.";
+        body.appendChild(hint);
+      }
       const updateAgent = (value) => edit("change team agent", () => { member.agentRef = { ...member.agentRef, name: value }; });
       const agentLabel = `Agent for ${member.name}`;
-      const memberNamespace = member.agentRef?.namespace || workflowNamespace;
-      body.appendChild(memberNamespace === (state.namespace || "default")
-        ? refSelect(agentLabel, member.agentRef?.name || "", (state.lists.agents || []).filter(
-          (agent) => (agent.metadata?.namespace || state.namespace || "default") === memberNamespace), updateAgent, true)
-        : textField(agentLabel, member.agentRef?.name || "", updateAgent, true));
-      const namespaces = [...new Set([workflowNamespace, memberNamespace, ...state.namespaces])].filter(Boolean).sort();
-      body.appendChild(selectField(`Namespace for ${member.name}`, member.agentRef?.namespace || "", [
-        { value: "", label: `Workflow namespace (${workflowNamespace})` }, ...namespaces,
-      ], (value) => {
-        edit("change team namespace", () => {
-          member.agentRef = { ...member.agentRef, namespace: value || undefined };
-        }, true);
-      }));
-      body.appendChild(textField(`AgentService for ${member.name}`, member.serviceRef?.name || "", (value) => {
-        edit("change team service", () => { setOrDel(member, "serviceRef", value ? { name: value } : undefined); });
-      }));
+      if (!external) {
+        const memberNamespace = member.agentRef?.namespace || workflowNamespace;
+        body.appendChild(memberNamespace === (state.namespace || "default")
+          ? refSelect(agentLabel, member.agentRef?.name || "", (state.lists.agents || []).filter(
+            (agent) => (agent.metadata?.namespace || state.namespace || "default") === memberNamespace), updateAgent, true)
+          : textField(agentLabel, member.agentRef?.name || "", updateAgent, true));
+        const namespaces = [...new Set([workflowNamespace, memberNamespace, ...state.namespaces])].filter(Boolean).sort();
+        body.appendChild(selectField(`Namespace for ${member.name}`, member.agentRef?.namespace || "", [
+          { value: "", label: `Workflow namespace (${workflowNamespace})` }, ...namespaces,
+        ], (value) => {
+          edit("change team namespace", () => {
+            member.agentRef = { ...member.agentRef, namespace: value || undefined };
+          }, true);
+        }));
+        body.appendChild(textField(`AgentService for ${member.name}`, member.serviceRef?.name || "", (value) => {
+          edit("change team service", () => { setOrDel(member, "serviceRef", value ? { name: value } : undefined); });
+        }));
+      }
       if (branch) {
         const label = `Optional branch for ${member.name}`;
         const optional = checkboxField(label, branch.optional, (value) => {
