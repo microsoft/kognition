@@ -75,6 +75,13 @@ spec:
             {{- if .Values.kbIngester.enabled }}
             - name: KOGNITION_KB_INGESTER_URL
               value: http://127.0.0.1:8082
+            {{- if .Values.kbIngester.auth.existingSecret }}
+            - name: KOGNITION_KB_INGESTER_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.kbIngester.auth.existingSecret | quote }}
+                  key: {{ .Values.kbIngester.auth.key | quote }}
+            {{- end }}
             {{- if .Values.kbPgvector.enabled }}
             - name: KOGNITION_KB_PGVECTOR_DSN
               valueFrom:
@@ -108,6 +115,17 @@ spec:
             {{- if .Values.kbIngester.trustedEmbeddingHosts }}
             - name: KOGNITION_INGEST_TRUSTED_EMBEDDING_HOSTS
               value: {{ join "," .Values.kbIngester.trustedEmbeddingHosts | quote }}
+            {{- end }}
+            {{- if .Values.kbIngester.strictAzureHosts }}
+            - name: KOGNITION_INGEST_STRICT_AZURE_HOSTS
+              value: "true"
+            {{- end }}
+            {{- if .Values.kbIngester.auth.existingSecret }}
+            - name: KOGNITION_INGEST_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.kbIngester.auth.existingSecret | quote }}
+                  key: {{ .Values.kbIngester.auth.key | quote }}
             {{- end }}
           readinessProbe:
             exec:

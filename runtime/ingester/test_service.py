@@ -10,6 +10,8 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from unittest.mock import MagicMock
 
+import pytest
+
 try:
     from . import service
 except ImportError:
@@ -563,3 +565,116 @@ def test_main_trusts_no_embedding_hosts_by_default(monkeypatch):
         assert ingest._SERVICE_TRUSTED_EMBEDDING_HOSTS == frozenset()
     finally:
         ingest.reset_trusted_service_config()
+
+
+@pytest.fixture(autouse=True)
+def _restore_handler_auth_token():
+    original = service.IngestHandler.auth_token
+    yield
+    service.IngestHandler.auth_token = original
+
+
+class _FakeServer:
+    def __init__(self, address, handler):
+        self.address = address
+
+    def serve_forever(self):
+        return None
+
+
+_TOKEN = "t" * 40
+
+
+def test_main_defaults_to_loopback_without_token(monkeypatch):
+    monkeypatch.setattr(service, "ThreadingHTTPServer", _FakeServer)
+    for name in (
+        "KOGNITION_INGEST_LISTEN",
+        "KOGNITION_INGEST_AUTH_TOKEN",
+        "KOGNITION_INGEST_ALLOW_UNAUTHENTICATED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    service.ingest.reset_trusted_service_config()
+    try:
+        service.main()
+    finally:
+        service.ingest.reset_trusted_service_config()
+    assert service.IngestHandler.auth_token is None
+
+
+def test_main_refuses_unauthenticated_non_loopback_listener(monkeypatch):
+    monkeypatch.setattr(service, "ThreadingHTTPServer", _FakeServer)
+    monkeypatch.setenv("KOGNITION_INGEST_LISTEN", "0.0.0.0:8082")
+    monkeypatch.delenv("KOGNITION_INGEST_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("KOGNITION_INGEST_ALLOW_UNAUTHENTICATED", raising=False)
+    service.ingest.reset_trusted_service_config()
+    try:
+        with pytest.raises(ValueError, match="KOGNITION_INGEST_AUTH_TOKEN is required"):
+            service.main()
+    finally:
+        service.ingest.reset_trusted_service_config()
+
+
+def test_resolve_auth_token_policy():
+    assert service.resolve_auth_token("0.0.0.0", {"KOGNITION_INGEST_AUTH_TOKEN": _TOKEN}) == _TOKEN
+    assert service.resolve_auth_token(
+        "0.0.0.0", {"KOGNITION_INGEST_ALLOW_UNAUTHENTICATED": "true"}
+    ) is None
+    for loopback in ("127.0.0.1", "localhost", "::1", "[::1]"):
+        assert service.resolve_auth_token(loopback, {}) is None
+    for external in ("0.0.0.0", "::", "kb-ingester", "10.0.0.5"):
+        with pytest.raises(ValueError):
+            service.resolve_auth_token(external, {})
+    with pytest.raises(ValueError, match="at least 32"):
+        service.resolve_auth_token("127.0.0.1", {"KOGNITION_INGEST_AUTH_TOKEN": "short"})
+    # An opt-out never downgrades a configured token.
+    assert service.resolve_auth_token(
+        "0.0.0.0",
+        {"KOGNITION_INGEST_AUTH_TOKEN": _TOKEN, "KOGNITION_INGEST_ALLOW_UNAUTHENTICATED": "true"},
+    ) == _TOKEN
+
+
+def _authenticated_server(monkeypatch):
+    handler = type(
+        "AuthIngestHandler",
+        (service.IngestHandler,),
+        {"registry": service.TaskRegistry(), "auth_token": _TOKEN},
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_port}"
+
+
+def _status(request):
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+
+
+def test_http_requires_bearer_token_except_healthz(monkeypatch):
+    server, base = _authenticated_server(monkeypatch)
+    try:
+        assert _status(urllib.request.Request(base + "/healthz")) == 200
+        body = json.dumps({"id": "t1", "payload": {}}).encode()
+        for headers in (
+            {},
+            {"Authorization": "Bearer wrong"},
+            {"Authorization": "Basic " + _TOKEN},
+            {"Authorization": _TOKEN},
+            {"Authorization": "Bearer " + _TOKEN[:-1]},
+        ):
+            for method, path, data in (
+                ("GET", "/v1/tasks/t1", None),
+                ("POST", "/v1/tasks", body),
+                ("DELETE", "/v1/tasks/t1", None),
+            ):
+                request = urllib.request.Request(base + path, data=data, method=method, headers=headers)
+                assert _status(request) == 401, (method, headers)
+        authorized = urllib.request.Request(
+            base + "/v1/tasks/missing", headers={"Authorization": "Bearer " + _TOKEN}
+        )
+        assert _status(authorized) == 404
+    finally:
+        server.shutdown()
+        server.server_close()

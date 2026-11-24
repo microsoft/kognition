@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 )
 
 func kbIngesterEnvironment(test *testing.T, extra ...string) map[string]string {
@@ -56,5 +57,83 @@ func TestKBIngesterTrustedEmbeddingHostsAreConfigurable(test *testing.T) {
 	)
 	if got := environment["KOGNITION_INGEST_TRUSTED_EMBEDDING_HOSTS"]; got != "embed.internal,apim.example.com" {
 		test.Fatalf("trusted embedding hosts = %q", got)
+	}
+}
+
+func kbIngesterContainers(test *testing.T, extra ...string) map[string]corev1.Container {
+	test.Helper()
+	for _, document := range renderControllerChart(test, append([]string{"--set", "mode=standalone", "--set", "kbIngester.enabled=true"}, extra...)...) {
+		var meta struct{ Kind string }
+		if err := json.Unmarshal(document.Raw, &meta); err != nil {
+			test.Fatal(err)
+		}
+		if meta.Kind != "Deployment" {
+			continue
+		}
+		var deployment appsv1.Deployment
+		if err := json.Unmarshal(document.Raw, &deployment); err != nil {
+			test.Fatal(err)
+		}
+		containers := map[string]corev1.Container{}
+		for _, container := range deployment.Spec.Template.Spec.Containers {
+			containers[container.Name] = container
+		}
+		if _, found := containers["kb-ingester"]; found {
+			return containers
+		}
+	}
+	test.Fatal("kb-ingester container was not rendered")
+	return nil
+}
+
+func secretEnvironmentReference(container corev1.Container, name string) (string, string, bool) {
+	for _, variable := range container.Env {
+		if variable.Name == name && variable.ValueFrom != nil && variable.ValueFrom.SecretKeyRef != nil {
+			reference := variable.ValueFrom.SecretKeyRef
+			return reference.Name, reference.Key, true
+		}
+	}
+	return "", "", false
+}
+
+func TestKBIngesterRequiresNoTokenAndNoStrictModeByDefault(test *testing.T) {
+	containers := kbIngesterContainers(test)
+	for container, names := range map[string][]string{
+		"kb-ingester":        {"KOGNITION_INGEST_AUTH_TOKEN", "KOGNITION_INGEST_STRICT_AZURE_HOSTS"},
+		"controller-manager": {"KOGNITION_KB_INGESTER_AUTH_TOKEN"},
+	} {
+		for _, variable := range containers[container].Env {
+			for _, name := range names {
+				if variable.Name == name {
+					test.Fatalf("%s must not set %s by default", container, name)
+				}
+			}
+		}
+	}
+}
+
+func TestKBIngesterAuthSecretIsInjectedIntoBothContainers(test *testing.T) {
+	containers := kbIngesterContainers(test,
+		"--set", "kbIngester.auth.existingSecret=ingester-token",
+		"--set", "kbIngester.auth.key=bearer",
+		"--set", "kbIngester.strictAzureHosts=true",
+	)
+	for container, name := range map[string]string{
+		"kb-ingester":        "KOGNITION_INGEST_AUTH_TOKEN",
+		"controller-manager": "KOGNITION_KB_INGESTER_AUTH_TOKEN",
+	} {
+		secret, key, found := secretEnvironmentReference(containers[container], name)
+		if !found || secret != "ingester-token" || key != "bearer" {
+			test.Fatalf("%s %s secret reference = (%q, %q, %v)", container, name, secret, key, found)
+		}
+	}
+	strict := ""
+	for _, variable := range containers["kb-ingester"].Env {
+		if variable.Name == "KOGNITION_INGEST_STRICT_AZURE_HOSTS" {
+			strict = variable.Value
+		}
+	}
+	if strict != "true" {
+		test.Fatalf("strict Azure hosts = %q, want true", strict)
 	}
 }

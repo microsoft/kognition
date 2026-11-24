@@ -31,10 +31,11 @@ type taskPayloadBuilder interface {
 }
 
 type HTTPLauncher struct {
-	endpoint string
-	client   *http.Client
-	builder  taskPayloadBuilder
-	logger   *zap.Logger
+	endpoint  string
+	client    *http.Client
+	builder   taskPayloadBuilder
+	logger    *zap.Logger
+	authToken string
 }
 
 type taskRequest struct {
@@ -56,7 +57,11 @@ var errTaskNotFound = errors.New("ingestion task not found")
 
 func NewHTTPLauncher(st store.Store, endpoint string, client *http.Client, logger *zap.Logger) *HTTPLauncher {
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		// Never follow redirects: the bearer token and task payload must reach only the configured endpoint.
+		client = &http.Client{
+			Timeout:       15 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
 	}
 	if logger == nil {
 		logger = zap.NewNop()
@@ -66,6 +71,18 @@ func NewHTTPLauncher(st store.Store, endpoint string, client *http.Client, logge
 		client:   client,
 		builder:  NewPayloadBuilder(st, nil),
 		logger:   logger.With(zap.String("component", "standalone-kb-ingester")),
+	}
+}
+
+// WithBearerToken makes the launcher authenticate every request to the ingester.
+func (l *HTTPLauncher) WithBearerToken(token string) *HTTPLauncher {
+	l.authToken = strings.TrimSpace(token)
+	return l
+}
+
+func (l *HTTPLauncher) authorize(request *http.Request) {
+	if l.authToken != "" {
+		request.Header.Set("Authorization", "Bearer "+l.authToken)
 	}
 }
 
@@ -134,6 +151,7 @@ func (l *HTTPLauncher) getOrSubmit(
 		return nil, fmt.Errorf("create ingestion submit request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
+	l.authorize(request)
 	response, err := l.client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("submit ingestion task: %w", err)
@@ -155,6 +173,7 @@ func (l *HTTPLauncher) getTask(ctx context.Context, taskID string) (*taskStatus,
 	if err != nil {
 		return nil, fmt.Errorf("create ingestion status request: %w", err)
 	}
+	l.authorize(request)
 	response, err := l.client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("get ingestion task: %w", err)
@@ -178,6 +197,7 @@ func (l *HTTPLauncher) deleteTask(ctx context.Context, taskID string) error {
 	if err != nil {
 		return fmt.Errorf("create ingestion reset request: %w", err)
 	}
+	l.authorize(request)
 	response, err := l.client.Do(request)
 	if err != nil {
 		return fmt.Errorf("reset ingestion task: %w", err)

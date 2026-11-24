@@ -156,3 +156,76 @@ func testKnowledgeBase() *api.KnowledgeBase {
 		Status:     api.KnowledgeBaseStatus{Generation: 2},
 	}
 }
+
+func TestHTTPLauncherSendsBearerTokenOnEveryRequest(t *testing.T) {
+	const token = "0123456789abcdef0123456789abcdef"
+	var mu sync.Mutex
+	seen := map[string]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		seen[request.Method] = request.Header.Get("Authorization")
+		mu.Unlock()
+		switch request.Method {
+		case http.MethodGet:
+			http.NotFound(response, request)
+		case http.MethodPost:
+			response.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(response).Encode(taskStatus{ID: "task", State: "running"})
+		case http.MethodDelete:
+			response.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer server.Close()
+
+	launcher := NewHTTPLauncher(nil, server.URL, server.Client(), nil).WithBearerToken("  " + token + "\n")
+	launcher.builder = stubPayloadBuilder{payload: map[string]any{}}
+	kb := testKnowledgeBase()
+	if _, _, err := launcher.Ensure(context.Background(), kb, &api.KnowledgeBaseClass{}); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if err := launcher.Reset(context.Background(), kb); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+		if got, want := seen[method], "Bearer "+token; got != want {
+			t.Errorf("%s Authorization = %q, want %q", method, got, want)
+		}
+	}
+}
+
+func TestHTTPLauncherOmitsAuthorizationWithoutToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("Authorization"); got != "" {
+			t.Errorf("unexpected Authorization header %q", got)
+		}
+		http.NotFound(response, request)
+	}))
+	defer server.Close()
+
+	launcher := NewHTTPLauncher(nil, server.URL, server.Client(), nil).WithBearerToken("   ")
+	launcher.builder = stubPayloadBuilder{err: errors.New("stop after the status request")}
+	if _, _, err := launcher.Ensure(context.Background(), testKnowledgeBase(), &api.KnowledgeBaseClass{}); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+}
+
+func TestHTTPLauncherDefaultClientDoesNotFollowRedirectsWithToken(t *testing.T) {
+	var leaked bool
+	target := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		leaked = true
+	}))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, target.URL+request.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+
+	launcher := NewHTTPLauncher(nil, redirector.URL, nil, nil).WithBearerToken("0123456789abcdef0123456789abcdef")
+	launcher.builder = stubPayloadBuilder{payload: map[string]any{}}
+	if _, _, err := launcher.Ensure(context.Background(), testKnowledgeBase(), &api.KnowledgeBaseClass{}); err == nil {
+		t.Fatal("Ensure followed or accepted a redirect")
+	}
+	if leaked {
+		t.Fatal("request reached the redirect target")
+	}
+}

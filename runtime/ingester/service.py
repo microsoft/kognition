@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -251,10 +253,33 @@ class TaskRegistry:
 
 class IngestHandler(BaseHTTPRequestHandler):
     registry = TaskRegistry()
+    # Bearer token every caller except /healthz must present; None disables the check.
+    auth_token: str | None = None
+
+    def _authorized(self) -> bool:
+        if self.auth_token is None:
+            return True
+        header = self.headers.get("Authorization") or ""
+        scheme, _, presented = header.partition(" ")
+        if scheme.lower() == "bearer" and hmac.compare_digest(
+            presented.strip().encode(), self.auth_token.encode()
+        ):
+            return True
+        # Drain a bounded request body so the client reads the 401 instead of a reset.
+        try:
+            pending = min(int(self.headers.get("Content-Length") or "0"), _MAX_REQUEST_BYTES)
+        except ValueError:
+            pending = 0
+        if pending > 0:
+            self.rfile.read(pending)
+        self._write_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+        return False
 
     def do_GET(self) -> None:
         if self.path == "/healthz":
             self._write_json(HTTPStatus.OK, {"status": "ok"})
+            return
+        if not self._authorized():
             return
         task_id = self._task_id_from_path()
         if task_id is None:
@@ -267,6 +292,8 @@ class IngestHandler(BaseHTTPRequestHandler):
         self._write_json(HTTPStatus.OK, asdict(status))
 
     def do_POST(self) -> None:
+        if not self._authorized():
+            return
         if self.path != "/v1/tasks":
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
@@ -301,6 +328,8 @@ class IngestHandler(BaseHTTPRequestHandler):
         self._write_json(HTTPStatus.ACCEPTED if created else HTTPStatus.OK, asdict(status))
 
     def do_DELETE(self) -> None:
+        if not self._authorized():
+            return
         task_id = self._task_id_from_path()
         if task_id is None:
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -330,6 +359,43 @@ class IngestHandler(BaseHTTPRequestHandler):
         return
 
 
+_MIN_AUTH_TOKEN_LENGTH = 32
+
+
+def _is_loopback(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def resolve_auth_token(host: str, environ: Any = None) -> str | None:
+    """Return the caller token, or raise when the listener would be unauthenticated.
+
+    A listener reachable beyond loopback must be authenticated unless the
+    operator opts out explicitly; short tokens are always rejected.
+    """
+    environ = os.environ if environ is None else environ
+    token = (environ.get("KOGNITION_INGEST_AUTH_TOKEN") or "").strip()
+    if token:
+        if len(token) < _MIN_AUTH_TOKEN_LENGTH:
+            raise ValueError(
+                f"KOGNITION_INGEST_AUTH_TOKEN must be at least {_MIN_AUTH_TOKEN_LENGTH} characters"
+            )
+        return token
+    allow_unauthenticated = (
+        environ.get("KOGNITION_INGEST_ALLOW_UNAUTHENTICATED", "").lower() == "true"
+    )
+    if not _is_loopback(host) and not allow_unauthenticated:
+        raise ValueError(
+            "KOGNITION_INGEST_AUTH_TOKEN is required when listening beyond loopback; "
+            "set KOGNITION_INGEST_ALLOW_UNAUTHENTICATED=true only for an isolated network"
+        )
+    return None
+
+
 def main() -> None:
     # Initialize trusted service configuration from daemon environment at startup.
     ingest.set_trusted_service_config(
@@ -341,9 +407,13 @@ def main() -> None:
             os.environ.get("KOGNITION_INGEST_ALLOW_PRIVATE_NETWORKS", "").lower() == "true"
         ),
         trusted_embedding_hosts=os.environ.get("KOGNITION_INGEST_TRUSTED_EMBEDDING_HOSTS", "").split(","),
+        strict_azure_hosts=(
+            os.environ.get("KOGNITION_INGEST_STRICT_AZURE_HOSTS", "").lower() == "true"
+        ),
     )
-    address = os.environ.get("KOGNITION_INGEST_LISTEN", "0.0.0.0:8082")
+    address = os.environ.get("KOGNITION_INGEST_LISTEN", "127.0.0.1:8082")
     host, port = address.rsplit(":", 1)
+    IngestHandler.auth_token = resolve_auth_token(host)
     server = ThreadingHTTPServer((host, int(port)), IngestHandler)
     server.serve_forever()
 

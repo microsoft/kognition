@@ -67,6 +67,7 @@ services:
     environment:
       KOGNITION_DSN: postgres://kognition:kognition@postgres:5432/kognition?sslmode=disable
       KOGNITION_KB_INGESTER_URL: http://kb-ingester:8082
+      KOGNITION_KB_INGESTER_AUTH_TOKEN: ${KOGNITION_INGEST_AUTH_TOKEN:?Provide an ingester token of at least 32 characters}
       KOGNITION_MEMORY_SERVICE_URL: http://memory-service:8090
       MEMORY_SERVICE_INTERNAL_TOKEN: ${MEMORY_SERVICE_INTERNAL_TOKEN:?Provide an internal Memory token}
       DOCKER_HOST: unix:///var/run/docker.sock
@@ -161,6 +162,7 @@ services:
     entrypoint: ["python", "service.py"]
     environment:
       KOGNITION_INGEST_LISTEN: 0.0.0.0:8082
+      KOGNITION_INGEST_AUTH_TOKEN: ${KOGNITION_INGEST_AUTH_TOKEN:?Provide an ingester token of at least 32 characters}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/healthz', timeout=2)"]
       interval: 5s
