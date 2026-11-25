@@ -9,8 +9,6 @@ package runner
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -26,10 +24,10 @@ import (
 
 // Label keys applied to every ledger object.
 const (
-	LabelComponent = "app.kubernetes.io/component"
+	LabelComponent = collaboration.LabelComponent
 	LabelRun       = "kognition.dev/collaboration-run"
 	LabelStep      = "kognition.dev/collaboration-step"
-	ComponentValue = "workflow-collaboration"
+	ComponentValue = collaboration.ComponentValue
 )
 
 // TransportFactory builds the governed transport of one activation. handles is
@@ -62,14 +60,10 @@ func New(cfg Config) (*Runner, error) {
 
 // LedgerName returns the ledger ConfigMap name of one step attempt.
 func LedgerName(run controller.WorkflowCollaborationRun) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%d", run.Namespace, run.RunUID, run.RunName, run.Step, run.Attempt)))
-	return "wfc-" + hex.EncodeToString(sum[:12])
+	return collaboration.LedgerName(run.Namespace, run.RunUID, run.RunName, run.Step, run.Attempt)
 }
 
-func hashLabel(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:8])
-}
+func hashLabel(s string) string { return collaboration.LabelHash(s) }
 
 func (r *Runner) assemble(ctx context.Context, run controller.WorkflowCollaborationRun) (*driver.Driver, error) {
 	if run.Spec == nil {

@@ -3,6 +3,30 @@
 
 package v1alpha1
 
+import (
+	"fmt"
+	"unicode"
+	"unicode/utf8"
+)
+
+// CollaborationTextProblem reports why author-written prompt text is not acceptable,
+// or returns "" when it is. Text is bounded in characters and may not contain control
+// characters; multi-line text additionally allows newlines and tabs.
+func CollaborationTextProblem(text string, maxChars int, multiline bool) string {
+	if n := utf8.RuneCountInString(text); n > maxChars {
+		return fmt.Sprintf("must not exceed %d characters, got %d", maxChars, n)
+	}
+	for _, r := range text {
+		if multiline && (r == '\n' || r == '\r' || r == '\t') {
+			continue
+		}
+		if unicode.IsControl(r) {
+			return "must not contain control characters"
+		}
+	}
+	return ""
+}
+
 // Collaboration schema ceilings. They are the reviewed limits from the decision
 // gate resolutions and are mirrored by the CRD validation markers.
 const (
@@ -14,6 +38,11 @@ const (
 	CollaborationMaxDelegationDepth  = 5
 	CollaborationMaxParallelTasks    = 8
 	CollaborationMaxStepTimeoutHours = 24
+
+	// CollaborationMaxGuidanceChars and CollaborationMaxMemberDescriptionChars bound
+	// the author-written prompt text, counted in characters.
+	CollaborationMaxGuidanceChars          = 2000
+	CollaborationMaxMemberDescriptionChars = 500
 )
 
 // CollaborationStrategy selects how the members of a collaboration step coordinate.
@@ -62,6 +91,12 @@ type WorkflowCollaboration struct {
 	// Limits bounds the step. Every field is required and finite.
 	Limits CollaborationLimits `json:"limits" yaml:"limits"`
 
+	// Guidance is author-written text on how the team should resolve the task, for
+	// example the order of work or what each member should check. Every member
+	// receives it as trusted instructions. It guides the members; it does not
+	// grant or restrict interactions, which allowedInteractions controls.
+	Guidance string `json:"guidance,omitempty" yaml:"guidance,omitempty"`
+
 	Supervisor *CollaborationSupervisor `json:"supervisor,omitempty" yaml:"supervisor,omitempty"`
 	Parallel   *CollaborationParallel   `json:"parallel,omitempty" yaml:"parallel,omitempty"`
 	Handoff    *CollaborationHandoff    `json:"handoff,omitempty" yaml:"handoff,omitempty"`
@@ -73,6 +108,12 @@ type WorkflowCollaboration struct {
 type CollaborationMember struct {
 	// Name is the stable step-local alias.
 	Name string `json:"name" yaml:"name"`
+
+	// Description states what the member is good at. Members that may involve this
+	// member see it when choosing whom to delegate to, and the member sees it as
+	// its own role. An ExternalAgent member without a description is described by
+	// the skills pinned on its ExternalAgent.
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 
 	// AgentRef references the member Agent.
 	AgentRef AgentReference `json:"agentRef,omitzero" yaml:"agentRef,omitempty"`

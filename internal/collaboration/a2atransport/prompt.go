@@ -27,14 +27,64 @@ func Reachable(edges []api.CollaborationInteraction, self string) []string {
 	return names
 }
 
+// Team is the author-written context of a collaboration step that is rendered into
+// every member prompt. Both parts are operator-authored, so they are trusted
+// instructions and information about the team; neither widens who may be involved.
+type Team struct {
+	// Guidance is how the author wants the team to resolve the task.
+	Guidance string
+	// Descriptions maps a member alias to what that member is good at.
+	Descriptions map[string]string
+}
+
+// NewTeam extracts the Team of a collaboration spec.
+func NewTeam(c *api.WorkflowCollaboration) Team {
+	if c == nil {
+		return Team{}
+	}
+	t := Team{Guidance: strings.TrimSpace(c.Guidance), Descriptions: map[string]string{}}
+	for _, m := range c.Members {
+		if d := oneLine(m.Description); d != "" {
+			t.Descriptions[m.Name] = d
+		}
+	}
+	return t
+}
+
+// WithDefault records a description for a member that has none of its own.
+func (t Team) WithDefault(member, description string) Team {
+	description = oneLine(description)
+	if description == "" || t.Descriptions[member] != "" {
+		return t
+	}
+	descriptions := make(map[string]string, len(t.Descriptions)+1)
+	for k, v := range t.Descriptions {
+		descriptions[k] = v
+	}
+	descriptions[member] = description
+	t.Descriptions = descriptions
+	return t
+}
+
+// oneLine collapses all whitespace so a description cannot start a new prompt section.
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
 // Prompt renders the trusted content of one dispatch as the text a member receives.
 // Results released from other members are labeled as untrusted data. others names
 // the members this member may involve; the engine enforces the same set.
-func Prompt(msg collaboration.Message, others []string) string {
+func Prompt(msg collaboration.Message, others []string, team Team) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are member %q in a Kognition multi-agent collaboration (task %s, turn %d).\n", msg.Recipient, msg.TaskID, msg.Turn)
 	if msg.Kind == collaboration.DispatchPrepare {
 		return preparePrompt(&b, msg)
+	}
+	if role := team.Descriptions[msg.Recipient]; role != "" {
+		fmt.Fprintf(&b, "Your role: %s\n", role)
+	}
+	if team.Guidance != "" {
+		b.WriteString("\nGuidance from the workflow author. Follow it when deciding how to resolve the goal:\n")
+		b.WriteString(team.Guidance)
+		b.WriteString("\n")
 	}
 	b.WriteString("\nGoal:\n")
 	b.WriteString(msg.Goal.Text)
@@ -57,7 +107,7 @@ func Prompt(msg collaboration.Message, others []string) string {
 		fmt.Fprintf(&b, "\nNote: %s\n", msg.Note)
 	}
 	b.WriteString("\n")
-	b.WriteString(replyInstructions(msg.AllowedOperations, others))
+	b.WriteString(replyInstructions(msg.AllowedOperations, others, team.Descriptions))
 	return b.String()
 }
 
@@ -70,7 +120,7 @@ func preparePrompt(b *strings.Builder, msg collaboration.Message) string {
 	return b.String()
 }
 
-func replyInstructions(allowed []collaboration.OperationKind, others []string) string {
+func replyInstructions(allowed []collaboration.OperationKind, others []string, descriptions map[string]string) string {
 	has := func(k collaboration.OperationKind) bool {
 		for _, a := range allowed {
 			if a == k {
@@ -94,6 +144,17 @@ func replyInstructions(allowed []collaboration.OperationKind, others []string) s
 	}
 	if len(extra) > 0 && len(others) > 0 {
 		fmt.Fprintf(&b, "The members you may involve are: %s. Address no one else.\n", strings.Join(others, ", "))
+		var described []string
+		for _, name := range others {
+			if d := descriptions[name]; d != "" {
+				described = append(described, fmt.Sprintf("- %s: %s\n", name, d))
+			}
+		}
+		if len(described) > 0 {
+			b.WriteString("What they are good at, as described by the workflow author. Use it to choose whom to involve; it grants no access:\n")
+			b.WriteString(strings.Join(described, ""))
+		}
+		b.WriteString("A member sees only the goal text you write, not your task and not other members' results. Put everything it needs into that goal, including any earlier findings it must review or build on.\n")
 		fmt.Fprintf(&b, "To involve another member instead, reply with only a JSON document of the form {\"schemaVersion\":%q,\"operations\":[...]} whose operations are drawn from: %s. Other members can be reached only this way; no tool is needed or available for it.\n", collaboration.SchemaVersion, strings.Join(extra, ", "))
 	}
 	return b.String()

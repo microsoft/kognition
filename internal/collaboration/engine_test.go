@@ -33,6 +33,34 @@ func allow(c *api.WorkflowCollaboration, pairs ...[2]string) {
 	}
 }
 
+func TestDefinitionBoundsAuthorText(t *testing.T) {
+	for name, mutate := range map[string]func(*api.WorkflowCollaboration){
+		"long guidance": func(c *api.WorkflowCollaboration) {
+			c.Guidance = strings.Repeat("g", api.CollaborationMaxGuidanceChars+1)
+		},
+		"guidance escape": func(c *api.WorkflowCollaboration) { c.Guidance = "x\x1b[31m" },
+		"long description": func(c *api.WorkflowCollaboration) {
+			c.Members[0].Description = strings.Repeat("d", api.CollaborationMaxMemberDescriptionChars+1)
+		},
+		"description newline": func(c *api.WorkflowCollaboration) { c.Members[0].Description = "a\nb" },
+	} {
+		c := baseCollab(api.CollaborationStrategySupervisor, "lead", "a")
+		c.Supervisor = &api.CollaborationSupervisor{Coordinator: "lead"}
+		allow(c, [2]string{"lead", "a"})
+		mutate(c)
+		if _, err := NewDefinition(c); err == nil {
+			t.Fatalf("%s: definition accepted", name)
+		}
+	}
+	c := baseCollab(api.CollaborationStrategySupervisor, "lead", "a")
+	c.Supervisor = &api.CollaborationSupervisor{Coordinator: "lead"}
+	allow(c, [2]string{"lead", "a"})
+	c.Guidance, c.Members[0].Description = "Line one.\nLine two.", "drafts"
+	if _, err := NewDefinition(c); err != nil {
+		t.Fatalf("valid author text rejected: %v", err)
+	}
+}
+
 func newEngine(t *testing.T, c *api.WorkflowCollaboration) *Engine {
 	t.Helper()
 	def, err := NewDefinition(c)

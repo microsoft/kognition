@@ -35,6 +35,53 @@ func externalMemberWorkflow(members ...v1alpha1.CollaborationMember) v1alpha1.Wo
 	return wf
 }
 
+func TestWorkflowValidator_CollaborationStepRequiresInput(t *testing.T) {
+	local := func(name string) v1alpha1.CollaborationMember {
+		return v1alpha1.CollaborationMember{Name: name, AgentRef: v1alpha1.AgentReference{Name: name + "-agent"}}
+	}
+	wf := externalMemberWorkflow(local("lead"), local("other"))
+	wf.Spec.Steps[0].Input = "  "
+	response := NewWorkflowValidator(WithCollaborationEnabled(true)).Validate(context.Background(), workflowRequest(wf))
+	if response.Allowed || !strings.Contains(response.Reason, "input is required for collaboration steps") {
+		t.Fatalf("expected rejection for empty input, got allowed=%t reason=%q", response.Allowed, response.Reason)
+	}
+}
+
+func TestWorkflowValidator_GuidanceAndDescriptionLimits(t *testing.T) {
+	local := func(name, description string) v1alpha1.CollaborationMember {
+		return v1alpha1.CollaborationMember{Name: name, Description: description, AgentRef: v1alpha1.AgentReference{Name: name + "-agent"}}
+	}
+	tests := []struct {
+		name     string
+		guidance string
+		desc     string
+		want     string
+	}{
+		{"accepted", "Ask the analyst.\nThen the reviewer.", "checks facts", ""},
+		{"guidance at the limit", strings.Repeat("\u00e9", v1alpha1.CollaborationMaxGuidanceChars), "", ""},
+		{"guidance too long", strings.Repeat("g", v1alpha1.CollaborationMaxGuidanceChars+1), "", "guidance must not exceed"},
+		{"guidance control character", "bad\x07text", "", "guidance must not contain control characters"},
+		{"description too long", "", strings.Repeat("d", v1alpha1.CollaborationMaxMemberDescriptionChars+1), "description must not exceed"},
+		{"description newline", "", "two\nlines", "description must not contain control characters"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			wf := externalMemberWorkflow(local("lead", tc.desc), local("other", ""))
+			wf.Spec.Steps[0].Collaboration.Guidance = tc.guidance
+			response := NewWorkflowValidator(WithCollaborationEnabled(true)).Validate(context.Background(), workflowRequest(wf))
+			if tc.want == "" {
+				if !response.Allowed {
+					t.Fatalf("expected admission, got: %s", response.Reason)
+				}
+				return
+			}
+			if response.Allowed || !strings.Contains(response.Reason, tc.want) {
+				t.Fatalf("expected rejection containing %q, got allowed=%t reason=%q", tc.want, response.Allowed, response.Reason)
+			}
+		})
+	}
+}
+
 func TestWorkflowValidator_ExternalAgentMembers(t *testing.T) {
 	internal := v1alpha1.CollaborationMember{Name: "writer", AgentRef: v1alpha1.AgentReference{Name: "writer-agent"}}
 	external := func(alias, ref string) v1alpha1.CollaborationMember {

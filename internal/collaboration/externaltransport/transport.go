@@ -424,7 +424,7 @@ func cancelled(msg collaboration.Message, cancel bool, failure string) driver.Ob
 }
 
 func (t *Transport) prompt(msg collaboration.Message) string {
-	return a2atransport.Prompt(msg, a2atransport.Reachable(t.cfg.Run.Spec.AllowedInteractions, msg.Recipient))
+	return a2atransport.Prompt(msg, a2atransport.Reachable(t.cfg.Run.Spec.AllowedInteractions, msg.Recipient), a2atransport.NewTeam(t.cfg.Run.Spec))
 }
 
 func (t *Transport) credential(ctx context.Context, target Target) (Secret, error) {

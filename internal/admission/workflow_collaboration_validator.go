@@ -6,6 +6,7 @@ package admission
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/kognition-ai/kognition/api/v1alpha1"
@@ -41,6 +42,9 @@ func (v *WorkflowValidator) validateCollaborationStep(i int, step v1alpha1.Workf
 	if step.Retry != nil {
 		errs = append(errs, fmt.Sprintf("%s.retry is not supported for collaboration steps", path))
 	}
+	if strings.TrimSpace(step.Input) == "" {
+		errs = append(errs, fmt.Sprintf("%s.input is required for collaboration steps (use \"{{ .Input }}\" to pass the run input)", path))
+	}
 	errs = append(errs, validateCollaborationTimeout(path, step.Timeout)...)
 
 	c := step.Collaboration
@@ -63,6 +67,9 @@ func (v *WorkflowValidator) validateCollaborationStep(i int, step v1alpha1.Workf
 	aliases, memberErrs := v.validateCollaborationMembers(cpath, c.Members, workflowNamespace)
 	errs = append(errs, memberErrs...)
 
+	if problem := v1alpha1.CollaborationTextProblem(c.Guidance, v1alpha1.CollaborationMaxGuidanceChars, true); problem != "" {
+		errs = append(errs, fmt.Sprintf("%s.guidance %s", cpath, problem))
+	}
 	outgoing, interactionErrs := validateCollaborationInteractions(cpath, c, aliases)
 	errs = append(errs, interactionErrs...)
 
@@ -107,6 +114,10 @@ func (v *WorkflowValidator) validateCollaborationMembers(cpath string, members [
 			errs = append(errs, fmt.Sprintf("%s.name %q is duplicated", mpath, m.Name))
 		}
 		aliases[m.Name] = struct{}{}
+
+		if problem := v1alpha1.CollaborationTextProblem(m.Description, v1alpha1.CollaborationMaxMemberDescriptionChars, false); problem != "" {
+			errs = append(errs, fmt.Sprintf("%s.description %s", mpath, problem))
+		}
 
 		switch {
 		case m.ExternalAgentRef != nil && m.AgentRef.Name != "":

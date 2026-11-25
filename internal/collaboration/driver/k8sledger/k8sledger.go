@@ -25,7 +25,7 @@ import (
 
 const (
 	// StateKey is the ConfigMap data key that holds the encoded ledger.
-	StateKey = "state"
+	StateKey = collaboration.LedgerStateKey
 	// HandlesSuffix names the handle ConfigMap after the ledger ConfigMap.
 	HandlesSuffix = "-handles"
 

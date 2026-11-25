@@ -11,11 +11,10 @@ package jobtransport
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -31,9 +30,9 @@ import (
 // Labels and annotations applied to every collaboration AgentJob. The jobs carry no
 // workflow-step label, so the workflow reconciler never mistakes them for step jobs.
 const (
-	LabelComponent     = "app.kubernetes.io/component"
-	ComponentValue     = "workflow-collaboration"
-	LabelMember        = "kognition.dev/collaboration-member"
+	LabelComponent     = collaboration.LabelComponent
+	ComponentValue     = collaboration.ComponentValue
+	LabelMember        = collaboration.LabelMember
 	AnnotationDispatch = controller.CollaborationDispatchAnnotation
 )
 
@@ -91,8 +90,7 @@ func refused(format string, args ...any) error {
 
 // JobName derives the deterministic AgentJob name of one dispatch.
 func JobName(run controller.WorkflowCollaborationRun, dispatchID string) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%s", run.Namespace, run.RunUID, run.Step, run.Attempt, dispatchID)))
-	return "wfcj-" + hex.EncodeToString(sum[:12])
+	return collaboration.JobName(run.Namespace, run.RunUID, run.Step, run.Attempt, dispatchID)
 }
 
 // Admit implements driver.Transport.
@@ -140,6 +138,7 @@ func (t *Transport) Send(ctx context.Context, msg collaboration.Message) error {
 		return fmt.Errorf("jobtransport: unknown member %q", msg.Recipient)
 	}
 	name := JobName(run, msg.DispatchID)
+	others := t.reachable(msg.Recipient)
 	job := api.AgentJob{
 		TypeMeta: api.TypeMeta{APIVersion: api.APIVersion, Kind: "AgentJob"},
 		ObjectMeta: api.ObjectMeta{
@@ -152,7 +151,7 @@ func (t *Transport) Send(ctx context.Context, msg collaboration.Message) error {
 				APIVersion: api.APIVersion, Kind: run.OwnerKind, Name: run.RunName, UID: run.RunUID,
 			}},
 		},
-		Spec:   api.AgentJobSpec{AgentRef: &api.LocalObjectReference{Name: agent}, Input: a2atransport.Prompt(msg, t.reachable(msg.Recipient))},
+		Spec:   api.AgentJobSpec{AgentRef: &api.LocalObjectReference{Name: agent}, Input: a2atransport.Prompt(msg, others, t.team(ctx, others))},
 		Status: api.AgentJobStatus{Phase: api.PhasePending},
 	}
 	data, err := json.Marshal(job)
@@ -169,6 +168,33 @@ func (t *Transport) Send(ctx context.Context, msg collaboration.Message) error {
 // declared by the step's allowedInteractions. The engine enforces the same set.
 func (t *Transport) reachable(self string) []string {
 	return a2atransport.Reachable(t.cfg.Run.Spec.AllowedInteractions, self)
+}
+
+// team is the author-written context of the step. A reachable ExternalAgent member
+// without a description of its own is described by the skills pinned on its
+// ExternalAgent, which the operator reviewed. A lookup failure only omits the hint.
+func (t *Transport) team(ctx context.Context, others []string) a2atransport.Team {
+	spec := t.cfg.Run.Spec
+	team := a2atransport.NewTeam(spec)
+	reachable := make(map[string]struct{}, len(others))
+	for _, name := range others {
+		reachable[name] = struct{}{}
+	}
+	for _, m := range spec.Members {
+		if _, ok := reachable[m.Name]; !ok || m.ExternalAgentRef == nil || team.Descriptions[m.Name] != "" {
+			continue
+		}
+		data, err := t.cfg.Store.Get(ctx, "ExternalAgent", t.cfg.Run.Namespace, m.ExternalAgentRef.Name)
+		if err != nil {
+			continue
+		}
+		var agent api.ExternalAgent
+		if json.Unmarshal(data, &agent) != nil || len(agent.Spec.Card.Skills) == 0 {
+			continue
+		}
+		team = team.WithDefault(m.Name, "external A2A agent with the skills: "+strings.Join(agent.Spec.Card.Skills, ", "))
+	}
+	return team
 }
 
 // Observe implements driver.Transport.

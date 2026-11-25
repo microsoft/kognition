@@ -248,6 +248,14 @@ spec:
                             type: object
                           maxItems: 56
                           type: array
+                        guidance:
+                          description: |-
+                            Guidance is author-written text on how the team should resolve the task, for
+                            example the order of work or what each member should check. Every member
+                            receives it as trusted instructions. It guides the members; it does not
+                            grant or restrict interactions, which allowedInteractions controls.
+                          maxLength: 2000
+                          type: string
                         handoff:
                           description: CollaborationHandoff configures the Handoff
                             strategy.
@@ -331,6 +339,14 @@ spec:
                                 required:
                                 - name
                                 type: object
+                              description:
+                                description: |-
+                                  Description states what the member is good at. Members that may involve this
+                                  member see it when choosing whom to delegate to, and the member sees it as
+                                  its own role. An ExternalAgent member without a description is described by
+                                  the skills pinned on its ExternalAgent.
+                                maxLength: 500
+                                type: string
                               externalAgentRef:
                                 description: |-
                                   ExternalAgentRef references a remote A2A agent declared by an ExternalAgent in

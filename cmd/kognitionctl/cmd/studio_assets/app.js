@@ -72,6 +72,8 @@ function studioFetch(path, options) {
 }
 
 function nsParam() {
+  // An empty namespace means "all namespaces" in kubernetes mode; omitting the param would fall back to the server default.
+  if (state.mode === "kubernetes") return `?namespace=${encodeURIComponent(state.namespace || "")}`;
   return state.namespace ? `?namespace=${encodeURIComponent(state.namespace)}` : "";
 }
 async function apiMeta() {
@@ -4097,6 +4099,8 @@ const TEAM_STRATEGY_BLOCKS = { Supervisor: "supervisor", Parallel: "parallel", H
 const TEAM_ALIAS_RE = /^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$/;
 const TEAM_MAX_MEMBERS = 8;
 const TEAM_MAX_STEP_SECONDS = 24 * 3600;
+const TEAM_GUIDANCE_MAX = 2000;
+const TEAM_DESCRIPTION_MAX = 500;
 const TEAM_LIMIT_MAX = { maxTurns: 100, maxMessages: 500, maxDelegations: 100, maxDelegationDepth: 5, maxParallelTasks: 8 };
 const TEAM_STRATEGY_HINTS = {
   Supervisor: "One coordinator delegates work to the other members and produces the final result.",
@@ -4204,6 +4208,7 @@ function goDurationSeconds(text) {
 function teamProblems(step, workflow) {
   const problems = [];
   const team = step.collaboration;
+  if (!(step.input || "").trim()) problems.push("an input is required, for example {{ .Input }} to pass the run input to the team.");
   if (!step.timeout) problems.push("a timeout is required.");
   else {
     const seconds = goDurationSeconds(step.timeout);
@@ -4216,8 +4221,12 @@ function teamProblems(step, workflow) {
   if (members.length < 2 || members.length > TEAM_MAX_MEMBERS) problems.push(`needs between 2 and ${TEAM_MAX_MEMBERS} members.`);
   const aliases = new Set();
   const agents = new Map();
+  if ([...(team.guidance || "")].length > TEAM_GUIDANCE_MAX) problems.push(`guidance must not exceed ${TEAM_GUIDANCE_MAX} characters.`);
   for (const member of members) {
     const alias = member?.name || "";
+    if ([...(member?.description || "")].length > TEAM_DESCRIPTION_MAX) problems.push(`the description of "${alias}" must not exceed ${TEAM_DESCRIPTION_MAX} characters.`);
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u001f\u007f-\u009f]/.test(member?.description || "")) problems.push(`the description of "${alias}" must be a single line without control characters.`);
     if (!TEAM_ALIAS_RE.test(alias)) problems.push(`member name "${alias}" must be a lowercase DNS label of at most 32 characters starting with a letter.`);
     else if (aliases.has(alias)) problems.push(`member name "${alias}" is used more than once.`);
     aliases.add(alias);
@@ -4308,7 +4317,7 @@ function addStep(type) {
   let i = 1;
   while (wf.spec.steps.find((s) => s.name === `${base}-${i}`)) i++;
   const name = `${base}-${i}`;
-  const step = type === "collaboration" ? { name, type, timeout: "5m", collaboration: newWorkflowTeam() }
+  const step = type === "collaboration" ? { name, type, input: "{{ .Input }}", timeout: "5m", collaboration: newWorkflowTeam() }
     : type === "tool" ? { name, type, toolRef: { name: "" } } : { name, type, agentRef: { name: "" } };
   wf.spec.steps.push(step);
   const canvas = document.getElementById("wf-canvas");
@@ -4347,11 +4356,23 @@ function closeInspector() {
   document.querySelectorAll(".node.selected, svg.edges path.selected").forEach((n) => n.classList.remove("selected"));
 }
 
+// Runs a mutation that rebuilds the inspector, then refocuses the control at the same DOM position.
+function keepInspectorFocus(mutate) {
+  const controls = () => [...document.querySelectorAll("#inspector-body input, #inspector-body select, #inspector-body textarea, #inspector-body button")];
+  const index = controls().indexOf(document.activeElement);
+  mutate();
+  if (index >= 0) controls()[index]?.focus();
+}
+
 // Text input that commits on blur/Enter so renames do not re-render the inspector per keystroke.
-function commitTextField(label, value, onCommit) {
+function commitTextField(label, value, onCommit, required) {
   const input = document.createElement("input"); input.type = "text"; input.value = value || "";
-  input.addEventListener("change", () => onCommit(input.value.trim()));
-  return field(label, input);
+  // Deferred so focus has already moved to the next control when the inspector is rebuilt.
+  input.addEventListener("change", () => {
+    const committed = input.value.trim();
+    setTimeout(() => keepInspectorFocus(() => onCommit(committed)), 0);
+  });
+  return field(label, input, { required });
 }
 
 function renderWorkflowTeam(host, step) {
@@ -4384,6 +4405,14 @@ function renderWorkflowTeam(host, step) {
     return;
   }
   const memberNames = teamMemberNames(team);
+  host.appendChild(section("Team guidance", `${[...(team.guidance || "")].length} of ${TEAM_GUIDANCE_MAX}`, (body) => {
+    body.appendChild(textareaField("Guidance for the team", team.guidance || "",
+      (value) => edit("edit team guidance", () => { setOrDel(team, "guidance", value.trim() ? value : undefined); }),
+      "For example: ask the analyst to verify the facts, then the reviewer to check tone, before finalizing."));
+    const hint = document.createElement("p"); hint.className = "hint";
+    hint.textContent = "Sent to every member as trusted instructions on how to resolve the task. It guides the members; it does not change who may call whom.";
+    body.appendChild(hint);
+  }, true));
   host.appendChild(section("Team members", `${team.members.length} of ${TEAM_MAX_MEMBERS}`, (body) => {
     const workflowNamespace = state.draft.metadata.namespace || "default";
     for (const member of team.members) {
@@ -4393,6 +4422,9 @@ function renderWorkflowTeam(host, step) {
         edit("rename team member", () => { renameTeamMember(team, member.name, value); }, true);
       }));
       const external = member.externalAgentRef != null;
+      body.appendChild(textField(`Description of ${member.name}`, member.description || "",
+        (value) => edit("edit team member description", () => { setOrDel(member, "description", value.trim() ? value : undefined); }),
+        false, external ? "Optional; defaults to the skills pinned on the external agent" : "What this member is good at"));
       body.appendChild(selectField(`Kind of ${member.name}`, external ? "external" : "agent", [
         { value: "agent", label: "Agent" }, { value: "external", label: "External agent" },
       ], (value) => edit("change team member kind", () => { setTeamMemberKind(member, value === "external"); }, true)));
@@ -4524,7 +4556,7 @@ function renderStepInspector(name) {
   const host = document.getElementById("inspector-body");
   host.innerHTML = "";
 
-  host.appendChild(textField("Name", step.name, (v) => {
+  host.appendChild(commitTextField("Name", step.name, (v) => {
     if (!v || v === step.name) return;
     editWorkflow("rename step", () => {
       const old = step.name;
@@ -4562,6 +4594,7 @@ function renderStepInspector(name) {
         delete step.toolRef;
         delete step.retry;
         step.timeout ||= "5m";
+        step.input ||= "{{ .Input }}";
         step.collaboration ||= newWorkflowTeam();
       }
       else { delete step.toolRef; step.agentRef = step.agentRef || { name: "" }; }
@@ -5781,7 +5814,7 @@ function renderRunStatus(run, openKeyPrefix, ns) {
       return NaN;
     };
     for (let i = 0; i < steps.length; i++) {
-      list.appendChild(renderStepCard(steps[i], stepSpecByName[steps[i].name], endTimeFor(i), prefix));
+      list.appendChild(renderStepCard(steps[i], stepSpecByName[steps[i].name], endTimeFor(i), prefix, { runName, ns: runNs, terminal: isTerminal }));
     }
     wrap.appendChild(list);
   }
@@ -5809,7 +5842,7 @@ function renderRunStatus(run, openKeyPrefix, ns) {
   return wrap;
 }
 
-function renderStepCard(step, spec, endTimeMs, openKeyPrefix) {
+function renderStepCard(step, spec, endTimeMs, openKeyPrefix, runCtx) {
   const card = document.createElement("div");
   card.className = "run-step-card";
 
@@ -5866,7 +5899,181 @@ function renderStepCard(step, spec, endTimeMs, openKeyPrefix) {
     const openKey = `${openKeyPrefix || "run"}#${step.name || ""}#output`;
     card.appendChild(renderCollapsibleBlock("Output", step.output, openKey));
   }
+  if (spec && spec.collaboration && runCtx && runCtx.runName && !StudioTutorial.isPractice()) {
+    card.appendChild(renderCollaborationPanel(step.name, runCtx, openKeyPrefix));
+  }
   return card;
+}
+
+// Collaboration traces are cached per run; the preview DOM is rebuilt on every
+// poll, so the cache keeps the panel from flashing and bounds the requests.
+const collabCache = new Map();
+const COLLAB_REFRESH_MS = 3000;
+
+function collabCacheKey(ctx) {
+  return `${ctx.ns}/${ctx.runName}`;
+}
+
+function refreshCollabTrace(ctx, onUpdate) {
+  const key = collabCacheKey(ctx);
+  const entry = collabCache.get(key) || { trace: null, error: "", fetchedAt: 0, pending: false, final: false };
+  collabCache.set(key, entry);
+  if (entry.pending || (entry.final && entry.trace)) return entry;
+  if (entry.fetchedAt && Date.now() - entry.fetchedAt < COLLAB_REFRESH_MS) return entry;
+  entry.pending = true;
+  const url = `/api/workflowruns/${encodeURIComponent(ctx.runName)}/collaboration?namespace=${encodeURIComponent(ctx.ns || "")}`;
+  studioFetch(url)
+    .then(async (r) => {
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`;
+        try { msg = (await r.json()).error || msg; } catch (_) { /* keep status text */ }
+        throw new Error(msg);
+      }
+      return r.json();
+    })
+    .then((trace) => {
+      entry.trace = trace;
+      entry.error = "";
+      // A finished run no longer changes, so stop polling once the ledger was read.
+      entry.final = !!ctx.terminal;
+    })
+    .catch((e) => { entry.error = String((e && e.message) || e); })
+    .finally(() => {
+      entry.pending = false;
+      entry.fetchedAt = Date.now();
+      onUpdate();
+    });
+  return entry;
+}
+
+function renderCollaborationPanel(stepName, ctx, openKeyPrefix) {
+  const host = document.createElement("div");
+  host.className = "collab-panel";
+  const paint = () => {
+    // A poll tick may have replaced this node; the replacement reads the cache.
+    if (!host.isConnected) return;
+    const entry = collabCache.get(collabCacheKey(ctx));
+    fillCollaborationPanel(host, stepName, entry, openKeyPrefix);
+  };
+  const entry = refreshCollabTrace(ctx, paint);
+  fillCollaborationPanel(host, stepName, entry, openKeyPrefix);
+  return host;
+}
+
+function collabFmtDuration(startISO, endISO) {
+  const a = Date.parse(startISO), b = Date.parse(endISO);
+  if (isNaN(a) || isNaN(b)) return "";
+  return `${Math.max(0, Math.round((b - a) / 1000))}s`;
+}
+
+function fillCollaborationPanel(host, stepName, entry, openKeyPrefix) {
+  host.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "run-field-label";
+  title.textContent = "Collaboration";
+  host.appendChild(title);
+
+  const trace = entry && entry.trace;
+  const info = trace && (trace.steps || []).find((s) => s.step === stepName);
+  const note = (text, cls) => {
+    const n = document.createElement("div");
+    n.className = `run-step-note ${cls || ""}`.trim();
+    n.textContent = text;
+    host.appendChild(n);
+  };
+  if (!trace) {
+    note(entry && entry.error ? `Trace unavailable: ${entry.error}` : "Loading trace…", entry && entry.error ? "bad" : "");
+    return;
+  }
+  if (!info) { note("No trace for this step yet."); return; }
+  if (!info.available) { note(info.message || "No trace available."); return; }
+
+  const c = info.counters || {}, lim = info.limits || {};
+  const of = (used, max) => (max ? `${used} of ${max}` : `${used}`);
+  const summary = document.createElement("div");
+  summary.className = "collab-summary";
+  const parts = [`<span class="collab-strategy">${escapeHtml(info.strategy || "")}</span>`, `<span class="run-phase ${phaseClassFor(info.phase)}">${escapeHtml(info.phase || "")}</span>`];
+  if (info.finalBy) parts.push(`final answer by <strong>${escapeHtml(info.finalBy)}</strong>`);
+  parts.push(`<span class="muted">turns ${escapeHtml(of(c.turns || 0, lim.maxTurns))} · delegations ${escapeHtml(of(c.delegations || 0, lim.maxDelegations))} · messages ${c.messages || 0} · tokens ${escapeHtml(of(c.tokensUsed || 0, lim.maxTokens))}</span>`);
+  summary.innerHTML = parts.join(" ");
+  host.appendChild(summary);
+
+  const members = info.members || [];
+  const chips = document.createElement("div");
+  chips.className = "collab-members";
+  for (const m of members) {
+    const chip = document.createElement("span");
+    let status = "not involved";
+    let cls = "idle";
+    if (m.final) { status = "answered"; cls = "final"; }
+    else if (m.contributed) { status = "contributed"; cls = "contrib"; }
+    else if (m.involved) { status = "ran"; cls = "ran"; }
+    chip.className = `collab-chip ${cls}`;
+    const detail = [`agent ${m.agent || "?"}`, `${m.tasks} task(s)`, `${m.turns} turn(s)`];
+    if (m.tokens) detail.push(`${m.tokens} tokens`);
+    chip.title = detail.join(" · ");
+    chip.innerHTML = `<strong>${escapeHtml(m.alias)}</strong> <span class="collab-role">${escapeHtml(m.role)}</span> <span class="collab-status">${escapeHtml(status)}</span>`;
+    chips.appendChild(chip);
+  }
+  host.appendChild(chips);
+
+  const idle = members.filter((m) => !m.involved).map((m) => m.alias);
+  if (info.strategy === "Supervisor" && info.phase === "Succeeded" && members.length > 1 && (c.delegations || 0) === 0 && idle.length) {
+    note(`The coordinator answered without delegating, so ${idle.join(", ")} did not take part.`);
+  } else if (info.reason && info.phase !== "Succeeded") {
+    note(info.reason, "bad");
+  }
+
+  const tasks = info.tasks || [];
+  const dispatches = info.dispatches || [];
+  if (!tasks.length && !dispatches.length) return;
+  const details = document.createElement("details");
+  details.className = "collab-trace";
+  const openKey = `${openKeyPrefix || "run"}#${stepName}#collab-trace`;
+  if (state.preview.openBlocks[openKey]) details.open = true;
+  details.addEventListener("toggle", () => {
+    if (details.open) state.preview.openBlocks[openKey] = true;
+    else delete state.preview.openBlocks[openKey];
+  });
+  const sum = document.createElement("summary");
+  sum.textContent = `Trace (${tasks.length} task(s), ${dispatches.length} dispatch(es))`;
+  details.appendChild(sum);
+
+  for (const t of tasks) {
+    const row = document.createElement("div");
+    row.className = "collab-task";
+    const route = t.requester ? `${t.requester} → ${t.recipient}` : t.recipient;
+    row.innerHTML = `<div class="collab-task-head"><span class="run-phase ${phaseClassFor(t.state)}">${escapeHtml(t.state)}</span> <strong>${escapeHtml(t.id)}</strong> <span>${escapeHtml(route)}</span>${t.final ? ' <span class="collab-chip final">final</span>' : ""}<span class="muted"> · ${t.turns} turn(s)</span></div>`;
+    if (t.reason) {
+      const why = document.createElement("div"); why.className = "run-step-note bad"; why.textContent = t.reason;
+      row.appendChild(why);
+    }
+    for (const d of dispatches.filter((x) => x.taskId === t.id)) {
+      const line = document.createElement("div");
+      line.className = "collab-dispatch muted";
+      const bits = [`${d.kind} ${d.id} → ${d.recipient}`, d.status];
+      if (d.job) {
+        bits.push(`job ${d.job.name}`);
+        if (d.job.phase) bits.push(d.job.phase);
+        if (d.job.totalTokens) bits.push(`${d.job.totalTokens} tokens`);
+        const took = collabFmtDuration(d.job.startTime, d.job.completionTime);
+        if (took) bits.push(took);
+      }
+      line.textContent = bits.join(" · ");
+      row.appendChild(line);
+      if (d.reason || (d.job && d.job.message)) {
+        const why = document.createElement("div"); why.className = "run-step-note bad"; why.textContent = d.reason || d.job.message;
+        row.appendChild(why);
+      }
+    }
+    const goalKey = `${openKey}#${t.id}#goal`;
+    row.appendChild(renderCollapsibleBlock(`Goal${t.goal && t.goal.truncated ? " (truncated)" : ""}`, (t.goal && t.goal.text) || "", goalKey));
+    if (t.result) {
+      row.appendChild(renderCollapsibleBlock(`Result${t.result.truncated ? " (truncated)" : ""}`, t.result.text || "", `${openKey}#${t.id}#result`));
+    }
+    details.appendChild(row);
+  }
+  host.appendChild(details);
 }
 
 function renderCollapsibleBlock(label, text, openKey) {

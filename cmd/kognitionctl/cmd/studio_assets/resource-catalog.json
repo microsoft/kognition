@@ -10923,6 +10923,11 @@
                         },
                         "type": "array"
                       },
+                      "guidance": {
+                        "description": "Guidance is author-written text on how the team should resolve the task, for\nexample the order of work or what each member should check. Every member\nreceives it as trusted instructions. It guides the members; it does not\ngrant or restrict interactions, which allowedInteractions controls.",
+                        "maxLength": 2000,
+                        "type": "string"
+                      },
                       "handoff": {
                         "description": "CollaborationHandoff configures the Handoff strategy.",
                         "properties": {
@@ -11011,6 +11016,11 @@
                                 "name"
                               ],
                               "type": "object"
+                            },
+                            "description": {
+                              "description": "Description states what the member is good at. Members that may involve this\nmember see it when choosing whom to delegate to, and the member sees it as\nits own role. An ExternalAgent member without a description is described by\nthe skills pinned on its ExternalAgent.",
+                              "maxLength": 500,
+                              "type": "string"
                             },
                             "externalAgentRef": {
                               "description": "ExternalAgentRef references a remote A2A agent declared by an ExternalAgent in\nthe Workflow namespace. Data sent to it leaves the platform, so an\nExternalAgentGrant is required.",
@@ -11463,6 +11473,11 @@
                         "maxItems": 56,
                         "type": "array"
                       },
+                      "guidance": {
+                        "description": "Guidance is author-written text on how the team should resolve the task, for\nexample the order of work or what each member should check. Every member\nreceives it as trusted instructions. It guides the members; it does not\ngrant or restrict interactions, which allowedInteractions controls.",
+                        "maxLength": 2000,
+                        "type": "string"
+                      },
                       "handoff": {
                         "description": "CollaborationHandoff configures the Handoff strategy.",
                         "properties": {
@@ -11558,6 +11573,11 @@
                                 "name"
                               ],
                               "type": "object"
+                            },
+                            "description": {
+                              "description": "Description states what the member is good at. Members that may involve this\nmember see it when choosing whom to delegate to, and the member sees it as\nits own role. An ExternalAgent member without a description is described by\nthe skills pinned on its ExternalAgent.",
+                              "maxLength": 500,
+                              "type": "string"
                             },
                             "externalAgentRef": {
                               "description": "ExternalAgentRef references a remote A2A agent declared by an ExternalAgent in\nthe Workflow namespace. Data sent to it leaves the platform, so an\nExternalAgentGrant is required.",

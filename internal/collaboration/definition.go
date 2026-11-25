@@ -55,6 +55,9 @@ func NewDefinition(c *api.WorkflowCollaboration) (Definition, error) {
 		errs = append(errs, fmt.Sprintf("members must contain 2 to %d entries", api.CollaborationMaxMembers))
 	}
 	for _, m := range c.Members {
+		if problem := api.CollaborationTextProblem(m.Description, api.CollaborationMaxMemberDescriptionChars, false); problem != "" {
+			errs = append(errs, fmt.Sprintf("member %q description %s", m.Name, problem))
+		}
 		if !aliasPattern.MatchString(m.Name) {
 			errs = append(errs, fmt.Sprintf("member alias %q is invalid", m.Name))
 			continue
@@ -65,6 +68,9 @@ func NewDefinition(c *api.WorkflowCollaboration) (Definition, error) {
 		}
 		d.memberSet[m.Name] = struct{}{}
 		d.Members = append(d.Members, m.Name)
+	}
+	if problem := api.CollaborationTextProblem(c.Guidance, api.CollaborationMaxGuidanceChars, true); problem != "" {
+		errs = append(errs, "guidance "+problem)
 	}
 	if len(c.AllowedInteractions) > api.CollaborationMaxInteractions {
 		errs = append(errs, "allowedInteractions exceeds the reviewed ceiling")

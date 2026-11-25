@@ -177,7 +177,8 @@ spec:
           maxTokens: 32768
 ---
 # Supervisor: the writer coordinates and may delegate to the analyst and the
-# reviewer. Only the listed interactions are admitted.
+# reviewer. Only the listed interactions are admitted. The guidance and the member
+# descriptions steer the writer's choices; they do not widen the interactions.
 kind: Workflow
 apiVersion: kognition.dev/v1alpha1
 metadata:
@@ -196,14 +197,22 @@ spec:
       collaboration:
         strategy: Supervisor
         protocol: A2A
+        guidance: |-
+          Resolve the request in this order: ask the analyst for the key facts, ask the
+          reviewer to check the analyst's findings (paste the findings into the reviewer's
+          goal), then write the final answer yourself using both results. Do not answer
+          before both have replied.
         members:
           - name: writer
+            description: Coordinates the team and writes the final answer.
             agentRef:
               name: wfteam-writer
           - name: analyst
+            description: Gathers and summarizes the key facts for a request.
             agentRef:
               name: wfteam-analyst
           - name: reviewer
+            description: Checks findings for errors and unsupported claims.
             agentRef:
               name: wfteam-reviewer
         allowedInteractions:

@@ -49,6 +49,25 @@ Each delegation or handoff edge must also be allowed by an
 `AgentCommunicationPolicy` (default deny). `allowedInteractions` narrows the
 policy but never widens it. The sample defines the policies it needs.
 
+### Steer the team: guidance and member descriptions
+
+A model that is told only the aliases it may reach can legitimately answer alone.
+Two optional, author-written fields tell the team how you want the task resolved:
+
+- `collaboration.guidance` (at most 2000 characters, multi-line) is sent to every
+  member as trusted instructions, for example the order of work or what each member
+  should check.
+- `members[].description` (at most 500 characters, one line) states what a member is
+  good at. A member sees its own description as its role and the descriptions of the
+  members it may involve when it chooses whom to delegate to. An ExternalAgent member
+  without a description is described by the skills pinned in its ExternalAgent
+  `card.skills`; the live Agent Card is not read for this.
+
+Both fields only inform the members' choices. They never grant or widen an
+interaction: `allowedInteractions` and `AgentCommunicationPolicy` remain the only
+authority, and a member can still decide not to delegate. Control characters are
+rejected, and descriptions are collapsed to one line before they enter a prompt.
+
 ## Define a step
 
 ```yaml
@@ -135,7 +154,8 @@ apply updated CRDs with `kubectl apply` when upgrading an existing cluster.
 In Kubernetes mode, Kognition Studio edits a collaboration step in its **Team**
 step editor. It supports all four strategies, members, interactions and limits,
 shows the admission rules as problems before deployment and updates references
-when a member is renamed. In standalone mode the editor is read-only because
+when a member is renamed. A **Team guidance** section edits `guidance`, and each
+member has a **Description** field. In standalone mode the editor is read-only because
 collaboration needs the Kubernetes executor. Server-side admission remains the
 authority. Each member has a **Kind** selector (Agent or External agent); an
 external member offers the ExternalAgents of the Workflow namespace, reports

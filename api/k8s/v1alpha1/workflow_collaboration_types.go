@@ -65,6 +65,14 @@ type WorkflowCollaboration struct {
 	// Limits bounds the step. Every field is required and finite.
 	Limits CollaborationLimits `json:"limits"`
 
+	// Guidance is author-written text on how the team should resolve the task, for
+	// example the order of work or what each member should check. Every member
+	// receives it as trusted instructions. It guides the members; it does not
+	// grant or restrict interactions, which allowedInteractions controls.
+	// +kubebuilder:validation:MaxLength=2000
+	// +optional
+	Guidance string `json:"guidance,omitempty"`
+
 	// +optional
 	Supervisor *CollaborationSupervisor `json:"supervisor,omitempty"`
 	// +optional
@@ -82,6 +90,14 @@ type CollaborationMember struct {
 	// Name is the stable step-local alias.
 	// +kubebuilder:validation:Pattern=`^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$`
 	Name string `json:"name"`
+
+	// Description states what the member is good at. Members that may involve this
+	// member see it when choosing whom to delegate to, and the member sees it as
+	// its own role. An ExternalAgent member without a description is described by
+	// the skills pinned on its ExternalAgent.
+	// +kubebuilder:validation:MaxLength=500
+	// +optional
+	Description string `json:"description,omitempty"`
 
 	// AgentRef references the member Agent.
 	// +optional

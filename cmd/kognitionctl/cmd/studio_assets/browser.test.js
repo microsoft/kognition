@@ -292,6 +292,17 @@ test("Workflow Team Supervisor step delegates from the coordinator and keeps ren
   await expect(yaml).toHaveValue(/strategy: Supervisor/);
 });
 
+test("Workflow Team member rename keeps focus on the next field", async ({ page }) => {
+  const { inspector } = await newTeamStep(page, "focus");
+  await inspector.getByRole("button", { name: "+ Add member", exact: true }).click();
+  const name = inspector.getByLabel("Name of member-1", { exact: true });
+  await name.fill("lead");
+  await page.keyboard.press("Tab");
+  await expect(inspector.getByLabel("Name of lead", { exact: true })).toHaveValue("lead");
+  await page.keyboard.type("Plans the work");
+  await expect(inspector.getByLabel(/^Description of lead/)).toHaveValue("Plans the work");
+});
+
 test("Workflow Team Handoff and Peer steps generate their interaction graph", async ({ page }) => {
   const { mutations, inspector } = await newTeamStep(page, "handoff-flow");
   await inspector.getByLabel("Strategy", { exact: true }).selectOption("Handoff");

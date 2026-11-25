@@ -15,6 +15,7 @@ func workflowCollaborationToK8s(in *api.WorkflowCollaboration) *k8s.WorkflowColl
 	out := &k8s.WorkflowCollaboration{
 		Strategy: k8s.CollaborationStrategy(in.Strategy),
 		Protocol: k8s.CollaborationProtocol(in.Protocol),
+		Guidance: in.Guidance,
 		Limits: k8s.CollaborationLimits{
 			MaxTurns:           in.Limits.MaxTurns,
 			MaxMessages:        in.Limits.MaxMessages,
@@ -28,8 +29,9 @@ func workflowCollaborationToK8s(in *api.WorkflowCollaboration) *k8s.WorkflowColl
 		out.Members = make([]k8s.CollaborationMember, len(in.Members))
 		for i, m := range in.Members {
 			out.Members[i] = k8s.CollaborationMember{
-				Name:     m.Name,
-				AgentRef: k8s.AgentReference{Name: m.AgentRef.Name, Namespace: m.AgentRef.Namespace},
+				Name:        m.Name,
+				Description: m.Description,
+				AgentRef:    k8s.AgentReference{Name: m.AgentRef.Name, Namespace: m.AgentRef.Namespace},
 			}
 			if m.ExternalAgentRef != nil {
 				ref := localRefToK8s(m.ExternalAgentRef.Name)
@@ -75,6 +77,7 @@ func workflowCollaborationFromK8s(in *k8s.WorkflowCollaboration) *api.WorkflowCo
 	out := &api.WorkflowCollaboration{
 		Strategy: api.CollaborationStrategy(in.Strategy),
 		Protocol: api.CollaborationProtocol(in.Protocol),
+		Guidance: in.Guidance,
 		Limits: api.CollaborationLimits{
 			MaxTurns:           in.Limits.MaxTurns,
 			MaxMessages:        in.Limits.MaxMessages,
@@ -88,8 +91,9 @@ func workflowCollaborationFromK8s(in *k8s.WorkflowCollaboration) *api.WorkflowCo
 		out.Members = make([]api.CollaborationMember, len(in.Members))
 		for i, m := range in.Members {
 			out.Members[i] = api.CollaborationMember{
-				Name:     m.Name,
-				AgentRef: api.AgentReference{Name: m.AgentRef.Name, Namespace: m.AgentRef.Namespace},
+				Name:        m.Name,
+				Description: m.Description,
+				AgentRef:    api.AgentReference{Name: m.AgentRef.Name, Namespace: m.AgentRef.Namespace},
 			}
 			if m.ExternalAgentRef != nil {
 				out.Members[i].ExternalAgentRef = &api.LocalObjectReference{Name: m.ExternalAgentRef.Name}
