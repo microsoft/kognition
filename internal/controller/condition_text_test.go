@@ -155,6 +155,47 @@ func TestModelReconciler_SanitizesProbeTextBeforePersisting(t *testing.T) {
 	}
 }
 
+func TestModelReconciler_EmptyProbeReasonGetsFallbackBeforePersisting(t *testing.T) {
+	tests := []struct {
+		name      string
+		available bool
+		reason    string
+		want      string
+	}{
+		{name: "unavailable empty", available: false, want: "ProbeFailed"},
+		{name: "available empty", available: true, want: "ProbeSucceeded"},
+		{name: "unavailable unusable", available: false, reason: "!!! ", want: "ProbeFailed"},
+		{name: "available unusable", available: true, reason: "!!! ", want: "ProbeSucceeded"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newMemStore()
+			reg := cpi.NewRegistry()
+			reg.MustRegister(&mockDriverWithProbe{mockDriver: mockDriver{name: "openai-compatible"}, result: &cpi.HealthResult{
+				Available: tt.available,
+				Reason:    tt.reason,
+				Message:   "probe finished",
+			}})
+			r := NewModelReconciler(s, reg, zaptest.NewLogger(t))
+			storeModel(t, s, v1alpha1.Model{
+				TypeMeta:   v1alpha1.TypeMeta{APIVersion: v1alpha1.APIVersion, Kind: "Model"},
+				ObjectMeta: v1alpha1.ObjectMeta{Name: "m", Namespace: "default"},
+				Spec:       v1alpha1.ModelSpec{Provider: "openai-compatible", ModelID: "gpt-4o", Endpoint: "https://model-gateway.internal/v1"},
+			})
+
+			reconcileModel(t, r, "default", "m")
+
+			cond := findModelCondition(getModel(t, s, "default", "m"), "Ready")
+			if cond == nil {
+				t.Fatal("expected a Ready condition")
+			}
+			if cond.Reason != tt.want || !conditionReasonSchema.MatchString(cond.Reason) {
+				t.Errorf("Reason = %q, want %q", cond.Reason, tt.want)
+			}
+		})
+	}
+}
+
 func TestModelClassReconciler_SanitizesProbeTextBeforePersisting(t *testing.T) {
 	driver := &configurableMockDriver{
 		name: "openai-compatible",

@@ -59,7 +59,15 @@ func (r *ModelReconciler) Reconcile(ctx context.Context, req Request) (Result, e
 
 	available, latency, reason, message := r.evaluate(ctx, req.Namespace, &model)
 	// Probe results can carry provider-controlled text; make it safe to persist.
-	reason = sanitizeConditionReason(reason, "ProbeFailed")
+	// The Ready condition requires a nonempty reason, unlike ModelClass's empty-reason sentinel.
+	fallbackReason := "ProbeFailed"
+	if available {
+		fallbackReason = "ProbeSucceeded"
+	}
+	if reason == "" {
+		reason = fallbackReason
+	}
+	reason = sanitizeConditionReason(reason, fallbackReason)
 	message = sanitizeConditionMessage(message)
 	model.Status.Available = available
 	model.Status.Latency = latency.String()
