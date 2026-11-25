@@ -501,6 +501,38 @@ func TestGrantDecisions(t *testing.T) {
 	}
 }
 
+func TestMissingExternalAgentOrGrantIsRefusedWithoutContact(t *testing.T) {
+	for name, tc := range map[string]struct {
+		remove func(f *fixture)
+		want   string
+	}{
+		"missing ExternalAgent": {func(f *fixture) { f.st.del(kindExternalAgent, "ext") }, `ExternalAgent "ext" not found`},
+		"missing grant":         {func(f *fixture) { f.st.del(kindExternalAgentGrant, "g1") }, `no ExternalAgentGrant lets Workflow "wf" invoke ExternalAgent "ext"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			tc.remove(f)
+			tr := f.transport()
+			msg := startMessage("d1")
+			err := tr.Admit(context.Background(), msg)
+			if !isRefusal(err) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Admit = %v, want a refusal containing %q", err, tc.want)
+			}
+			if err := tr.Send(context.Background(), msg); err == nil {
+				t.Fatal("Send succeeded without an authorized target")
+			}
+			if f.client.sent() != 0 {
+				t.Fatal("contacted the agent")
+			}
+			for _, d := range f.audit.decisions(t) {
+				if d.Outcome == "allowed" {
+					t.Fatalf("an allowed decision was recorded: %+v", d)
+				}
+			}
+		})
+	}
+}
+
 func TestWorkflowRunIsGovernedByItsWorkflowTemplate(t *testing.T) {
 	f := newFixture(t)
 	f.owner, f.runName = "WorkflowRun", "wf-run-1"

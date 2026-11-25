@@ -80,3 +80,15 @@ func TestWorkflowValidator_ExternalAgentsAreOffByDefault(t *testing.T) {
 		t.Fatal("an ExternalAgent member was admitted without the operator enabling external agents")
 	}
 }
+
+func TestWorkflowValidator_ExternalAgentsNeedCollaboration(t *testing.T) {
+	member := v1alpha1.CollaborationMember{Name: "remote", ExternalAgentRef: &v1alpha1.LocalObjectReference{Name: "remote-agent"}}
+	internal := v1alpha1.CollaborationMember{Name: "writer", AgentRef: v1alpha1.AgentReference{Name: "writer-agent"}}
+	response := NewWorkflowValidator(WithExternalAgentsEnabled(true)).Validate(context.Background(), workflowRequest(externalMemberWorkflow(member, internal)))
+	if response.Allowed {
+		t.Fatal("a collaboration step was admitted where collaboration is disabled")
+	}
+	if !strings.Contains(response.Reason, "collaboration") {
+		t.Fatalf("reason = %q, want it to name collaboration", response.Reason)
+	}
+}
