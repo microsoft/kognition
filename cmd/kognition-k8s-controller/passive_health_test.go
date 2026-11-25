@@ -1,0 +1,115 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+package main
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"go.uber.org/zap"
+	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
+
+	intctrl "github.com/kognition-ai/kognition/internal/controller"
+	"github.com/kognition-ai/kognition/internal/cpi"
+	k8sctrl "github.com/kognition-ai/kognition/internal/k8s/controller"
+	"github.com/kognition-ai/kognition/internal/modelhealth"
+	"github.com/kognition-ai/kognition/internal/store"
+)
+
+type memoryCallHealth struct{}
+
+func (memoryCallHealth) ReplaceModelCallHealth(context.Context, string, []store.ModelCallHealth) error {
+	return nil
+}
+
+func (memoryCallHealth) ListModelCallHealth(context.Context, time.Duration) ([]store.ModelCallHealth, error) {
+	return nil, nil
+}
+
+type recordedCalls struct{ outcomes []cpi.CallOutcome }
+
+func (r *recordedCalls) RecordCall(outcome cpi.CallOutcome) { r.outcomes = append(r.outcomes, outcome) }
+
+// failingAddManager fails the nth runnable registration.
+type failingAddManager struct {
+	startupManager
+	failOn int32
+	count  atomic.Int32
+}
+
+func (m *failingAddManager) Add(runnable ctrlmanager.Runnable) error {
+	if m.count.Add(1) == m.failOn {
+		return errors.New("registration refused")
+	}
+	return m.startupManager.Add(runnable)
+}
+
+func TestPassiveModelHealthIsDisabledWithoutAHealthStore(t *testing.T) {
+	passive := newPassiveModelHealth(nil)
+	if passive != nil {
+		t.Fatal("passive health must be disabled without a store")
+	}
+	base := &recordedCalls{}
+	if passive.recorder(base) != cpi.CallRecorder(base) || passive.recorder(nil) != nil {
+		t.Fatal("a disabled passive health must leave the recorder unchanged")
+	}
+	if err := passive.register(&startupManager{}, nil, nil, zap.NewNop()); err != nil {
+		t.Fatalf("register() on a disabled passive health = %v, want nil", err)
+	}
+}
+
+func TestPassiveModelHealthRecordsOutcomesAndRegistersItsRunnables(t *testing.T) {
+	passive := newPassiveModelHealth(memoryCallHealth{})
+	if passive == nil {
+		t.Fatal("a store must enable passive health")
+	}
+	base := &recordedCalls{}
+	passive.recorder(base).RecordCall(cpi.CallOutcome{Provider: "anthropic", Operation: cpi.OperationComplete, Model: "claude"})
+	if len(base.outcomes) != 1 || len(passive.tracker.Snapshot()) != 1 {
+		t.Fatalf("outcomes reached the base recorder %d times and the tracker %d times, want once each", len(base.outcomes), len(passive.tracker.Snapshot()))
+	}
+	if passive.recorder(nil) != cpi.CallRecorder(passive.tracker) {
+		t.Fatal("without a base recorder the tracker must be the recorder")
+	}
+
+	manager := &startupManager{}
+	reconcilers := []managerReconciler{
+		stubManagerReconciler{calls: &atomic.Int32{}},
+		k8sctrl.NewModelReconcilerAdapter(nil, cpi.NewRegistry(), zap.NewNop()),
+	}
+	if err := passive.register(manager, nil, reconcilers, zap.NewNop()); err != nil {
+		t.Fatalf("register() error: %v", err)
+	}
+	var reporter, watcher bool
+	for _, runnable := range manager.runnables {
+		switch runnable.(type) {
+		case *modelhealth.Reporter:
+			reporter = true
+		case *intctrl.ModelHealthWatcher:
+			watcher = true
+		}
+	}
+	if len(manager.runnables) != 2 || !reporter || !watcher {
+		t.Fatalf("runnables = %v, want exactly the reporter and the watcher", manager.runnables)
+	}
+}
+
+func TestPassiveModelHealthRegistrationFailures(t *testing.T) {
+	passive := newPassiveModelHealth(memoryCallHealth{})
+	withModel := []managerReconciler{k8sctrl.NewModelReconcilerAdapter(nil, cpi.NewRegistry(), zap.NewNop())}
+
+	if err := passive.register(&startupManager{}, nil, []managerReconciler{stubManagerReconciler{calls: &atomic.Int32{}}}, zap.NewNop()); err == nil || !strings.Contains(err.Error(), "Model reconciler") {
+		t.Fatalf("a missing Model reconciler error = %v", err)
+	}
+	if err := passive.register(&failingAddManager{failOn: 1}, nil, withModel, zap.NewNop()); err == nil || !strings.Contains(err.Error(), "reporter") {
+		t.Fatalf("a failing reporter registration error = %v", err)
+	}
+	if err := passive.register(&failingAddManager{failOn: 2}, nil, withModel, zap.NewNop()); err == nil || !strings.Contains(err.Error(), "watcher") {
+		t.Fatalf("a failing watcher registration error = %v", err)
+	}
+}

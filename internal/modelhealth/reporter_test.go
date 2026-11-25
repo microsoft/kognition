@@ -198,6 +198,90 @@ func TestReporterStartSurvivesPublishFailures(t *testing.T) {
 	}
 }
 
+func TestReporterRunInBackgroundPublishesAndStopWaitsForTheFinalPublish(t *testing.T) {
+	clock := newFakeClock()
+	reporter, tracker, sink := newTestReporter(clock)
+	reporter.interval = time.Hour
+
+	stop := reporter.RunInBackground(context.Background())
+	tracker.RecordCall(fault("m", cpi.ReasonRateLimited))
+	stop()
+
+	// stop() returns only after the final publish, so the outcome recorded just
+	// before it must already be in the store.
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.calls) != 1 || len(sink.calls[0]) != 1 || sink.calls[0][0].Faults != 1 {
+		t.Fatalf("publishes = %+v, want one final publish with the recorded fault", sink.calls)
+	}
+}
+
+// A request that finishes while a command drains completes after the command's
+// context is canceled. Its model call must still be published, so the reporter
+// stops only when stop is called, after the drain.
+func TestReporterRunInBackgroundOutlivesItsContextUntilStopped(t *testing.T) {
+	clock := newFakeClock()
+	reporter, tracker, sink := newTestReporter(clock)
+	reporter.interval = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := reporter.RunInBackground(ctx)
+
+	cancel()
+	// Give a reporter that wrongly follows ctx time to make its final publish and
+	// exit; a correct one is not affected by the wait.
+	time.Sleep(50 * time.Millisecond)
+	tracker.RecordCall(fault("m", cpi.ReasonRateLimited))
+	stop()
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.calls) != 1 || len(sink.calls[0]) != 1 || sink.calls[0][0].Faults != 1 {
+		t.Fatalf("publishes = %+v, want the outcome recorded after the context was canceled published once", sink.calls)
+	}
+}
+
+// contextValueSink remembers a value of the context of the last publish.
+type contextValueSink struct {
+	mu   sync.Mutex
+	seen context.Context
+}
+
+func (c *contextValueSink) ReplaceModelCallHealth(ctx context.Context, _ string, _ []store.ModelCallHealth) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.seen = ctx
+	return nil
+}
+
+func (c *contextValueSink) ListModelCallHealth(context.Context, time.Duration) ([]store.ModelCallHealth, error) {
+	return nil, nil
+}
+
+func (c *contextValueSink) value(key any) any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.seen == nil {
+		return nil
+	}
+	return c.seen.Value(key)
+}
+
+func TestReporterRunInBackgroundKeepsTheContextValues(t *testing.T) {
+	type key struct{}
+	tracker := NewTracker()
+	tracker.RecordCall(fault("m", cpi.ReasonRateLimited))
+	sink := &contextValueSink{}
+	reporter := NewReporter(tracker, sink, "values-test", nil)
+	reporter.interval = time.Hour
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), key{}, "command-scoped"))
+	stop := reporter.RunInBackground(ctx)
+	cancel()
+	stop()
+
+	if got := sink.value(key{}); got != "command-scoped" {
+		t.Fatalf("the publish saw context value %v, want the command context's values preserved", got)
+	}
+}
 func TestNewReporterIDIsUniquePerCall(t *testing.T) {
 	first, second := NewReporterID(), NewReporterID()
 	if first == "" || first == second {

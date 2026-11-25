@@ -226,33 +226,13 @@ func newProductionRuntime(ctx context.Context, logger *zap.Logger, registry *cpi
 // modelHealthReporting ties the passive model health reporter to the runtime's
 // lifecycle: start runs when the runtime is initialized and stop, which is a no-op
 // if start never ran, when its resources are closed. runServerLifecycle closes
-// them only after the server has drained its requests.
+// them only after the server has drained its requests, and the reporter keeps
+// publishing until then (see Reporter.RunInBackground).
 func modelHealthReporting(reporter *modelhealth.Reporter) (start func(context.Context), stop func()) {
 	stopReporter := func() {}
-	start = func(ctx context.Context) { stopReporter = startModelHealthReporter(ctx, reporter) }
+	start = func(ctx context.Context) { stopReporter = reporter.RunInBackground(ctx) }
 	stop = func() { stopReporter() }
 	return start, stop
-}
-
-// startModelHealthReporter publishes passive model health in the background until
-// the returned function is called, which waits for the final publish.
-//
-// The reporter deliberately does not end with ctx. The command's context is
-// canceled when shutdown begins, but HTTP requests keep draining for a while and
-// the model calls they complete must still be published, so the reporter runs
-// until stop is called after the drain. It keeps ctx's values, and its final
-// publish stays bounded by the reporter's own timeout.
-func startModelHealthReporter(ctx context.Context, reporter *modelhealth.Reporter) (stop func()) {
-	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = reporter.Start(ctx)
-	}()
-	return func() {
-		cancel()
-		<-done
-	}
 }
 
 func serverConfigFromEnv() apiserver.Config {
