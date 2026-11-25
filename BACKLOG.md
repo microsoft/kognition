@@ -3369,9 +3369,9 @@ US-0109/US-0108.
 
 | ID | Test | Traces |
 |---|---|---|
-| TC-0361 | **Pending:** Admission matrix: both refs set, neither set, duplicate ExternalAgent members, mixed Agent and ExternalAgent distinct rule, flag off, standalone mode, missing grant and missing resource. Each fails with a specific message. | FR-0620, FR-0618, MVP-1 |
-| TC-0362 | **Pending:** An ordinary step with `externalAgentRef` runs through the bufconn fixture, returns its result to the next step and honours timeout, retry exclusion and cancel. | FR-0620, FR-0103, MVP-1 |
-| TC-0363 | **Pending:** Strategy matrix: Supervisor, Parallel, Handoff and Peer each pass with one external member and with a mixed team, covering delegation counts, handoff ownership, peer finalizer completion and token limits. | FR-0620, FR-0104, MVP-1 |
+| TC-0361 | **Done:** Admission matrix: both refs set, neither set, duplicate ExternalAgent members, mixed Agent and ExternalAgent distinct rule, flag off, and an ExternalAgent as coordinator, synthesizer or finalizer. Each fails with a specific message. Admission stays pure, so a missing ExternalAgent or ExternalAgentGrant is refused at runtime before any contact, recorded as a `DispatchRefused` task reason and covered by the transport tests. | FR-0620, FR-0618, MVP-1 |
+| TC-0362 | **Deferred:** v1 external agents are collaboration members only. A step-level `externalAgentRef` needs a security review of the no-automatic-retry rule first. When taken up, an ordinary step with `externalAgentRef` runs through the bufconn fixture, returns its result to the next step and honours timeout, retry exclusion and cancel. | FR-0620, FR-0103, MVP-1 |
+| TC-0363 | **Done:** Strategy matrix: Supervisor, Parallel, Handoff and Peer each pass with one external member and with a mixed team, covering delegation counts, handoff ownership, peer finalizer completion and token limits. | FR-0620, FR-0104, MVP-1 |
 
 #### US-0105 - Studio, kognitionctl, Documentation and Sample - PLANNED
 
