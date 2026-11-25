@@ -149,6 +149,8 @@ A2A. Set `externalAgentRef` instead of `agentRef` on the member. Exactly one of
 the two is allowed, `serviceRef` is not allowed with an external agent, and the
 ExternalAgent must be in the Workflow namespace. An external member cannot
 delegate to an Agent member; the router and runtime refuse that interaction.
+It also cannot be the Supervisor coordinator, the Parallel synthesizer or the
+Peer finalizer; admission rejects that, so a local Agent always decides the result.
 
 ```yaml
 members:

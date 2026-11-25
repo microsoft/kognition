@@ -241,10 +241,21 @@ func validateCollaborationStrategyBlocks(cpath string, c *v1alpha1.WorkflowColla
 		}
 		return true
 	}
+	// These roles judge or direct other members' results, so an untrusted ExternalAgent must not hold them.
+	localRole := func(field, alias string) {
+		for _, m := range c.Members {
+			if m.Name == alias && m.ExternalAgentRef != nil {
+				errs = append(errs, fmt.Sprintf("%s.%s %q must be an agentRef member: an ExternalAgent cannot hold this role", cpath, field, alias))
+			}
+		}
+	}
 
 	if s := c.Supervisor; s != nil {
-		if member("supervisor.coordinator", s.Coordinator) && outgoing[s.Coordinator] == 0 {
-			errs = append(errs, fmt.Sprintf("%s.supervisor.coordinator %q must have at least one outgoing allowed interaction", cpath, s.Coordinator))
+		if member("supervisor.coordinator", s.Coordinator) {
+			localRole("supervisor.coordinator", s.Coordinator)
+			if outgoing[s.Coordinator] == 0 {
+				errs = append(errs, fmt.Sprintf("%s.supervisor.coordinator %q must have at least one outgoing allowed interaction", cpath, s.Coordinator))
+			}
 		}
 	}
 
@@ -266,6 +277,7 @@ func validateCollaborationStrategyBlocks(cpath string, c *v1alpha1.WorkflowColla
 			branches[b.Member] = struct{}{}
 		}
 		if p.Synthesizer != "" && member("parallel.synthesizer", p.Synthesizer) {
+			localRole("parallel.synthesizer", p.Synthesizer)
 			if _, isBranch := branches[p.Synthesizer]; isBranch {
 				errs = append(errs, fmt.Sprintf("%s.parallel.synthesizer %q must not also be a branch", cpath, p.Synthesizer))
 			}
@@ -282,7 +294,9 @@ func validateCollaborationStrategyBlocks(cpath string, c *v1alpha1.WorkflowColla
 	}
 
 	if p := c.Peer; p != nil {
-		member("peer.finalizer", p.Finalizer)
+		if member("peer.finalizer", p.Finalizer) {
+			localRole("peer.finalizer", p.Finalizer)
+		}
 	}
 	return errs
 }
