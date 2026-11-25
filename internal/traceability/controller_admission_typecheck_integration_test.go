@@ -27,15 +27,16 @@ import (
 
 func controllerAdmissionTypecheckPolicyInventory() map[string]bool {
 	return map[string]bool{
-		"security-test-kognition-control-leases":           false,
-		"security-test-kognition-control-gateway-leases":   false,
-		"security-test-kognition-control-services":         false,
-		"security-test-kognition-control-network":          false,
-		"security-test-kognition-control-state":            false,
-		"security-test-kognition-control-credentials":      false,
-		"security-test-kognition-control-workload":         false,
-		"security-test-kognition-control-model-dispatch":   false,
-		"security-test-kognition-control-runtime-recovery": false,
+		"security-test-kognition-control-leases":            false,
+		"security-test-kognition-control-gateway-leases":    false,
+		"security-test-kognition-control-services":          false,
+		"security-test-kognition-control-network":           false,
+		"security-test-kognition-control-state":             false,
+		"security-test-kognition-control-credentials":       false,
+		"security-test-kognition-control-workload":          false,
+		"security-test-kognition-control-model-dispatch":    false,
+		"security-test-kognition-control-runtime-recovery":  false,
+		"security-test-kognition-control-model-call-health": false,
 	}
 }
 

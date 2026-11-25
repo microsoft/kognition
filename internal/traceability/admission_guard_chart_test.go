@@ -96,7 +96,7 @@ func TestAdmissionBootstrapWithholdsControllerPrivileges(test *testing.T) {
 					}
 				}
 			}
-			if guards != 1 || policies != 9 || controllers != 1 {
+			if guards != 1 || policies != 10 || controllers != 1 {
 				test.Fatalf("bootstrap resources: guard=%d policies=%d controller=%d", guards, policies, controllers)
 			}
 			if grants != 0 {
@@ -226,7 +226,7 @@ func TestActivationParsesBootstrapChart(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
-	if parsed.Controller != "security-test-kognition-controller" || parsed.Guard != "security-test-kognition-admission-guard" || parsed.Namespace != "control" || len(parsed.Objects) != 25 {
+	if parsed.Controller != "security-test-kognition-controller" || parsed.Guard != "security-test-kognition-admission-guard" || parsed.Namespace != "control" || len(parsed.Objects) != 27 {
 		test.Fatalf("unexpected bootstrap inventory: %+v", parsed)
 	}
 	if _, err := activation.ParseCandidate([]byte(manifest.String()), "security-test"); err != nil {
@@ -694,7 +694,7 @@ func TestActivationCiliumIsolationInventory(test *testing.T) {
 				}
 				return
 			}
-			if err != nil || parsed.StdioIsolationProfile != "cilium" || len(parsed.Objects) != 30 {
+			if err != nil || parsed.StdioIsolationProfile != "cilium" || len(parsed.Objects) != 32 {
 				test.Fatalf("Cilium inventory: profile=%s count=%d err=%v", parsed.StdioIsolationProfile, len(parsed.Objects), err)
 			}
 			if _, err := activation.ParseCandidate([]byte(content.String()), "security-test"); err != nil {

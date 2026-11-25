@@ -332,7 +332,7 @@ func (fixture *gatewayAuthorityFixture) installProductionAssembly(test *testing.
 	if full {
 		expectedDeployments = 5
 	}
-	if policies != 9 || bindings != 9 || len(deployments) != expectedDeployments || len(webhooks) != 3 {
+	if policies != 10 || bindings != 10 || len(deployments) != expectedDeployments || len(webhooks) != 3 {
 		test.Fatalf("incomplete production assembly: policies=%d bindings=%d deployments=%d webhooks=%d", policies, bindings, len(deployments), len(webhooks))
 	}
 	for _, object := range resources {

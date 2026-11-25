@@ -42,7 +42,7 @@ The protected inventory contains exactly:
 
 | Objects | API version | Requirement |
 | --- | --- | --- |
-| Nine policies and nine bindings | `admissionregistration.k8s.io/v1` | Same-name pairs; Fail policies with rules, conditions and Forbidden validations; Deny bindings without narrowed scope or parameters |
+| Ten policies and ten bindings | `admissionregistration.k8s.io/v1` | Same-name pairs; Fail policies with rules, conditions and Forbidden validations; Deny bindings without narrowed scope or parameters |
 | Guard Deployment | `apps/v1` | Independent guard service account; positive replica count |
 | Guard Service and ServiceAccount | `v1` | Exact guard name and installation namespace |
 | Guard webhook configuration | `admissionregistration.k8s.io/v1` | Exact two ordered webhook identities, service target, controller/namespace/name conditions, rules and delivery settings |
