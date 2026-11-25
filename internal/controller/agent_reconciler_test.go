@@ -1056,7 +1056,64 @@ func TestComputePhase_ThreeStates(t *testing.T) {
 // preview would surface `no pods found for agent` on every attempt.
 // ---------------------------------------------------------------------------
 
+func disableFailedInstanceBackoff(t *testing.T) {
+	t.Helper()
+	prev := failedInstanceReplaceBackoff
+	failedInstanceReplaceBackoff = 0
+	t.Cleanup(func() { failedInstanceReplaceBackoff = prev })
+}
+
+func TestAgentReconciler_BacksOffReplacingFreshFailedInstance(t *testing.T) {
+	ctx := context.Background()
+	s := newRevisionMemStore()
+	reconciler := NewAgentReconciler(s, zaptest.NewLogger(t))
+
+	agent := makeAgent("default", "backoff-agent", 1)
+	data, _ := json.Marshal(agent)
+	if err := s.Create(ctx, "Agent", "default", "backoff-agent", data); err != nil {
+		t.Fatalf("seed agent: %v", err)
+	}
+	req := Request{Namespace: "default", Name: "backoff-agent", Kind: "Agent"}
+	for i := 0; i < 2; i++ {
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile %d: %v", i+1, err)
+		}
+	}
+
+	rawList, _ := s.List(ctx, "AgentInstance", store.ListOptions{Namespace: "default"})
+	if len(rawList) != 1 {
+		t.Fatalf("expected 1 instance, got %d", len(rawList))
+	}
+	var inst v1alpha1.AgentInstance
+	if err := json.Unmarshal(rawList[0], &inst); err != nil {
+		t.Fatalf("unmarshal instance: %v", err)
+	}
+	inst.Status.Phase = v1alpha1.PhaseFailed
+	data, _ = json.Marshal(inst)
+	if err := s.Update(ctx, "AgentInstance", "default", inst.ObjectMeta.Name, data, inst.ObjectMeta.ResourceVersion); err != nil {
+		t.Fatalf("mark instance failed: %v", err)
+	}
+
+	res, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("reconcile after failure: %v", err)
+	}
+	if res.RequeueAfter <= 0 || res.RequeueAfter > failedInstanceReplaceBackoff {
+		t.Fatalf("RequeueAfter = %v, want within (0, %v]", res.RequeueAfter, failedInstanceReplaceBackoff)
+	}
+	rawList, _ = s.List(ctx, "AgentInstance", store.ListOptions{Namespace: "default"})
+	if len(rawList) != 1 {
+		t.Fatalf("instances = %d, want the failed one kept during backoff", len(rawList))
+	}
+	var kept v1alpha1.AgentInstance
+	_ = json.Unmarshal(rawList[0], &kept)
+	if kept.ObjectMeta.Name != inst.ObjectMeta.Name {
+		t.Fatalf("failed instance was replaced during backoff: %q -> %q", inst.ObjectMeta.Name, kept.ObjectMeta.Name)
+	}
+}
+
 func TestAgentReconciler_ReplacesFailedInstances(t *testing.T) {
+	disableFailedInstanceBackoff(t)
 	ctx := context.Background()
 	s := newRevisionMemStore()
 	reconciler := NewAgentReconciler(s, zaptest.NewLogger(t))
@@ -1119,6 +1176,7 @@ func TestAgentReconciler_ReplacesFailedInstances(t *testing.T) {
 }
 
 func TestAgentReconciler_InstanceReplacementSurfacesDeletionFailures(t *testing.T) {
+	disableFailedInstanceBackoff(t)
 	for _, tc := range []struct {
 		name        string
 		prepare     func(*testing.T, *revisionMemStore, v1alpha1.AgentInstance)

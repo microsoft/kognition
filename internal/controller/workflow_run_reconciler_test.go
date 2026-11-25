@@ -590,6 +590,10 @@ func TestWorkflowRunReconciler_TC0225_MaxConcurrentRuns(t *testing.T) {
 	if r2.Status.Phase != v1alpha1.PhasePending {
 		t.Errorf("run-2: expected PhasePending, got %s", r2.Status.Phase)
 	}
+	res, err := rec.Reconcile(context.Background(), Request{Namespace: "default", Name: "run-2"})
+	if err != nil || res.RequeueAfter != queuedRunRecheckInterval {
+		t.Errorf("queued run result = %+v, err = %v, want RequeueAfter %v", res, err, queuedRunRecheckInterval)
+	}
 
 	// Complete run-1 by driving it through all steps.
 	driveRunToCompletion(t, rec, es, "default", "run-1")

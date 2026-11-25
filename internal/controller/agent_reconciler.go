@@ -35,6 +35,9 @@ const (
 	autoAgentIdentityNameAnnotation = "kognition.dev/agent-identity-name"
 )
 
+// failedInstanceReplaceBackoff is the minimum age of a Failed AgentInstance before it is replaced.
+var failedInstanceReplaceBackoff = 15 * time.Second
+
 // DeploymentCleaner cleans up cross-namespace Deployment/Service resources
 // associated with an Agent. This is called during Agent deletion to ensure
 // the runtime pods are removed even though ownerReferences cannot cross namespaces.
@@ -164,8 +167,12 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req Request) (Result, e
 	}
 
 	// Reconcile AgentInstances to match desired replicas and current revision.
-	if err := r.reconcileInstances(ctx, &agent, currentRevision, log); err != nil {
+	retryAfter, err := r.reconcileInstances(ctx, &agent, currentRevision, log)
+	if err != nil {
 		return Result{}, fmt.Errorf("reconcile instances: %w", err)
+	}
+	if retryAfter > 0 {
+		return Result{RequeueAfter: retryAfter}, nil
 	}
 
 	// Update Agent status.
@@ -404,10 +411,12 @@ func (r *AgentReconciler) ensureRevision(ctx context.Context, agent *v1alpha1.Ag
 
 // reconcileInstances ensures the correct number of AgentInstances exist for the current revision.
 // Old-revision instances are drained (deleted) and new ones are created.
-func (r *AgentReconciler) reconcileInstances(ctx context.Context, agent *v1alpha1.Agent, currentRevision int64, log *zap.Logger) error {
+// A non-zero duration means a failed instance is still inside its replacement
+// backoff and the caller should reconcile again after that long.
+func (r *AgentReconciler) reconcileInstances(ctx context.Context, agent *v1alpha1.Agent, currentRevision int64, log *zap.Logger) (time.Duration, error) {
 	instances, err := r.listOwnedInstances(ctx, agent)
 	if err != nil {
-		return fmt.Errorf("list owned instances: %w", err)
+		return 0, fmt.Errorf("list owned instances: %w", err)
 	}
 	log.Debug("owned instances", zap.Int("count", len(instances)), zap.Int64("revision", currentRevision))
 
@@ -445,18 +454,28 @@ func (r *AgentReconciler) reconcileInstances(ctx context.Context, agent *v1alpha
 			zap.Int64("revision", inst.Spec.Revision),
 		)
 		if err := r.store.Delete(ctx, agentInstanceKind, inst.ObjectMeta.Namespace, inst.ObjectMeta.Name); err != nil && !errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("delete stale instance %s: %w", inst.ObjectMeta.Name, err)
+			return 0, fmt.Errorf("delete stale instance %s: %w", inst.ObjectMeta.Name, err)
 		}
 	}
 
 	// Delete failed instances so a fresh one is created on the next reconcile pass.
+	// A permanent failure would otherwise replace the instance in a tight loop.
+	var wait time.Duration
+	for _, inst := range failedInstances {
+		if remaining := failedInstanceReplaceBackoff - time.Since(inst.ObjectMeta.CreationTimestamp); remaining > wait {
+			wait = remaining
+		}
+	}
+	if wait > 0 {
+		return wait, nil
+	}
 	for _, inst := range failedInstances {
 		log.Info("replacing failed instance",
 			zap.String("instance", inst.ObjectMeta.Name),
 			zap.Int64("revision", inst.Spec.Revision),
 		)
 		if err := r.store.Delete(ctx, agentInstanceKind, inst.ObjectMeta.Namespace, inst.ObjectMeta.Name); err != nil && !errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("delete failed instance %s: %w", inst.ObjectMeta.Name, err)
+			return 0, fmt.Errorf("delete failed instance %s: %w", inst.ObjectMeta.Name, err)
 		}
 	}
 
@@ -464,7 +483,7 @@ func (r *AgentReconciler) reconcileInstances(ctx context.Context, agent *v1alpha
 	currentCount := int32(len(currentInstances))
 	for i := currentCount; i < desiredReplicas; i++ {
 		if err := r.createInstance(ctx, agent, currentRevision, log); err != nil {
-			return fmt.Errorf("create instance: %w", err)
+			return 0, fmt.Errorf("create instance: %w", err)
 		}
 	}
 
@@ -474,12 +493,12 @@ func (r *AgentReconciler) reconcileInstances(ctx context.Context, agent *v1alpha
 		for _, inst := range excess {
 			log.Info("scaling down, deleting excess instance", zap.String("instance", inst.ObjectMeta.Name))
 			if err := r.store.Delete(ctx, agentInstanceKind, inst.ObjectMeta.Namespace, inst.ObjectMeta.Name); err != nil && !errors.Is(err, store.ErrNotFound) {
-				return fmt.Errorf("delete excess instance %s: %w", inst.ObjectMeta.Name, err)
+				return 0, fmt.Errorf("delete excess instance %s: %w", inst.ObjectMeta.Name, err)
 			}
 		}
 	}
 
-	return nil
+	return 0, nil
 }
 
 // createInstance creates a new AgentInstance owned by the given Agent.

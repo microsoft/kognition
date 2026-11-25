@@ -263,7 +263,8 @@ func (r *WorkflowRunReconciler) Reconcile(ctx context.Context, req Request) (Res
 			return Result{}, err
 		}
 		if queued {
-			return Result{}, nil
+			// Nothing re-enqueues a queued run when the blocking run finishes.
+			return Result{RequeueAfter: queuedRunRecheckInterval}, nil
 		}
 	}
 
@@ -426,6 +427,9 @@ func (r *WorkflowRunReconciler) resolveSpec(ctx context.Context, run *v1alpha1.W
 
 	return &spec, nil
 }
+
+// queuedRunRecheckInterval is how often a run held back by maxConcurrentRuns retries.
+const queuedRunRecheckInterval = 5 * time.Second
 
 // checkConcurrency returns true if the run should be queued (not started yet).
 func (r *WorkflowRunReconciler) checkConcurrency(ctx context.Context, run *v1alpha1.WorkflowRun, maxConcurrent int32) (bool, error) {
