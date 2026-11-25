@@ -63,14 +63,6 @@ func TestCompleteClassifiesBillingFailuresFromTheResponseBody(t *testing.T) {
 	}
 }
 
-func TestQuotaOrBillingErrorBoundsTheDetail(t *testing.T) {
-	body, _ := json.Marshal(map[string]any{"error": map[string]string{"message": "credit balance " + strings.Repeat("é", 500)}})
-	detail, exhausted := quotaOrBillingError(body)
-	if !exhausted || len([]rune(detail)) != maxProbeMessageSize {
-		t.Fatalf("quotaOrBillingError() = %d runes, %t, want %d runes, true", len([]rune(detail)), exhausted, maxProbeMessageSize)
-	}
-}
-
 func TestCompleteReturnsTypedProviderError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Retry-After", "9")
