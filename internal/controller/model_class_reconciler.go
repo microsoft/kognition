@@ -902,6 +902,12 @@ func (r *ModelClassReconciler) findFallbackClass(ctx context.Context, mc *v1alph
 }
 
 func (r *ModelClassReconciler) updateModelClass(ctx context.Context, mc *v1alpha1.ModelClass) error {
+	// Conditions written before sanitization existed are re-persisted on every update.
+	for i := range mc.Status.Conditions {
+		c := &mc.Status.Conditions[i]
+		c.Reason = sanitizeConditionReason(c.Reason, "Unknown")
+		c.Message = sanitizeConditionMessage(c.Message)
+	}
 	data, err := json.Marshal(mc)
 	if err != nil {
 		return fmt.Errorf("marshal model class: %w", err)

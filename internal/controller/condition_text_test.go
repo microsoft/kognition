@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"go.uber.org/zap/zaptest"
@@ -200,6 +201,66 @@ func TestModelReconciler_EmptyProbeReasonGetsFallbackBeforePersisting(t *testing
 			}
 			if cond.Reason != tt.want || !conditionReasonSchema.MatchString(cond.Reason) {
 				t.Errorf("Reason = %q, want %q", cond.Reason, tt.want)
+			}
+		})
+	}
+}
+
+func TestModelClassReconciler_SanitizesRetainedConditionOfDegradedClass(t *testing.T) {
+	const unsafeMessage = "old\x1b[31mred\u202E text"
+	transition := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	tests := []struct {
+		name      string
+		available bool
+		threshold int32
+	}{
+		{name: "failed probe", available: false, threshold: 3},
+		{name: "partial recovery", available: true, threshold: 3},
+		{name: "full recovery", available: true, threshold: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driver := &configurableMockDriver{
+				name:        "openai-compatible",
+				probeResult: &cpi.HealthResult{Available: tt.available, Reason: "OK", Message: "probe done"},
+			}
+			s := newMemStore()
+			r := NewModelClassReconciler(s, registryWith(driver), zaptest.NewLogger(t))
+			storeModelClass(t, s, v1alpha1.ModelClass{
+				TypeMeta:   v1alpha1.TypeMeta{Kind: "ModelClass", APIVersion: "v1alpha1"},
+				ObjectMeta: v1alpha1.ObjectMeta{Name: "legacy", Namespace: "default", Finalizers: []string{modelClassFinalizer}},
+				Spec: v1alpha1.ModelClassSpec{
+					Provisioner:  "openai",
+					LatencyClass: "low",
+					HealthProbe:  &v1alpha1.HealthProbeSpec{Endpoint: "https://api.example.com/health", IntervalSeconds: 10, Type: "inference-ping", SuccessThreshold: tt.threshold, FailureThreshold: 2},
+				},
+				Status: v1alpha1.ModelClassStatus{
+					Phase:       v1alpha1.PhaseDegraded,
+					Provisioned: true,
+					Health:      "Degraded",
+					Conditions: []v1alpha1.Condition{{
+						Type: "Ready", Status: "False", Reason: "Down", Message: unsafeMessage, LastTransitionTime: transition,
+					}},
+				},
+			})
+
+			reconcileModelClass(t, r, "default", "legacy")
+
+			got := getModelClass(t, s, "default", "legacy")
+			var ready *v1alpha1.Condition
+			for i := range got.Status.Conditions {
+				if got.Status.Conditions[i].Type == "Ready" {
+					ready = &got.Status.Conditions[i]
+				}
+			}
+			if ready == nil {
+				t.Fatal("expected a Ready condition")
+			}
+			if strings.ContainsAny(ready.Message, "\x1b\u202E") {
+				t.Errorf("retained Ready message still contains control characters: %q", ready.Message)
+			}
+			if tt.threshold > 1 && (ready.Status != "False" || !ready.LastTransitionTime.Equal(transition) || ready.Reason != "Down") {
+				t.Errorf("retained condition changed beyond text sanitization: %+v", *ready)
 			}
 		})
 	}
