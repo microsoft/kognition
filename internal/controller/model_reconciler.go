@@ -42,6 +42,12 @@ func NewModelReconciler(s store.Store, registry *cpi.Registry, logger *zap.Logge
 	}
 }
 
+// SetCallHealth enables passive model health from a store shared with the
+// processes that make model calls. Call it before the reconciler starts.
+func (r *ModelReconciler) SetCallHealth(health store.ModelCallHealthStore) {
+	r.callHealth = health
+}
+
 func (r *ModelReconciler) Reconcile(ctx context.Context, req Request) (Result, error) {
 	raw, err := r.store.Get(ctx, modelKind, req.Namespace, req.Name)
 	if err != nil {
