@@ -48,15 +48,33 @@ func (e *ProviderError) Error() string {
 	return fmt.Sprintf("%s: %sHTTP %d: %s", e.Provider, operation, e.Status, e.Body)
 }
 
+// ReasonRefiner reclassifies a failed response from its body, for providers whose
+// HTTP status alone is ambiguous. It returns an empty string to keep the reason
+// derived from the status.
+type ReasonRefiner func(status int, body []byte) string
+
 // NewProviderError reads the start of the response body and classifies the
 // status. It does not close the body.
 func NewProviderError(provider, operation string, resp *http.Response) *ProviderError {
+	return NewRefinedProviderError(provider, operation, resp, nil)
+}
+
+// NewRefinedProviderError is NewProviderError with a driver-specific refinement
+// of the reason. The refiner sees only the bounded start of the body that the
+// error keeps. A nil refine keeps every status-based reason.
+func NewRefinedProviderError(provider, operation string, resp *http.Response, refine ReasonRefiner) *ProviderError {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxProviderErrorBodyBytes))
+	reason := ClassifyStatus(resp.StatusCode)
+	if refine != nil {
+		if refined := refine(resp.StatusCode, body); refined != "" {
+			reason = refined
+		}
+	}
 	return &ProviderError{
 		Provider:   provider,
 		Operation:  operation,
 		Status:     resp.StatusCode,
-		Reason:     ClassifyStatus(resp.StatusCode),
+		Reason:     reason,
 		RetryAfter: resp.Header.Get("Retry-After"),
 		Body:       string(body),
 	}
