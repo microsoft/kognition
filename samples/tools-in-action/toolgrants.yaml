@@ -1,0 +1,41 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# ToolGrants: fine-grained, verb-scoped access (discover, inspect, invoke) with
+# rate limits and an optional validity window. They are evaluated in addition
+# to the AgentPolicy/AgentRole bindings from manifests.yaml.
+#
+# Prereq: samples/tools-in-action/manifests.yaml (Tools and Agent tool-user).
+# rateLimits are checked against any CognitiveQuota in the namespace at
+# admission time.
+#
+# Observe:
+#   kubectl get toolgrants.kognition.dev
+#   kubectl describe toolgrant tool-user-calculator
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ToolGrant
+metadata:
+  name: tool-user-calculator
+  namespace: default
+spec:
+  agentRef:
+    name: tool-user
+  toolRef:
+    name: sandbox-calculator
+  verbs: [discover, inspect, invoke]
+  rateLimits:
+    callsPerMinute: 30
+    callsPerHour: 300
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ToolGrant
+metadata:
+  name: tool-user-datetime-readonly
+  namespace: default
+spec:
+  agentRef:
+    name: tool-user
+  toolRef:
+    name: sandbox-datetime
+  verbs: [discover, inspect]

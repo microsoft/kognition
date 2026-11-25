@@ -1,0 +1,47 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Autoscaling Sample
+#
+# Exercises AgentAutoscaler (replica scaling on queue depth / P95 latency) and
+# ModelAutoscaler (fallback to another model tier and recovery to the preferred
+# model) against the hello-agent from samples/simple-agent.
+#
+# Prereq: samples/simple-agent (Agent hello-agent, Model gpt-6-luna).
+#
+# Observe:
+#   kubectl get agentautoscalers.kognition.dev,modelautoscalers.kognition.dev
+#   kubectl describe agentautoscaler hello-agent-scaler
+#   kubectl describe modelautoscaler hello-agent-model-scaler
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentAutoscaler
+metadata:
+  name: hello-agent-scaler
+  namespace: default
+spec:
+  agentRef:
+    name: hello-agent
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: QueueDepth
+      targetValue: 5
+    - type: P95Latency
+      targetValue: 2000
+  scaleUpPolicy:
+    stabilizationWindowSeconds: 30
+  scaleDownPolicy:
+    stabilizationWindowSeconds: 300
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelAutoscaler
+metadata:
+  name: hello-agent-model-scaler
+  namespace: default
+spec:
+  agentRef:
+    name: hello-agent
+  preferredModelRef:
+    name: gpt-6-luna
+  stabilizationWindowSeconds: 120

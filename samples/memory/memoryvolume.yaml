@@ -1,0 +1,20 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# MemoryVolume declared out-of-band. MemoryClaims normally provision their own
+# `<namespace>-<claim>` volume. A volume with no claimRef is reported as
+# Released ("volume has no active claim"); adding claimRef.name reports Bound.
+#
+# Prereq: MemoryClass `ephemeral` from samples/memory/manifests.yaml.
+#
+# Observe:
+#   kubectl get memoryvolumes.kognition.dev
+#   kubectl get memoryvolume archive-volume -o jsonpath='{.status}'
+apiVersion: kognition.dev/v1alpha1
+kind: MemoryVolume
+metadata:
+  name: archive-volume
+  namespace: default
+spec:
+  memoryClassName: ephemeral
+  capacity: 5Mi

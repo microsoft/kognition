@@ -1,0 +1,52 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# ApprovalDecision template (not applied automatically).
+#
+# Votes on the approval gate of a WorkflowRun from quorum-approval.yaml. The
+# gate (drafter -> publisher) requires 2 distinct approvers; any `deny`
+# rejects the run. spec is immutable and spec.approver must equal the
+# authenticated requester, so each vote has to be created by a different
+# identity (for example with `kubectl --as=<user>` where RBAC allows it).
+#
+# 1. Install samples/workflows/_agents.yaml and quorum-approval.yaml, then:
+#      kubectl apply -f - <<'EOF'
+#      apiVersion: kognition.dev/v1alpha1
+#      kind: WorkflowRun
+#      metadata: { name: wfdemo-quorum-1, namespace: default }
+#      spec:
+#        workflowRef: { name: wfdemo-quorum-publish }
+#        input: "Q4 product launch announcement"
+#      EOF
+# 2. Wait until the publisher step is held for approval, then replace
+#    REVIEWER-1 / REVIEWER-2 below and apply this file.
+#
+# Observe:
+#   kubectl get approvaldecisions.kognition.dev
+#   kubectl get workflowrun wfdemo-quorum-1 -o yaml
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ApprovalDecision
+metadata:
+  name: wfdemo-quorum-1-publisher-reviewer-1
+  namespace: default
+spec:
+  workflowRunRef:
+    name: wfdemo-quorum-1
+  step: publisher
+  decision: approve
+  approver: REVIEWER-1
+  reason: Draft is accurate and ready to publish.
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ApprovalDecision
+metadata:
+  name: wfdemo-quorum-1-publisher-reviewer-2
+  namespace: default
+spec:
+  workflowRunRef:
+    name: wfdemo-quorum-1
+  step: publisher
+  decision: approve
+  approver: REVIEWER-2
+  reason: Second approval for quorum.
