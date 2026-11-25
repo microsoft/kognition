@@ -19,6 +19,7 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 
 	"github.com/kognition-ai/kognition/internal/collaboration"
+	"github.com/kognition-ai/kognition/internal/collaboration/a2atransport"
 	"github.com/kognition-ai/kognition/internal/collaboration/driver"
 )
 
@@ -186,6 +187,40 @@ func (h *Handles) Put(ctx context.Context, dispatch, remoteTask string) error {
 		}
 		next.Data[dispatch] = remoteTask
 		if _, err = h.cfg.ConfigMaps.Update(ctx, next, metav1.UpdateOptions{}); apierrors.IsConflict(err) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		return nil
+	}
+	return driver.ErrConflict
+}
+
+// Replace moves the handle of a dispatch from expected to next. It is a no-op
+// when next is already recorded and fails with a2atransport.ErrHandleChanged
+// when anything else is.
+func (h *Handles) Replace(ctx context.Context, dispatch, expected, next string) error {
+	if !handleKey.MatchString(dispatch) || expected == "" || next == "" || len(next) > maxHandleLen {
+		return errors.New("k8sledger: invalid handle")
+	}
+	for attempt := 0; attempt < maxHandleAttempts; attempt++ {
+		cm, err := h.cfg.ConfigMaps.Get(ctx, h.name(), metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return a2atransport.ErrHandleChanged
+			}
+			return err
+		}
+		cur, ok := cm.Data[dispatch]
+		switch {
+		case ok && cur == next:
+			return nil
+		case !ok || cur != expected:
+			return a2atransport.ErrHandleChanged
+		}
+		updated := cm.DeepCopy()
+		updated.Data[dispatch] = next
+		if _, err = h.cfg.ConfigMaps.Update(ctx, updated, metav1.UpdateOptions{}); apierrors.IsConflict(err) {
 			continue
 		} else if err != nil {
 			return err

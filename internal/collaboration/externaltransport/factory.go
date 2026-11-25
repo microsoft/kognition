@@ -34,9 +34,13 @@ func (f Factory) Transport(_ context.Context, run controller.WorkflowCollaborati
 	if run.Spec == nil {
 		return nil, errors.New("externaltransport: collaboration spec is required")
 	}
+	replacer, ok := handles.(a2atransport.HandleReplacer)
+	if !ok {
+		return nil, errors.New("externaltransport: the handle store cannot record send state changes")
+	}
 	return New(Config{
 		Store: f.Store, Run: run, Members: Members(run), Allow: f.Allow, Resolver: f.Resolver,
-		Credentials: f.Credentials, Client: f.Client, Handles: handles, Audit: f.Audit,
+		Credentials: f.Credentials, Client: f.Client, Handles: replacer, Audit: f.Audit,
 		Limiter: f.Limiter, Now: f.Now,
 	})
 }

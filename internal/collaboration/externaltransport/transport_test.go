@@ -226,12 +226,23 @@ func (s *stubResolver) LookupNetIP(context.Context, string, string) ([]netip.Add
 	return s.addrs, s.err
 }
 
+// writeOnceHandles matches the production ledger: Put never rebinds a recorded
+// handle to a different value, so state changes must go through Replace.
+type writeOnceHandles struct{ *a2atransport.MemoryHandles }
+
+func (h writeOnceHandles) Put(ctx context.Context, dispatch, value string) error {
+	if cur, ok, _ := h.Get(ctx, dispatch); ok && cur != value {
+		return errors.New("already has a different remote task")
+	}
+	return h.MemoryHandles.Put(ctx, dispatch, value)
+}
+
 type fixture struct {
 	t        *testing.T
 	st       *fakeStore
 	audit    *auditSpy
 	client   *fakeClient
-	handles  *a2atransport.MemoryHandles
+	handles  writeOnceHandles
 	creds    fakeCreds
 	resolver *stubResolver
 	limiter  *Limiter
@@ -246,7 +257,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := &fixture{
 		t: t, st: newFakeStore(), audit: &auditSpy{}, client: &fakeClient{taskID: "remote-1"},
-		handles: &a2atransport.MemoryHandles{}, creds: fakeCreds{"agent-cred": testToken},
+		handles: writeOnceHandles{&a2atransport.MemoryHandles{}}, creds: fakeCreds{"agent-cred": testToken},
 		resolver: &stubResolver{addrs: []netip.Addr{netip.MustParseAddr("93.184.216.34")}},
 		limiter:  NewLimiter(), allow: "agent.example.com:443",
 		now:   time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC),

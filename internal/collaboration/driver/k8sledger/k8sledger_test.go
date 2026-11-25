@@ -17,6 +17,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/kognition-ai/kognition/internal/collaboration"
+	"github.com/kognition-ai/kognition/internal/collaboration/a2atransport"
 	"github.com/kognition-ai/kognition/internal/collaboration/driver"
 )
 
@@ -198,6 +199,62 @@ func TestHandlesRoundTripAndSurviveRestart(t *testing.T) {
 	}
 	if _, ok, _ := restarted.Get(bg, "absent"); ok {
 		t.Fatal("unknown dispatch found")
+	}
+}
+
+func TestHandlesReplaceIsCompareAndSwap(t *testing.T) {
+	cs := newClient(t)
+	h, _ := NewHandles(config(cs))
+	if err := h.Replace(bg, "t1.1", "pending", "task"); !errors.Is(err, a2atransport.ErrHandleChanged) {
+		t.Fatalf("replace with nothing recorded: %v", err)
+	}
+	if err := h.Put(bg, "t1.1", "pending"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Replace(bg, "t1.1", "pending", "task"); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if v, _, _ := h.Get(bg, "t1.1"); v != "task" {
+		t.Fatalf("recorded %q", v)
+	}
+	if err := h.Replace(bg, "t1.1", "pending", "task"); err != nil {
+		t.Fatalf("replace must be idempotent: %v", err)
+	}
+	if err := h.Replace(bg, "t1.1", "pending", "other"); !errors.Is(err, a2atransport.ErrHandleChanged) {
+		t.Fatalf("a changed handle must not be replaced: %v", err)
+	}
+	for _, c := range [][3]string{{"bad key", "p", "n"}, {"t1.1", "", "n"}, {"t1.1", "p", ""}, {"t1.1", "p", strings.Repeat("r", maxHandleLen+1)}} {
+		if err := h.Replace(bg, c[0], c[1], c[2]); err == nil {
+			t.Fatalf("accepted %q", c)
+		}
+	}
+}
+
+func TestHandlesReplaceRetriesConflictsAndSurfacesFailures(t *testing.T) {
+	cs := newClient(t)
+	h, _ := NewHandles(config(cs))
+	if err := h.Put(bg, "t1.1", "pending"); err != nil {
+		t.Fatal(err)
+	}
+	conflicts := 1
+	cs.PrependReactor("update", "configmaps", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if conflicts > 0 {
+			conflicts--
+			return true, nil, apierrors.NewConflict(a.GetResource().GroupResource(), "x", errors.New("race"))
+		}
+		return false, nil, nil
+	})
+	if err := h.Replace(bg, "t1.1", "pending", "task"); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	conflicts = maxHandleAttempts
+	if err := h.Replace(bg, "t1.1", "task", "later"); !errors.Is(err, driver.ErrConflict) {
+		t.Fatalf("exhausted retries: %v", err)
+	}
+	boom := errors.New("api down")
+	cs.PrependReactor("get", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, boom })
+	if err := h.Replace(bg, "t1.1", "task", "later"); !errors.Is(err, boom) {
+		t.Fatalf("get failure: %v", err)
 	}
 }
 

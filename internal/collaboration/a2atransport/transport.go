@@ -33,6 +33,19 @@ type Handles interface {
 	Get(ctx context.Context, dispatch string) (remoteTask string, ok bool, err error)
 }
 
+// HandleReplacer is a Handles that can also move a recorded handle from one
+// value to the next. Put never replaces a different value, so a transport whose
+// handle changes state (an intent before contact, a task after it) needs it.
+type HandleReplacer interface {
+	Handles
+	// Replace sets next only while the recorded value is expected. It is a
+	// no-op when next is already recorded and returns ErrHandleChanged otherwise.
+	Replace(ctx context.Context, dispatch, expected, next string) error
+}
+
+// ErrHandleChanged reports that a handle no longer holds the value a Replace expected.
+var ErrHandleChanged = errors.New("a2atransport: the recorded handle changed")
+
 // MemoryHandles keeps handles in process memory; a restart leaves previously
 // contacted dispatches unobservable, so they settle only through Abandon.
 type MemoryHandles struct {
@@ -49,6 +62,22 @@ func (h *MemoryHandles) Put(_ context.Context, dispatch, remoteTask string) erro
 	}
 	h.m[dispatch] = remoteTask
 	return nil
+}
+
+// Replace implements HandleReplacer.
+func (h *MemoryHandles) Replace(_ context.Context, dispatch, expected, next string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	cur, ok := h.m[dispatch]
+	switch {
+	case ok && cur == next:
+		return nil
+	case ok && cur == expected:
+		h.m[dispatch] = next
+		return nil
+	default:
+		return ErrHandleChanged
+	}
 }
 
 // Get implements Handles.

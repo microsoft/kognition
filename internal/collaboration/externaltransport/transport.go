@@ -106,7 +106,7 @@ type Config struct {
 	Resolver    externalagent.Resolver
 	Credentials CredentialResolver
 	Client      Client
-	Handles     a2atransport.Handles
+	Handles     a2atransport.HandleReplacer
 	Audit       *Auditor
 	// Limiter is shared by every activation of the process. A private one is used when nil.
 	Limiter *Limiter
@@ -218,7 +218,8 @@ func (t *Transport) Send(ctx context.Context, msg collaboration.Message) error {
 	}); err != nil {
 		return t.notSent(ctx, msg, agent, err)
 	}
-	if err := t.cfg.Handles.Put(ctx, msg.DispatchID, encodeHandle(handlePending, "", t.cfg.Now())); err != nil {
+	pending := encodeHandle(handlePending, "", t.cfg.Now())
+	if err := t.cfg.Handles.Put(ctx, msg.DispatchID, pending); err != nil {
 		return fmt.Errorf("externaltransport: persist send intent: %w", err)
 	}
 	call := callFor(t.gate.Namespace, target, token)
@@ -226,11 +227,11 @@ func (t *Transport) Send(ctx context.Context, msg collaboration.Message) error {
 	if err != nil {
 		if errors.Is(err, ErrNotSent) {
 			// Nothing reached the agent: settle as not sent instead of waiting.
-			return t.notSent(ctx, msg, agent, scrub(err, token))
+			return t.notSentAfter(ctx, msg, agent, pending, scrub(err, token))
 		}
 		return scrub(err, token)
 	}
-	if err := t.cfg.Handles.Put(ctx, msg.DispatchID, encodeHandle(handleTask, taskID, t.cfg.Now())); err != nil {
+	if err := t.cfg.Handles.Replace(ctx, msg.DispatchID, pending, encodeHandle(handleTask, taskID, t.cfg.Now())); err != nil {
 		// The task exists but cannot be tracked: ask the agent to stop it.
 		_ = t.cfg.Client.Cancel(ctx, call, taskID)
 		return fmt.Errorf("externaltransport: persist task handle: %w", err)
@@ -241,6 +242,12 @@ func (t *Transport) Send(ctx context.Context, msg collaboration.Message) error {
 // notSent records that no contact was made and returns cause. The durable
 // marker lets Observe settle the dispatch truthfully instead of waiting.
 func (t *Transport) notSent(ctx context.Context, msg collaboration.Message, agent string, cause error) error {
+	return t.notSentAfter(ctx, msg, agent, "", cause)
+}
+
+// notSentAfter is notSent for a dispatch whose send intent, pending, was already
+// recorded; the marker then replaces the intent.
+func (t *Transport) notSentAfter(ctx context.Context, msg collaboration.Message, agent, pending string, cause error) error {
 	t.cfg.Limiter.Release(t.slotKey(agent), msg.DispatchID)
 	var denial *Denial
 	if errors.As(cause, &denial) {
@@ -250,7 +257,14 @@ func (t *Transport) notSent(ctx context.Context, msg collaboration.Message, agen
 			return err
 		}
 	}
-	if err := t.cfg.Handles.Put(ctx, msg.DispatchID, encodeHandle(handleNotSent, "", t.cfg.Now())); err != nil {
+	marker := encodeHandle(handleNotSent, "", t.cfg.Now())
+	var err error
+	if pending == "" {
+		err = t.cfg.Handles.Put(ctx, msg.DispatchID, marker)
+	} else {
+		err = t.cfg.Handles.Replace(ctx, msg.DispatchID, pending, marker)
+	}
+	if err != nil {
 		return fmt.Errorf("externaltransport: persist not-sent marker: %w", err)
 	}
 	return cause
