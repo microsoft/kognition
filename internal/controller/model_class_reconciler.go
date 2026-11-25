@@ -39,6 +39,9 @@ type ModelClassReconciler struct {
 	canaryUsage  observability.UsageEventWriter
 	canaryAudit  *observability.CognitiveAuditLog
 	canaryQuota  *QuotaEnforcer
+	// callHealth supplies the error rate of real model calls to the
+	// error-rate-threshold probe. It is nil when the store cannot share it.
+	callHealth store.ModelCallHealthStore
 }
 
 func (r *ModelClassReconciler) SetCanaryAccounting(ledger store.ModelDispatchStore, usage observability.UsageEventWriter, audit *observability.CognitiveAuditLog) {
@@ -46,11 +49,13 @@ func (r *ModelClassReconciler) SetCanaryAccounting(ledger store.ModelDispatchSto
 }
 
 func NewModelClassReconciler(s store.Store, registry *cpi.Registry, logger *zap.Logger) *ModelClassReconciler {
+	callHealth, _ := s.(store.ModelCallHealthStore)
 	return &ModelClassReconciler{
 		store:       s,
 		registry:    registry,
 		logger:      logger.With(zap.String("reconciler", "model-class")),
 		canaryQuota: NewQuotaEnforcer(s, NewCognitiveQuotaReconciler(s, logger), logger),
+		callHealth:  callHealth,
 	}
 }
 
@@ -688,6 +693,9 @@ func (r *ModelClassReconciler) validateConfig(mc *v1alpha1.ModelClass) (bool, st
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 			return false, "HealthProbeInvalid", "healthProbe endpoint must be a valid URI"
 		}
+		if rate := mc.Spec.HealthProbe.ErrorRateThreshold; rate < 0 || rate > 100 {
+			return false, "HealthProbeInvalid", "healthProbe errorRateThreshold must be a percentage between 0 and 100"
+		}
 	}
 
 	if mc.Spec.LatencyClass != "" {
@@ -829,11 +837,12 @@ func (r *ModelClassReconciler) runHealthProbe(ctx context.Context, mc *v1alpha1.
 		return true, "", ""
 
 	case "error-rate-threshold":
-		// NOTE: Full error-rate evaluation requires aggregated metrics not available
-		// from a single probe. Currently this checks availability only. When the CPI
-		// HealthResult gains an ErrorRate field, compare against probe.ErrorRateThreshold.
+		// The probe checks availability; the error rate comes from real model calls.
 		if !result.Available {
 			return false, "ProbeFailed", fmt.Sprintf("error-rate-threshold: endpoint unavailable: %s", result.Message)
+		}
+		if exceeded, reason, message := r.errorRateExceeded(ctx, mc); exceeded {
+			return false, reason, message
 		}
 		return true, "", ""
 

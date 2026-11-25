@@ -68,9 +68,14 @@ spec:
                     description: Endpoint is the health probe endpoint.
                     type: string
                   errorRateThreshold:
-                    description: ErrorRateThreshold is the error rate percentage threshold
-                      (0-100).
+                    description: |-
+                      ErrorRateThreshold is the error rate percentage (0-100) at which an
+                      "error-rate-threshold" probe degrades the class. It is measured over the
+                      provider failures of recent real model calls to the class's Models, needs at
+                      least 5 calls and defaults to 50 when unset.
                     format: int32
+                    maximum: 100
+                    minimum: 0
                     type: integer
                   failureThreshold:
                     default: 3
@@ -99,8 +104,9 @@ spec:
                     format: int32
                     type: integer
                   type:
-                    description: Type is the probe type ("latency", "error-rate",
-                      "completion").
+                    description: |-
+                      Type is the probe type: "inference-ping" (default), "latency-threshold" or
+                      "error-rate-threshold". Other values are treated as "inference-ping".
                     type: string
                 type: object
               latencyClass:

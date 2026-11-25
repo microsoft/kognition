@@ -51,15 +51,23 @@ func (p *passiveModelHealth) register(mgr ctrl.Manager, st store.Store, reconcil
 		return nil
 	}
 	var modelAdapter *k8sctrl.ModelReconcilerAdapter
+	var modelClassAdapter *k8sctrl.ModelClassReconcilerAdapter
 	for _, reconciler := range reconcilers {
-		if adapter, ok := reconciler.(*k8sctrl.ModelReconcilerAdapter); ok {
+		switch adapter := reconciler.(type) {
+		case *k8sctrl.ModelReconcilerAdapter:
 			modelAdapter = adapter
+		case *k8sctrl.ModelClassReconcilerAdapter:
+			modelClassAdapter = adapter
 		}
 	}
 	if modelAdapter == nil {
 		return errors.New("register passive model health: the Model reconciler is not part of the assembly")
 	}
+	if modelClassAdapter == nil {
+		return errors.New("register passive model health: the ModelClass reconciler is not part of the assembly")
+	}
 	modelAdapter.ConfigureCallHealth(p.sink)
+	modelClassAdapter.ConfigureCallHealth(p.sink)
 	if err := mgr.Add(modelhealth.NewReporter(p.tracker, p.sink, modelhealth.NewReporterID(), logger)); err != nil {
 		return fmt.Errorf("register model call health reporter: %w", err)
 	}

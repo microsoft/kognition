@@ -57,6 +57,8 @@ In Kubernetes mode the Kubernetes controller and the Model Gateway publish the s
 
 The chart's `model-call-health` admission policy restricts these ConfigMaps: only the controller and the Model Gateway service accounts can write them, the Model Gateway only for its own `model-gateway` names and without delete, and every object must have exactly one component label matching its name, one `health.json` entry of at most 921600 characters, and no annotations, owner references, finalizers or binary data. The summaries hold only target hashes, counts and failure reasons.
 
+The same evidence backs the `error-rate-threshold` health probe of a ModelClass. Besides the availability check, the class is degraded when the provider failures of recent real calls to the targets of its Models reach `healthProbe.errorRateThreshold`, a percentage from 0 to 100 that defaults to 50. The rate is calls that failed divided by all calls in the last five minutes, summed over the distinct targets of the class's Models. It needs at least five calls and only applies while the latest call to some target failed, so a recovered provider stops degrading the class without waiting for old failures to age out. The class's `failureThreshold` and `successThreshold` still decide how many consecutive probes degrade and recover it, the reason is `HighErrorRate`, and an unreadable health store keeps the class as it is. Other probe types ignore call health, and so does a class in a deployment without shared health. Because `errorRateThreshold` was not evaluated before, a class that already sets it now starts to act on it.
+
 Passive health reports and drives fallback selection; it does not block calls to a degraded Model.
 
 ## Exported Spans

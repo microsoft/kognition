@@ -121,6 +121,12 @@ func (a *ModelClassReconcilerAdapter) SetCanaryAccounting(ledger store.ModelDisp
 	return a
 }
 
+// ConfigureCallHealth enables the error-rate-threshold probe from a store shared
+// with the processes that make model calls.
+func (a *ModelClassReconcilerAdapter) ConfigureCallHealth(health store.ModelCallHealthStore) {
+	a.internal.SetCallHealth(health)
+}
+
 // NewModelClassReconcilerAdapter creates an adapter that delegates to the internal ModelClassReconciler.
 func NewModelClassReconcilerAdapter(s store.Store, registry *cpi.Registry, logger *zap.Logger) *ModelClassReconcilerAdapter {
 	return &ModelClassReconcilerAdapter{

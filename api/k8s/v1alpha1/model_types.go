@@ -73,7 +73,8 @@ type ModelHealthProbeSpec struct {
 	// +optional
 	Endpoint string `json:"endpoint,omitempty"`
 
-	// Type is the probe type ("latency", "error-rate", "completion").
+	// Type is the probe type: "inference-ping" (default), "latency-threshold" or
+	// "error-rate-threshold". Other values are treated as "inference-ping".
 	// +optional
 	Type string `json:"type,omitempty"`
 
@@ -91,8 +92,13 @@ type ModelHealthProbeSpec struct {
 	// +optional
 	LatencyThresholdMs int64 `json:"latencyThresholdMs,omitempty"`
 
-	// ErrorRateThreshold is the error rate percentage threshold (0-100).
+	// ErrorRateThreshold is the error rate percentage (0-100) at which an
+	// "error-rate-threshold" probe degrades the class. It is measured over the
+	// provider failures of recent real model calls to the class's Models, needs at
+	// least 5 calls and defaults to 50 when unset.
 	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
 	ErrorRateThreshold int32 `json:"errorRateThreshold,omitempty"`
 
 	// FailureThreshold is the number of failures before marking unhealthy.
