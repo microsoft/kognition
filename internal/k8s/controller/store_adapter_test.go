@@ -1247,6 +1247,49 @@ func TestStoreAdapter_Update_AutonomyClassSkipsStatusSubresource(t *testing.T) {
 	}
 }
 
+func TestStoreAdapter_StatusWriteDoesNotRewriteNonCanonicalSpec(t *testing.T) {
+	ctx := context.Background()
+	// The API server keeps the duration as written ("5m"); the internal form is "5m0s".
+	existing := &k8s.ExternalAgent{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "partner"},
+		Spec: k8s.ExternalAgentSpec{
+			Protocol:      "A2A",
+			Endpoint:      "agents.example.com:443",
+			Card:          k8s.ExternalAgentCard{Digest: "sha256:" + strings.Repeat("a", 64)},
+			CredentialRef: k8s.LocalObjectReference{Name: "token"},
+			Limits:        &k8s.ExternalAgentLimits{TaskTimeout: "5m"},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(existing).WithStatusSubresource(&k8s.ExternalAgent{}).Build()
+	faults := &storeAdapterFaultClient{Client: base, updateErr: errors.New("the controller may only write status")}
+	sa := NewStoreAdapter(faults)
+
+	data, err := sa.Get(ctx, "ExternalAgent", "team-a", "partner")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	var desired api.ExternalAgent
+	if err := json.Unmarshal(data, &desired); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	desired.Status.ObservedGeneration = 1
+	updateData, _ := json.Marshal(desired)
+
+	if _, err := sa.UpdateAndGet(ctx, "ExternalAgent", "team-a", "partner", updateData, desired.ResourceVersion); err != nil {
+		t.Fatalf("status write reached the spec: %v", err)
+	}
+	var stored k8s.ExternalAgent
+	if err := base.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: "partner"}, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status.ObservedGeneration != 1 {
+		t.Fatalf("observedGeneration = %d, want 1", stored.Status.ObservedGeneration)
+	}
+	if stored.Spec.Limits.TaskTimeout != "5m" {
+		t.Fatalf("taskTimeout rewritten to %q", stored.Spec.Limits.TaskTimeout)
+	}
+}
+
 func TestStoreAdapter_LastFinalizerRemovalDoesNotWriteDeletedStatus(t *testing.T) {
 	ctx := context.Background()
 	deleting := metav1.NewTime(time.Now().UTC())

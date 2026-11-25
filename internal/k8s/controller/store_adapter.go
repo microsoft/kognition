@@ -288,7 +288,10 @@ func (s *StoreAdapter) UpdateAndGet(ctx context.Context, kind, namespace, name s
 	}
 
 	statusNeedsUpdate := kindHasStatusSubresource(kind) && statusChanged(current, obj)
-	nonStatusChanged := metadataChanged(current, obj)
+	// Compare against the live object in the internal representation, so a
+	// value the API server stores in another spelling (a duration "5m" that
+	// round-trips as "5m0s") does not turn a status write into a spec write.
+	nonStatusChanged := metadataChanged(s.normalizedThroughInternal(kind, current), obj)
 
 	// Only perform the spec/metadata update if something changed.
 	if nonStatusChanged {
@@ -662,6 +665,20 @@ func instanceEventName(kind, name string) string {
 		prefix = prefix[:210]
 	}
 	return prefix + "-" + uuid.NewString()
+}
+
+// normalizedThroughInternal returns obj as it reads back from the internal
+// representation. It returns obj unchanged when the conversion is unavailable.
+func (s *StoreAdapter) normalizedThroughInternal(kind string, obj client.Object) client.Object {
+	data, err := s.marshalToInternal(kind, obj)
+	if err != nil {
+		return obj
+	}
+	normalized, err := s.unmarshalFromInternal(kind, data)
+	if err != nil {
+		return obj
+	}
+	return normalized
 }
 
 // marshalToInternal converts a K8s runtime object to internal JSON via the convert layer.
