@@ -33,6 +33,9 @@ type fakeCPIProvider struct {
 	capabilities []string
 	knowledge    *KnowledgeProviderCapabilities
 	healthy      bool
+	// healthDelay slows HealthCheck, which widens the window in which the host
+	// already lists the provider but has not finished its first health check.
+	healthDelay  time.Duration
 	infoFailures int
 	infoCalls    int
 	capFailures  int
@@ -82,21 +85,21 @@ func TestProviderHost_RetriesTransientIdentityFailure(t *testing.T) {
 	host := NewProviderHost(ProviderHostConfig{
 		SocketDir:           dir,
 		HealthCheckInterval: time.Hour,
-		HealthCheckTimeout:  time.Second,
-		ConnectTimeout:      time.Second,
+		HealthCheckTimeout:  5 * time.Second,
+		ConnectTimeout:      5 * time.Second,
 	}, zaptest.NewLogger(t))
 	t.Cleanup(host.Stop)
 
 	if err := host.discover(); err != nil {
 		t.Fatalf("initial discovery: %v", err)
 	}
-	waitForInfoCalls(t, provider, 1, time.Second)
-	waitForProviderAbsent(t, host, socketPath, time.Second)
+	waitForInfoCalls(t, provider, 1, providerHostWait)
+	waitForProviderAbsent(t, host, socketPath, providerHostWait)
 	if err := host.discover(); err != nil {
 		t.Fatalf("retry discovery: %v", err)
 	}
-	waitForInfoCalls(t, provider, 2, time.Second)
-	entry := waitForProviderReady(t, host, socketPath, time.Second)
+	waitForInfoCalls(t, provider, 2, providerHostWait)
+	entry := waitForProviderReady(t, host, socketPath, providerHostWait)
 	if entry.Name != provider.name || entry.HealthStatus != v1alpha1.ProviderHealthReady {
 		t.Fatalf("provider entry = %+v, want recovered ready provider", entry)
 	}
@@ -120,21 +123,21 @@ func TestProviderHost_RetriesTransientCapabilityFailure(t *testing.T) {
 	host := NewProviderHost(ProviderHostConfig{
 		SocketDir:           dir,
 		HealthCheckInterval: time.Hour,
-		HealthCheckTimeout:  time.Second,
-		ConnectTimeout:      time.Second,
+		HealthCheckTimeout:  5 * time.Second,
+		ConnectTimeout:      5 * time.Second,
 	}, zaptest.NewLogger(t))
 	t.Cleanup(host.Stop)
 
 	if err := host.discover(); err != nil {
 		t.Fatalf("initial discovery: %v", err)
 	}
-	waitForCapabilityCalls(t, provider, 1, time.Second)
-	waitForProviderAbsent(t, host, socketPath, time.Second)
+	waitForCapabilityCalls(t, provider, 1, providerHostWait)
+	waitForProviderAbsent(t, host, socketPath, providerHostWait)
 	if err := host.discover(); err != nil {
 		t.Fatalf("retry discovery: %v", err)
 	}
-	waitForCapabilityCalls(t, provider, 2, time.Second)
-	entry := waitForProviderReady(t, host, socketPath, time.Second)
+	waitForCapabilityCalls(t, provider, 2, providerHostWait)
+	entry := waitForProviderReady(t, host, socketPath, providerHostWait)
 	if entry.HealthStatus != v1alpha1.ProviderHealthReady || len(entry.Capabilities) != 1 || entry.Capabilities[0] != "complete" {
 		t.Fatalf("provider entry = %+v, want recovered capabilities and ready health", entry)
 	}
@@ -150,8 +153,8 @@ func TestProviderHost_RetriesAfterDialFailure(t *testing.T) {
 	host := NewProviderHost(ProviderHostConfig{
 		SocketDir:           dir,
 		HealthCheckInterval: time.Hour,
-		HealthCheckTimeout:  time.Second,
-		ConnectTimeout:      time.Second,
+		HealthCheckTimeout:  5 * time.Second,
+		ConnectTimeout:      5 * time.Second,
 	}, zaptest.NewLogger(t))
 	t.Cleanup(host.Stop)
 
@@ -170,7 +173,7 @@ func TestProviderHost_RetriesAfterDialFailure(t *testing.T) {
 	if err := host.discover(); err != nil {
 		t.Fatalf("retry discovery: %v", err)
 	}
-	waitForInfoCalls(t, provider, 1, time.Second)
+	waitForInfoCalls(t, provider, 1, providerHostWait)
 	if _, ok := host.ConnectionForSocket(socketPath); !ok {
 		t.Fatal("provider was not registered after recovering from dial failure")
 	}
@@ -188,24 +191,51 @@ func waitForProviderAbsent(t *testing.T, host *ProviderHost, socketPath string, 
 	t.Fatal("failed provider connection was not released for retry")
 }
 
-func waitForProviderReady(t *testing.T, host *ProviderHost, socketPath string, timeout time.Duration) v1alpha1.ProviderEntry {
+// providerHostWait bounds every wait for the provider host. It covers a whole
+// registration (a dial and three RPCs, each bounded by the host timeouts of a few
+// seconds), because a wait shorter than the host's own bounds fails a test that
+// the host is still about to satisfy. A test returns as soon as its condition
+// holds, so the bound only matters on a slow or loaded machine.
+const providerHostWait = 20 * time.Second
+
+// waitForProviderState polls until ready reports true for the provider on
+// socketPath and returns that entry. The host lists a provider as soon as its
+// socket is discovered, before its identity, capabilities and first health check
+// have been queried, so a test has to wait for the state it asserts on instead of
+// for the entry to exist. what describes that state for the failure message.
+func waitForProviderState(t *testing.T, host *ProviderHost, socketPath string, timeout time.Duration, what string, ready func(v1alpha1.ProviderEntry) bool) v1alpha1.ProviderEntry {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	var last v1alpha1.ProviderEntry
 	for time.Now().Before(deadline) {
-		connection, ok := host.ConnectionForSocket(socketPath)
-		if ok {
+		if connection, ok := host.ConnectionForSocket(socketPath); ok {
 			connection.mu.RLock()
 			last = connection.Info
 			connection.mu.RUnlock()
-			if last.HealthStatus == v1alpha1.ProviderHealthReady {
+			if ready(last) {
 				return last
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("provider did not become ready; last entry = %+v", last)
+	t.Fatalf("provider was not %s within %s; last entry = %+v", what, timeout, last)
 	return v1alpha1.ProviderEntry{}
+}
+
+func waitForProviderReady(t *testing.T, host *ProviderHost, socketPath string, timeout time.Duration) v1alpha1.ProviderEntry {
+	t.Helper()
+	return waitForProviderState(t, host, socketPath, timeout, "ready", func(entry v1alpha1.ProviderEntry) bool {
+		return entry.HealthStatus == v1alpha1.ProviderHealthReady
+	})
+}
+
+// waitForFirstHealthCheck waits until the host has finished registering the
+// provider, whatever the outcome of its first health check was.
+func waitForFirstHealthCheck(t *testing.T, host *ProviderHost, socketPath string, timeout time.Duration) v1alpha1.ProviderEntry {
+	t.Helper()
+	return waitForProviderState(t, host, socketPath, timeout, "registered after its first health check", func(entry v1alpha1.ProviderEntry) bool {
+		return entry.HealthStatus != v1alpha1.ProviderHealthUnknown
+	})
 }
 
 func waitForInfoCalls(t *testing.T, provider *fakeCPIProvider, want int, timeout time.Duration) {
@@ -257,7 +287,15 @@ func (f *fakeCPIProvider) GetProviderCapabilities(ctx context.Context, req *GetP
 func (f *fakeCPIProvider) HealthCheck(ctx context.Context, req *HealthCheckRequest) (*HealthCheckResponse, error) {
 	f.mu.Lock()
 	h := f.healthy
+	delay := f.healthDelay
 	f.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	return &HealthCheckResponse{
 		Ready:   h,
 		Message: "test provider",
@@ -683,18 +721,7 @@ func TestProviderHost_SocketRemoval(t *testing.T) {
 	}
 	defer host.Stop()
 
-	// Wait for registration.
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(host.GetProviders()) > 0 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	if len(host.GetProviders()) == 0 {
-		t.Fatal("provider not registered")
-	}
+	waitForProviderReady(t, host, socketPath, providerHostWait)
 
 	// Stop server and remove socket.
 	srv.Stop()
@@ -717,7 +744,7 @@ func TestProviderHost_GetReadyProvider(t *testing.T) {
 		capabilities: []string{"complete"}, healthy: true,
 	}
 
-	startFakeProvider(t, dir, "my-model", provider)
+	socketPath, _ := startFakeProvider(t, dir, "my-model", provider)
 
 	logger := zaptest.NewLogger(t)
 	host := NewProviderHost(ProviderHostConfig{
@@ -735,15 +762,7 @@ func TestProviderHost_GetReadyProvider(t *testing.T) {
 	}
 	defer host.Stop()
 
-	// Wait for registration and readiness.
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		providers := host.GetProviders()
-		if len(providers) > 0 && providers[0].Name != "" && providers[0].HealthStatus == v1alpha1.ProviderHealthReady {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	waitForProviderReady(t, host, socketPath, providerHostWait)
 
 	// Match by dimension.
 	entry, err := host.GetReadyProvider("model", "")
@@ -783,9 +802,10 @@ func TestProviderHost_UnhealthyProvider(t *testing.T) {
 	provider := &fakeCPIProvider{
 		name: "sick-provider", version: "1.0.0", dimension: "tool",
 		capabilities: []string{"provision"}, healthy: false, // reports not-ready
+		healthDelay: 300 * time.Millisecond,
 	}
 
-	startFakeProvider(t, dir, "sick", provider)
+	socketPath, _ := startFakeProvider(t, dir, "sick", provider)
 
 	logger := zaptest.NewLogger(t)
 	host := NewProviderHost(ProviderHostConfig{
@@ -803,22 +823,12 @@ func TestProviderHost_UnhealthyProvider(t *testing.T) {
 	}
 	defer host.Stop()
 
-	// Wait for registration.
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		entries := host.GetProviders()
-		if len(entries) > 0 && entries[0].Name == "sick-provider" {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	// The name is known before the first health check finishes, which the fake
+	// delays, so wait for the check itself rather than for the entry to appear.
+	entry := waitForFirstHealthCheck(t, host, socketPath, providerHostWait)
+	if entry.Name != "sick-provider" {
+		t.Errorf("name = %q, want %q", entry.Name, "sick-provider")
 	}
-
-	entries := host.GetProviders()
-	if len(entries) == 0 {
-		t.Fatal("provider not registered")
-	}
-
-	entry := entries[0]
 	if entry.HealthStatus != v1alpha1.ProviderHealthUnavailable {
 		t.Errorf("health = %q, want %q", entry.HealthStatus, v1alpha1.ProviderHealthUnavailable)
 	}
