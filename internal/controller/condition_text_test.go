@@ -52,8 +52,16 @@ func TestSanitizeConditionMessageBoundsLengthOnRuneBoundary(t *testing.T) {
 	if !utf8.ValidString(got) || !strings.HasSuffix(got, "...") {
 		t.Fatalf("truncated message invalid or missing marker: valid=%t suffix=%q", utf8.ValidString(got), got[len(got)-5:])
 	}
-	if want := maxConditionMessageRunes + len("..."); utf8.RuneCountInString(got) != want {
-		t.Errorf("rune count = %d, want %d", utf8.RuneCountInString(got), want)
+	if utf8.RuneCountInString(got) != maxConditionMessageRunes {
+		t.Errorf("rune count = %d, want exactly the %d-rune cap including the marker", utf8.RuneCountInString(got), maxConditionMessageRunes)
+	}
+	if want := strings.Repeat("é", maxConditionMessageRunes-len("...")) + "..."; got != want {
+		t.Errorf("truncated message was not cut on the budget before the marker")
+	}
+
+	oneOver := strings.Repeat("a", maxConditionMessageRunes+1)
+	if got := sanitizeConditionMessage(oneOver); utf8.RuneCountInString(got) != maxConditionMessageRunes || !strings.HasSuffix(got, "...") {
+		t.Errorf("one rune over the limit: rune count = %d, want %d with marker", utf8.RuneCountInString(got), maxConditionMessageRunes)
 	}
 
 	exact := strings.Repeat("a", maxConditionMessageRunes)
@@ -64,9 +72,10 @@ func TestSanitizeConditionMessageBoundsLengthOnRuneBoundary(t *testing.T) {
 		t.Errorf("trailing whitespace after a limit-length message should not trigger truncation (len %d)", len(got))
 	}
 
-	spaced := strings.Repeat("a", maxConditionMessageRunes-1) + " b"
-	if got := sanitizeConditionMessage(spaced); got != strings.Repeat("a", maxConditionMessageRunes-1)+"..." {
-		t.Errorf("space that would exceed the limit should be dropped before the marker, got tail %q", got[len(got)-8:])
+	spaced := strings.Repeat("a", maxConditionMessageRunes-len("...")-1) + " " + strings.Repeat("b", 10)
+	want := strings.Repeat("a", maxConditionMessageRunes-len("...")-1) + "..."
+	if got := sanitizeConditionMessage(spaced); got != want {
+		t.Errorf("space left at the cut should be dropped before the marker, got tail %q", got[len(got)-8:])
 	}
 }
 

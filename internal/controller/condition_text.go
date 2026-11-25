@@ -6,11 +6,13 @@ package controller
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 const (
 	maxConditionMessageRunes = 1024
 	maxConditionReasonRunes  = 64
+	conditionTruncationMark  = "..."
 )
 
 // sanitizeConditionMessage makes text that originates outside the control plane,
@@ -18,40 +20,41 @@ const (
 // in a status condition and to render in CLIs and UIs. It replaces control
 // characters and line breaks with single spaces, drops invisible formatting
 // characters (for example bidirectional overrides that can disguise text),
-// replaces invalid UTF-8, collapses whitespace, and bounds the length.
+// replaces invalid UTF-8, collapses whitespace, and bounds the length. The result,
+// including the truncation marker, never exceeds maxConditionMessageRunes.
 func sanitizeConditionMessage(message string) string {
 	if message == "" {
 		return ""
 	}
 	message = strings.ToValidUTF8(message, "\uFFFD")
 
-	var out strings.Builder
-	runes, pendingSpace := 0, false
+	out := make([]rune, 0, min(len(message), maxConditionMessageRunes+1))
+	pendingSpace := false
 	for _, r := range message {
 		switch {
 		case unicode.IsControl(r), unicode.IsSpace(r), unicode.Is(unicode.Zl, r), unicode.Is(unicode.Zp, r):
-			pendingSpace = out.Len() > 0
+			pendingSpace = len(out) > 0
 			continue
 		case unicode.Is(unicode.Cf, r):
 			continue
 		}
-		needed := 1
 		if pendingSpace {
-			needed = 2
-		}
-		if runes+needed > maxConditionMessageRunes {
-			out.WriteString("...")
-			break
-		}
-		if pendingSpace {
-			out.WriteByte(' ')
-			runes++
+			out = append(out, ' ')
 			pendingSpace = false
 		}
-		out.WriteRune(r)
-		runes++
+		out = append(out, r)
+		if len(out) > maxConditionMessageRunes {
+			break
+		}
 	}
-	return out.String()
+	if len(out) <= maxConditionMessageRunes {
+		return string(out)
+	}
+	kept := out[:maxConditionMessageRunes-utf8.RuneCountInString(conditionTruncationMark)]
+	for len(kept) > 0 && kept[len(kept)-1] == ' ' {
+		kept = kept[:len(kept)-1]
+	}
+	return string(kept) + conditionTruncationMark
 }
 
 // sanitizeConditionReason returns a reason accepted by the CRD condition schema,
