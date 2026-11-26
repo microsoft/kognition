@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -410,18 +411,25 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, mode
 			request.Header.Set(header, value)
 		}
 	}
+	start := time.Now()
 	response, err := s.client.Do(request)
 	if err != nil {
+		s.recordCall(auth.Provider, model.Spec.ModelID, start, err)
 		writeError(w, http.StatusBadGateway, "model provider is unavailable")
 		return cpi.Usage{}, nil, "", err
 	}
 	defer func() { _ = response.Body.Close() }()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxRequestBytes+1))
 	if err != nil || len(responseBody) > maxRequestBytes {
+		if err == nil {
+			err = errors.New("model provider response is too large")
+		}
+		s.recordCall(auth.Provider, model.Spec.ModelID, start, err)
 		writeError(w, http.StatusBadGateway, "model provider response is unavailable")
 		return cpi.Usage{}, nil, "", errors.New("read model provider response")
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		s.recordCall(auth.Provider, model.Spec.ModelID, start, &cpi.ProviderError{Provider: auth.Provider, Status: response.StatusCode, Reason: cpi.ClassifyStatus(response.StatusCode)})
 		if response.StatusCode >= http.StatusInternalServerError {
 			writeError(w, http.StatusBadGateway, "model provider is unavailable")
 			return cpi.Usage{}, nil, "", fmt.Errorf("model provider returned %s", response.Status)
@@ -429,6 +437,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, mode
 		writeError(w, http.StatusBadGateway, "model provider rejected the request")
 		return cpi.Usage{}, nil, "", fmt.Errorf("model provider returned %s", response.Status)
 	}
+	s.recordCall(auth.Provider, model.Spec.ModelID, start, nil)
 	contentType := response.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/json"
@@ -439,6 +448,18 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, mode
 		return cpi.Usage{}, nil, "", errors.New("model provider response omitted token usage")
 	}
 	return usage, responseBody, contentType, nil
+}
+
+// recordCall reports a direct provider call; calls through the CPI registry are recorded by the observed drivers.
+func (s *Server) recordCall(provider, model string, start time.Time, err error) {
+	if s.recorder == nil {
+		return
+	}
+	outcome := cpi.CallOutcome{Provider: provider, Operation: cpi.OperationComplete, Model: model, Duration: time.Since(start)}
+	if err != nil {
+		outcome.Reason, outcome.ProviderFault = cpi.ClassifyCallError(err)
+	}
+	s.recorder.RecordCall(outcome)
 }
 
 func (s *Server) startModelSpan(ctx context.Context, claims *runtimeauth.ModelSessionCapabilityClaims, agentIdentity string, authorized *AuthorizedModel, provider string) *observability.Span {

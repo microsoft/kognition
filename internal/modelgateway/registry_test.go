@@ -154,3 +154,63 @@ func registeredAdapterCapability(t *testing.T, storage *memoryStore, issuer *run
 	}
 	return token
 }
+
+func TestGatewayReportsDirectProviderCallsToTheConfiguredRecorder(t *testing.T) {
+	const usage = `{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+		closed bool
+		code   int
+		reason string
+		fault  bool
+	}{
+		{name: "success", status: http.StatusOK, body: usage, code: http.StatusOK},
+		{name: "server error", status: http.StatusInternalServerError, code: http.StatusBadGateway, reason: cpi.ReasonEndpointError, fault: true},
+		{name: "rate limited", status: http.StatusTooManyRequests, code: http.StatusBadGateway, reason: cpi.ReasonRateLimited, fault: true},
+		{name: "invalid request", status: http.StatusBadRequest, code: http.StatusBadGateway, reason: cpi.ReasonInvalidRequest},
+		{name: "unreachable", closed: true, code: http.StatusBadGateway, reason: cpi.ReasonUnreachable, fault: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, storage, authorizer, issuer, binding, _ := fixture(t)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			if test.closed {
+				upstream.Close()
+			} else {
+				t.Cleanup(upstream.Close)
+			}
+			var model api.Model
+			if err := json.Unmarshal(storage.data["Model/team-a/mock-model"], &model); err != nil {
+				t.Fatal(err)
+			}
+			model.Spec.Endpoint = upstream.URL
+			put(t, storage, "Model", "team-a", model.Name, model)
+			recorder := &recordedCalls{}
+			server, err := New(storage, issuer, authorizer, nil, zap.NewNop(), WithCallRecorder(recorder))
+			if err != nil {
+				t.Fatal(err)
+			}
+			token, err := issuer.Issue(binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, completionRequest(token))
+			if response.Code != test.code {
+				t.Fatalf("status = %d, want %d: %s", response.Code, test.code, response.Body.String())
+			}
+			if len(recorder.outcomes) != 1 {
+				t.Fatalf("recorded %d outcomes, want exactly 1: %+v", len(recorder.outcomes), recorder.outcomes)
+			}
+			got := recorder.outcomes[0]
+			if got.Provider != "openai-compatible" || got.Operation != cpi.OperationComplete || got.Model != "mock" || got.Reason != test.reason || got.ProviderFault != test.fault {
+				t.Fatalf("outcome = %+v, want reason %q fault %t", got, test.reason, test.fault)
+			}
+		})
+	}
+}
