@@ -30,6 +30,7 @@ import (
 	"github.com/kognition-ai/kognition/internal/cpi/drivers/openai"
 	"github.com/kognition-ai/kognition/internal/invocation"
 	"github.com/kognition-ai/kognition/internal/modelgateway"
+	"github.com/kognition-ai/kognition/internal/modelhealth"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/opa"
 	"github.com/kognition-ai/kognition/internal/runtime"
@@ -136,7 +137,8 @@ func newProductionRuntime(ctx context.Context, logger *zap.Logger, registry *cpi
 	}
 	st := newPostgresStore(pool, logger.Named("store"))
 	metricsRegistry := prometheus.NewRegistry()
-	registry.Observe(observability.NewCPICallMetrics(metricsRegistry))
+	callTracker := modelhealth.NewTracker()
+	registry.Observe(cpi.Recorders(observability.NewCPICallMetrics(metricsRegistry), callTracker))
 	usageWriter := observability.NewModelUsageMetrics(metricsRegistry).Wrap(st)
 	auditStore := observability.NewTrustDecisionMetrics(metricsRegistry).Wrap(st)
 	bindingKeys, err := runtimeapproval.BindingKeyStoreFromJSON(os.Getenv(runtimeapproval.BindingKeysEnvironmentVariable))
@@ -202,17 +204,55 @@ func newProductionRuntime(ctx context.Context, logger *zap.Logger, registry *cpi
 		apiserver.WithAuditLog(observability.NewCognitiveAuditLog(auditStore)),
 	)
 	options = append(options, apiserver.WithChatTracing(tracePipeline.Tracer, tracePipeline.Collector))
+	startReporter, stopReporter := modelHealthReporting(modelhealth.NewReporter(callTracker, st, modelhealth.NewReporterID(), logger))
 	return &apiServerRuntime{
 		server:   newAPIServer(serverConfigFromEnv(), st, logger.Named("apiserver"), options...),
 		listener: st,
 		initialize: func(ctx context.Context) error {
-			return st.ActivateRuntimeApprovalBindingKeys(ctx, bindingKeys)
+			if err := st.ActivateRuntimeApprovalBindingKeys(ctx, bindingKeys); err != nil {
+				return err
+			}
+			startReporter(ctx)
+			return nil
 		},
 		closePool: func() {
+			stopReporter()
 			shutdownTracePipeline(tracePipeline, logger)
 			pool.Close()
 		},
 	}, nil
+}
+
+// modelHealthReporting ties the passive model health reporter to the runtime's
+// lifecycle: start runs when the runtime is initialized and stop, which is a no-op
+// if start never ran, when its resources are closed. runServerLifecycle closes
+// them only after the server has drained its requests.
+func modelHealthReporting(reporter *modelhealth.Reporter) (start func(context.Context), stop func()) {
+	stopReporter := func() {}
+	start = func(ctx context.Context) { stopReporter = startModelHealthReporter(ctx, reporter) }
+	stop = func() { stopReporter() }
+	return start, stop
+}
+
+// startModelHealthReporter publishes passive model health in the background until
+// the returned function is called, which waits for the final publish.
+//
+// The reporter deliberately does not end with ctx. The command's context is
+// canceled when shutdown begins, but HTTP requests keep draining for a while and
+// the model calls they complete must still be published, so the reporter runs
+// until stop is called after the drain. It keeps ctx's values, and its final
+// publish stays bounded by the reporter's own timeout.
+func startModelHealthReporter(ctx context.Context, reporter *modelhealth.Reporter) (stop func()) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = reporter.Start(ctx)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 func serverConfigFromEnv() apiserver.Config {

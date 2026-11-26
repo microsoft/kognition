@@ -98,6 +98,9 @@ type upstreamAuth struct {
 	Provider    string
 	Credentials *cpi.Credentials
 	Invocation  *modelinvocation.Resolved
+	// Credential is the cpi.CredentialFingerprint of the Model's secret. It lets a
+	// direct provider call be attributed to the account that made it.
+	Credential string
 }
 
 func New(store store.Store, issuer *runtimeauth.ModelSessionCapabilityIssuer, authorizer ModelAccessAuthorizer, client *http.Client, logger *zap.Logger, options ...Option) (*Server, error) {
@@ -361,6 +364,7 @@ func (s *Server) resolveUpstreamAuth(ctx context.Context, namespace string, mode
 		return upstreamAuth{}, nil
 	}
 	values := credentials.Data
+	fingerprint := cpi.CredentialFingerprint(credentials)
 	if provider != "foundry" && provider != "openai-compatible" {
 		if provider == "anthropic" && values["apiKey"] == "" {
 			return upstreamAuth{}, errors.New("Anthropic invocation requires an API-key SecretRef")
@@ -376,9 +380,9 @@ func (s *Server) resolveUpstreamAuth(ctx context.Context, namespace string, mode
 			return upstreamAuth{}, errors.New("model API-key SecretRef is empty")
 		}
 		if provider == "foundry" {
-			return upstreamAuth{Header: "api-key", Value: apiKey}, nil
+			return upstreamAuth{Header: "api-key", Value: apiKey, Credential: fingerprint}, nil
 		}
-		return upstreamAuth{Header: "Authorization", Value: "Bearer " + apiKey}, nil
+		return upstreamAuth{Header: "Authorization", Value: "Bearer " + apiKey, Credential: fingerprint}, nil
 	}
 	if provider != "foundry" || (values["type"] != "azure-identity" && values["credentialType"] == "") {
 		return upstreamAuth{}, errors.New("model credential is not supported by the Model Gateway")
@@ -387,7 +391,7 @@ func (s *Server) resolveUpstreamAuth(ctx context.Context, namespace string, mode
 	if err != nil {
 		return upstreamAuth{}, fmt.Errorf("acquire Foundry Azure identity token: %w", err)
 	}
-	return upstreamAuth{Header: "Authorization", Value: "Bearer " + token}, nil
+	return upstreamAuth{Header: "Authorization", Value: "Bearer " + token, Credential: fingerprint}, nil
 }
 
 func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, model *v1alpha1.Model, auth upstreamAuth) (cpi.Usage, []byte, string, error) {
@@ -414,7 +418,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, mode
 	start := time.Now()
 	response, err := s.client.Do(request)
 	if err != nil {
-		s.recordCall(auth.Provider, model.Spec.ModelID, start, err)
+		s.recordCall(auth, model, start, err)
 		writeError(w, http.StatusBadGateway, "model provider is unavailable")
 		return cpi.Usage{}, nil, "", err
 	}
@@ -424,12 +428,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, mode
 		if err == nil {
 			err = errors.New("model provider response is too large")
 		}
-		s.recordCall(auth.Provider, model.Spec.ModelID, start, err)
+		s.recordCall(auth, model, start, err)
 		writeError(w, http.StatusBadGateway, "model provider response is unavailable")
 		return cpi.Usage{}, nil, "", errors.New("read model provider response")
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		s.recordCall(auth.Provider, model.Spec.ModelID, start, &cpi.ProviderError{Provider: auth.Provider, Status: response.StatusCode, Reason: cpi.ClassifyStatus(response.StatusCode)})
+		s.recordCall(auth, model, start, &cpi.ProviderError{Provider: auth.Provider, Status: response.StatusCode, Reason: cpi.ClassifyStatus(response.StatusCode)})
 		if response.StatusCode >= http.StatusInternalServerError {
 			writeError(w, http.StatusBadGateway, "model provider is unavailable")
 			return cpi.Usage{}, nil, "", fmt.Errorf("model provider returned %s", response.Status)
@@ -444,20 +448,25 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, mode
 	usage, reported := completionUsage(responseBody)
 	if !reported {
 		err := errors.New("model provider response omitted token usage")
-		s.recordCall(auth.Provider, model.Spec.ModelID, start, err)
+		s.recordCall(auth, model, start, err)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return cpi.Usage{}, nil, "", err
 	}
-	s.recordCall(auth.Provider, model.Spec.ModelID, start, nil)
+	s.recordCall(auth, model, start, nil)
 	return usage, responseBody, contentType, nil
 }
 
 // recordCall reports a direct provider call; calls through the CPI registry are recorded by the observed drivers.
-func (s *Server) recordCall(provider, model string, start time.Time, err error) {
+// It carries the Model's endpoint and credential like they do, so that the
+// outcome counts for the same destination and account as the Model's other calls.
+func (s *Server) recordCall(auth upstreamAuth, model *v1alpha1.Model, start time.Time, err error) {
 	if s.recorder == nil {
 		return
 	}
-	outcome := cpi.CallOutcome{Provider: provider, Operation: cpi.OperationComplete, Model: model, Duration: time.Since(start)}
+	outcome := cpi.CallOutcome{
+		Provider: auth.Provider, Operation: cpi.OperationComplete, Model: model.Spec.ModelID,
+		Endpoint: model.Spec.Endpoint, Credential: auth.Credential, Duration: time.Since(start),
+	}
 	if err != nil {
 		outcome.Reason, outcome.ProviderFault = cpi.ClassifyCallError(err)
 	}

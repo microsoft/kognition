@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"go.uber.org/zap"
 
+	"github.com/kognition-ai/kognition/internal/controller"
 	"github.com/kognition-ai/kognition/internal/cpi"
 	"github.com/kognition-ai/kognition/internal/store"
 )
@@ -54,6 +56,68 @@ func TestNewCPIRegistryRegistersProductionDriversAndReportsCallOutcomes(t *testi
 type canaryOperationCapableStore struct {
 	store.Store
 	store.CanaryOperationStore
+}
+
+type callHealthCapableStore struct {
+	store.Store
+	store.ModelCallHealthStore
+}
+
+func runnableTypes(mgr *controller.Manager) []string {
+	return runnableTypesIn(mgr, "runnables")
+}
+
+// runnableTypesIn lists the types of the manager's runnables of one kind: "runnables"
+// stop with the controllers and "background" outlive them.
+func runnableTypesIn(mgr *controller.Manager, field string) []string {
+	runnables := reflect.ValueOf(mgr).Elem().FieldByName(field)
+	types := make([]string, 0, runnables.Len())
+	for index := 0; index < runnables.Len(); index++ {
+		types = append(types, runnables.Index(index).Elem().Type().String())
+	}
+	return types
+}
+
+func TestPassiveModelHealthIsOnlyWiredForStoresThatCanShareIt(t *testing.T) {
+	if newPassiveModelHealth(nil) != nil || newPassiveModelHealth(&canaryOperationCapableStore{}) != nil {
+		t.Fatal("a store without passive health support must not enable it")
+	}
+	var disabled *passiveModelHealth
+	base := &callRecorder{}
+	if disabled.recorder(base) != cpi.CallRecorder(base) || disabled.recorder(nil) != nil {
+		t.Fatal("a disabled passive health must leave the recorder unchanged")
+	}
+	disabled.register(nil, nil, nil, zap.NewNop())
+}
+
+func TestPassiveModelHealthRecordsOutcomesAndRegistersItsRunnables(t *testing.T) {
+	st := &callHealthCapableStore{}
+	passive := newPassiveModelHealth(st)
+	if passive == nil {
+		t.Fatal("a store that implements ModelCallHealthStore must enable passive health")
+	}
+
+	base := &callRecorder{}
+	recorder := passive.recorder(base)
+	recorder.RecordCall(cpi.CallOutcome{Provider: "anthropic", Operation: cpi.OperationComplete, Model: "claude"})
+	if len(base.outcomes) != 1 || len(passive.tracker.Snapshot()) != 2 {
+		t.Fatalf("outcomes reached the base recorder %d times and the tracker holds %d streams, want one outcome and the destination and credential streams of its success", len(base.outcomes), len(passive.tracker.Snapshot()))
+	}
+	if only := passive.recorder(nil); only != cpi.CallRecorder(passive.tracker) {
+		t.Fatal("without a base recorder the tracker must be the recorder")
+	}
+
+	mgr := controller.NewManager(controller.ManagerConfig{Store: st, Logger: zap.NewNop()})
+	modelController := mgr.Register(controller.ControllerConfig{Name: "model-controller", Kind: "Model", Reconciler: nil})
+	passive.register(mgr, st, modelController, zap.NewNop())
+	types := runnableTypes(mgr)
+	background := runnableTypesIn(mgr, "background")
+	if !slices.Contains(types, "*controller.ModelHealthWatcher") || slices.Contains(types, "*modelhealth.Reporter") {
+		t.Fatalf("runnables = %v, want the watcher, which stops with the controllers, and not the reporter", types)
+	}
+	if len(background) != 1 || background[0] != "*modelhealth.Reporter" {
+		t.Fatalf("background runnables = %v, want only the reporter, which must outlive the controllers to publish their last outcomes", background)
+	}
 }
 
 func TestControllerDSN(t *testing.T) {

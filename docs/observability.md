@@ -31,6 +31,30 @@ Durations use matching WorkflowRun owner name, UID, and namespace. Missing or ne
 
 Retention can decrease these gauges. Use direct values and duration sum divided by observation count; avoid `rate`, `increase`, and histogram quantiles. The Workflow 360 dashboard shows retained populations and weighted means, deduplicating controller replicas with `max by` on the semantic labels before aggregation. Its selected time range displays historical snapshots of the retained population. No duration value means evidence is unavailable. The former `kognition_workflow_runs_total` and `kognition_workflow_step_duration_seconds_*` event metrics are removed.
 
+### Model Call Metrics And Passive Health
+
+Every component that calls a model provider through a CPI driver (the API server, the controllers and the Model Gateway) counts and times those calls.
+
+| Metric | Meaning |
+| --- | --- |
+| `kognition_cpi_calls_total{provider,operation,outcome,reason}` | Completed model calls. `operation` is `complete` or `embed`. `outcome` is `success`, `provider_failure` (the provider or its configuration is at fault: rejected credentials, exhausted quota, rate limiting, 5xx or 404, timeouts, unreachable endpoint) or `request_failure` (invalid request, cancellation or an undecodable response). `reason` is `none` on success. |
+| `kognition_cpi_call_duration_seconds{provider,operation,outcome}` | Duration histogram of the same calls. |
+
+The model is deliberately not a label, because Model resources are user defined. A provider error rate is `provider_failure` divided by all calls.
+
+In standalone mode the API server and the controller manager also publish a short summary of their recent calls to PostgreSQL, and the Model controller uses it to degrade a Model whose real traffic is failing even though its active probe still passes. Each reporter publishes the evidence under two kinds of opaque keys, hashes that never contain the endpoint or the secret:
+
+- **Destination:** the provider, endpoint and model ID. Failures that concern everyone who calls the destination, such as timeouts, an unreachable endpoint, 5xx, 404 or rate limiting, count here, so Models that share a destination share them.
+- **Credential:** the destination together with a fingerprint of the secret the call presented. Rejected credentials and exhausted quota or billing count only here, so one account's revoked key or empty balance degrades the Models that use that secret and not those of another account that calls the same destination. A success counts for both.
+
+The Model controller derives a Model's credential from its `credentialRef` the way the callers present it, so a Model's evidence is the same whichever component made the calls. A Model whose secret the controller cannot resolve, such as an environment variable that only the calling process has, is never blamed for credential failures; it is left to its active probe and to the destination's evidence. The fingerprint is a one-way hash of the secret material combined with the destination, which is as sensitive as the secret's entropy: use high-entropy API keys.
+
+A Model is degraded when, within the last five minutes, its destination or its credential has three consecutive provider failures (two for rejected credentials or exhausted quota) or at least half of at least five calls failed while the latest call failed. Replicas publish when each run began, and the evidence of all of them is merged so that a run only counts for the part that no other replica's opposite outcome interrupted: one replica's successes around another's failure never add up to a recovery, and failures from before another replica's success never degrade a Model. When the order of outcomes is not certain, a run counts as one call. The Model reports `Ready=False` with the failure reason (for example `RateLimited`), a message starting with `passive health:`, `status.available=false` and phase `Failed`. A degraded Model recovers after three consecutive successes or once the failures leave the five minute window. An active probe failure takes precedence over a passive one, and an unavailable health store keeps the previous verdict.
+
+The controller manager's health watcher queues a Model when its status no longer matches the evidence. It does not queue a Model that is unready for another reason, such as a failing probe, because reconciling it would keep that failure and only repeat the probe, and it queues a Model for the same outcome at most once a minute. A recovery or a change of reason is queued at once. Outcomes of calls that finish while the API server or the controller manager shuts down are still published, because the reporter stops only after requests and controllers have drained.
+
+Passive health reports and drives fallback selection; it does not block calls to a degraded Model. It is not shared in Kubernetes mode yet, so Models there keep reporting only their active probe.
+
 ## Exported Spans
 
 When tracing is enabled, Kognition exports spans for workflow orchestration and tool invocation.
