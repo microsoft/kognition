@@ -434,6 +434,10 @@ func (manifest Manifest) validate() error {
 	if !policies[statePolicy] || !bindings[statePolicy] {
 		return errors.New("installation state enforcement is required for activation")
 	}
+	modelCallHealthPolicy := strings.TrimSuffix(manifest.Deployment, "-k8s-controller") + "-" + manifest.Namespace + "-model-call-health"
+	if !policies[modelCallHealthPolicy] || !bindings[modelCallHealthPolicy] {
+		return errors.New("model call health enforcement is required for activation")
+	}
 	for _, namespace := range manifest.Namespaces {
 		if !baselines[namespace] || !seen["Role/"+namespace+"/"+manifest.Guard] || !seen["RoleBinding/"+namespace+"/"+manifest.Guard] {
 			return errors.New("missing guard permissions in workload namespace")

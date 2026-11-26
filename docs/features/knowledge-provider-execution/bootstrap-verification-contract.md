@@ -53,6 +53,11 @@ The protected inventory contains exactly:
 | Optional Cilium node-health ingress policies | `cilium.io/v2` | Known control-plane component selectors; only node/health entities and one TCP port |
 | Optional runtime probe policy | `cilium.io/v2` (`CiliumClusterwideNetworkPolicy`) | Managed runtime selector restricted to enrolled namespaces, node/health entities and TCP 8080; no egress |
 
+The `-state`, `-gateway-leases` and `-model-call-health` policy/binding pairs
+must have the exact installation release and namespace identity. Replacing one
+with an unrelated Fail/Deny pair fails verification even when the total count
+remains ten.
+
 Probe policies set `enableDefaultDeny.ingress` and `enableDefaultDeny.egress`
 to `false`. They add node-health allowances while preserving the default-deny
 behavior established by workload isolation policies.

@@ -79,6 +79,8 @@ func TestControllerInstallationConfigMapAdmission(test *testing.T) {
 	if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "outside"}}); err != nil {
 		test.Fatal(err)
 	}
+	// Seed malformed names before admission so UPDATE probes retain immutable names.
+	healthNameFixtures := seedModelCallHealthNameFixtures(test, ctx, admin)
 	controllerRoles := 0
 	var gatewayMigrationFixture corev1.ConfigMap
 	for _, document := range renderControllerRBAC(test, "--kube-version", "1.30.3", "--set", "k8sController.managedNamespaces[0]=tenant", "--set", "agentCommunicationGateway.enabled=true", "--set", "modelGateway.enabled=true") {
@@ -147,6 +149,9 @@ func TestControllerInstallationConfigMapAdmission(test *testing.T) {
 	}
 	test.Run("resource-webhook-audit", func(test *testing.T) {
 		verifyResourceWebhookAuditConfigMapBoundary(test, ctx, admin, config, scheme)
+	})
+	test.Run("model-call-health", func(test *testing.T) {
+		verifyModelCallHealthConfigMapBoundary(test, ctx, admin, config, scheme, healthNameFixtures)
 	})
 	test.Run("gateway-configmaps", func(test *testing.T) {
 		verifyGatewayConfigMapBoundary(test, ctx, admin, config, scheme, gatewayMigrationFixture)

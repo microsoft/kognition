@@ -65,6 +65,38 @@ func TestActivationRejectsUnsafeManifest(test *testing.T) {
 			})
 		}
 	}
+	test.Run("model-call-health/replacement-pair", func(test *testing.T) {
+		objects := copyActivationDocuments(original)
+		replaced := 0
+		for _, object := range objects {
+			if !strings.HasSuffix(object.GetName(), "-model-call-health") {
+				continue
+			}
+			switch object.GetKind() {
+			case "ValidatingAdmissionPolicy":
+				object.SetName("replacement-policy")
+				if err := unstructured.SetNestedSlice(object.Object, []interface{}{
+					map[string]interface{}{"expression": "true", "reason": "Forbidden"},
+				}, "spec", "validations"); err != nil {
+					test.Fatal(err)
+				}
+				replaced++
+			case "ValidatingAdmissionPolicyBinding":
+				object.SetName("replacement-policy")
+				if err := unstructured.SetNestedField(object.Object, "replacement-policy", "spec", "policyName"); err != nil {
+					test.Fatal(err)
+				}
+				replaced++
+			}
+		}
+		if replaced != 2 {
+			test.Fatalf("replaced %d objects, want one policy and binding pair", replaced)
+		}
+		_, err := activation.Parse(strings.NewReader(encodeActivationDocuments(test, objects)))
+		if err == nil || !strings.Contains(err.Error(), "model call health enforcement is required") {
+			test.Fatalf("want missing model call health enforcement, got %v", err)
+		}
+	})
 	for _, kind := range []string{"ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"} {
 		test.Run("gateway-leases/"+kind, func(test *testing.T) {
 			objects := copyActivationDocuments(original)
