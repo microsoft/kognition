@@ -52,7 +52,7 @@ func newRateClass(threshold int32, probeType string) v1alpha1.ModelClass {
 		Spec: v1alpha1.ModelClassSpec{
 			Provisioner: "openai",
 			HealthProbe: &v1alpha1.HealthProbeSpec{
-				Endpoint: "https://api.example/health", Type: probeType, ErrorRateThreshold: threshold,
+				Endpoint: "https://api.example/health", Type: probeType, ErrorRateThreshold: &threshold,
 				FailureThreshold: 1, SuccessThreshold: 2, IntervalSeconds: 10,
 			},
 		},
@@ -133,8 +133,10 @@ func TestModelClassReconciler_ErrorRateBoundaries(t *testing.T) {
 	}{
 		{"just below the threshold", 50, 10, 4, true, false},
 		{"exactly at the threshold", 50, 10, 5, true, true},
-		{"unset threshold defaults to half", 0, 10, 5, true, true},
-		{"unset threshold below half", 0, 10, 4, true, false},
+		{"zero threshold degrades on one provider failure", 0, 5, 1, true, true},
+		{"zero threshold still needs minimum evidence", 0, 4, 1, true, false},
+		{"zero threshold does not degrade a healthy target", 0, 5, 0, false, false},
+		{"zero threshold does not degrade a recovered target", 0, 5, 1, false, false},
 		{"threshold of 100 needs every call to fail", 100, 10, 9, true, false},
 		{"threshold of 100 with every call failing", 100, 10, 10, true, true},
 		{"too few calls are no evidence", 10, 4, 4, true, false},
@@ -146,6 +148,30 @@ func TestModelClassReconciler_ErrorRateBoundaries(t *testing.T) {
 			f.store.set([]store.ModelCallHealth{rateRecord(rateTarget("m1"), tc.calls, tc.faults, tc.latestFailed)}, nil)
 			if degraded := f.reconcile().Status.Phase == v1alpha1.PhaseDegraded; degraded != tc.wantDegraded {
 				t.Fatalf("degraded = %t, want %t", degraded, tc.wantDegraded)
+			}
+		})
+	}
+}
+
+func TestModelClassReconciler_ErrorRateOmittedThresholdDefaultsToHalf(t *testing.T) {
+	for _, tc := range []struct {
+		faults       int32
+		wantDegraded bool
+	}{{1, false}, {4, false}, {5, true}} {
+		t.Run(fmt.Sprint(tc.faults), func(t *testing.T) {
+			class := newRateClass(0, "error-rate-threshold")
+			class.Spec.HealthProbe.ErrorRateThreshold = nil
+			f := newRateFixture(t, class, rateModel("a", "default", rateClassName, "m1"))
+			f.store.set([]store.ModelCallHealth{rateRecord(rateTarget("m1"), 10, tc.faults, true)}, nil)
+			got := f.reconcile()
+			if degraded := got.Status.Phase == v1alpha1.PhaseDegraded; degraded != tc.wantDegraded {
+				t.Fatalf("degraded = %t, want %t", degraded, tc.wantDegraded)
+			}
+			if tc.wantDegraded {
+				condition := readyConditionOf(got)
+				if condition == nil || !strings.Contains(condition.Message, "threshold 50%") {
+					t.Fatalf("Ready = %+v, want the omitted threshold evaluated as 50%%", condition)
+				}
 			}
 		})
 	}
@@ -246,12 +272,28 @@ func TestModelClassReconciler_ErrorRateKeepsTheClassWhenEvidenceCannotBeRead(t *
 		t.Run(tc.name, func(t *testing.T) {
 			class := newRateClass(50, "error-rate-threshold")
 			class.Status.Phase = tc.phase
+			class.Status.Conditions = []v1alpha1.Condition{{Type: "Ready", Status: "False", Reason: errorRateReason, Message: "previous failure"}}
+			if tc.phase == v1alpha1.PhaseReady {
+				class.Status.Conditions[0] = v1alpha1.Condition{Type: "Ready", Status: "True", Reason: "Provisioned", Message: "previous health"}
+			}
 			f := newRateFixture(t, class, rateModel("a", "default", rateClassName, "m1"))
 			f.store.set(nil, errors.New("store down"))
 			// Two probes could recover a degraded class if the outage counted as health.
 			f.reconcile()
-			if got := f.reconcile(); got.Status.Phase != tc.want {
+			got := f.reconcile()
+			if got.Status.Phase != tc.want {
 				t.Fatalf("phase = %s, want %s", got.Status.Phase, tc.want)
+			}
+			condition := readyConditionOf(got)
+			if tc.phase == v1alpha1.PhaseDegraded {
+				if condition == nil || condition.Status != "False" || condition.Reason != "ErrorRateUnavailable" || condition.Message != "error-rate-threshold: recent model call health could not be read" {
+					t.Fatalf("Ready = %+v, want False with the current outage reason and message", condition)
+				}
+				if got.Status.ConsecutiveSuccesses != 0 {
+					t.Fatalf("successes = %d, want recovery blocked by the outage", got.Status.ConsecutiveSuccesses)
+				}
+			} else if condition == nil || condition.Status != "True" || condition.Reason != "Provisioned" || condition.Message != "previous health" {
+				t.Fatalf("Ready = %+v, want the Ready class's condition unchanged by an outage", condition)
 			}
 		})
 	}
@@ -275,14 +317,22 @@ func TestModelClassReconciler_ErrorRateKeepsTheClassWhenModelsCannotBeListed(t *
 		t.Run(string(phase), func(t *testing.T) {
 			class := newRateClass(50, "error-rate-threshold")
 			class.Status.Phase = phase
+			class.Status.Conditions = []v1alpha1.Condition{{Type: "Ready", Status: "False", Reason: "ProbeFailed", Message: "previous failure"}}
 			base := newCallHealthStore()
 			storeModelClass(t, base.memStore, class)
 			driver := &configurableMockDriver{name: "openai-compatible", probeResult: &cpi.HealthResult{Available: true}}
 			r := NewModelClassReconciler(&listFailingStore{callHealthStore: base, err: errors.New("list failed")}, registryWith(driver), zaptest.NewLogger(t))
 			reconcileModelClass(t, r, "default", rateClassName)
 			reconcileModelClass(t, r, "default", rateClassName)
-			if got := getModelClass(t, base.memStore, "default", rateClassName); got.Status.Phase != phase {
+			got := getModelClass(t, base.memStore, "default", rateClassName)
+			if got.Status.Phase != phase {
 				t.Fatalf("phase = %s, want %s kept", got.Status.Phase, phase)
+			}
+			if phase == v1alpha1.PhaseDegraded {
+				condition := readyConditionOf(got)
+				if condition == nil || condition.Status != "False" || condition.Reason != "ErrorRateUnavailable" || condition.Message != "error-rate-threshold: recent model call health could not be read" {
+					t.Fatalf("Ready = %+v, want False with the Model listing outage reason and message", condition)
+				}
 			}
 		})
 	}
@@ -362,5 +412,64 @@ func TestModelClassReconciler_ValidatesTheErrorRateThreshold(t *testing.T) {
 				t.Fatalf("reason=%q message=%q, want HealthProbeInvalid naming errorRateThreshold", reason, message)
 			}
 		})
+	}
+	class := newRateClass(0, "error-rate-threshold")
+	class.Spec.HealthProbe.ErrorRateThreshold = nil
+	if valid, reason, message := r.validateConfig(&class); !valid {
+		t.Fatalf("an omitted threshold must be valid: %s: %s", reason, message)
+	}
+}
+
+func TestModelClassReconciler_ValidatesUpdatedHealthProbesBeforeEvaluation(t *testing.T) {
+	for _, phase := range []v1alpha1.Phase{v1alpha1.PhaseReady, v1alpha1.PhaseDegraded, v1alpha1.PhaseValidating} {
+		for _, tc := range []struct {
+			name   string
+			change func(*v1alpha1.HealthProbeSpec)
+		}{
+			{"negative threshold", func(probe *v1alpha1.HealthProbeSpec) { *probe.ErrorRateThreshold = -1 }},
+			{"threshold above 100", func(probe *v1alpha1.HealthProbeSpec) { *probe.ErrorRateThreshold = 101 }},
+			{"missing endpoint", func(probe *v1alpha1.HealthProbeSpec) { probe.Endpoint = "" }},
+			{"invalid endpoint", func(probe *v1alpha1.HealthProbeSpec) { probe.Endpoint = "not a URI" }},
+		} {
+			t.Run(string(phase)+"/"+tc.name, func(t *testing.T) {
+				class := newRateClass(50, "error-rate-threshold")
+				class.Status.Phase = phase
+				f := newRateFixture(t, class, rateModel("a", "default", rateClassName, "m1"))
+				f.store.set([]store.ModelCallHealth{rateRecord(rateTarget("m1"), 5, 5, true)}, nil)
+
+				class = getModelClass(t, f.store.memStore, "default", rateClassName)
+				tc.change(class.Spec.HealthProbe)
+				if err := f.r.updateModelClass(context.Background(), &class); err != nil {
+					t.Fatal(err)
+				}
+				got := f.reconcile()
+				condition := readyConditionOf(got)
+				if got.Status.Phase != v1alpha1.PhaseFailed || got.Status.Provisioned || got.Status.Health != "" {
+					t.Fatalf("status = %+v, want invalid configuration to fail before probing", got.Status)
+				}
+				if condition == nil || condition.Status != "False" || condition.Reason != "HealthProbeInvalid" {
+					t.Fatalf("Ready = %+v, want False with HealthProbeInvalid", condition)
+				}
+				if f.store.lists != 0 || got.Status.LastProbeTime != "" {
+					t.Fatal("invalid probe configuration must not be evaluated")
+				}
+
+				corrected := int32(0)
+				got.Spec.HealthProbe.ErrorRateThreshold = &corrected
+				got.Spec.HealthProbe.Endpoint = "https://api.example/health"
+				if err := f.r.updateModelClass(context.Background(), &got); err != nil {
+					t.Fatal(err)
+				}
+				if got := f.reconcile(); got.Status.Phase != v1alpha1.PhaseValidating {
+					t.Fatalf("phase = %s, want corrected configuration to be revalidated", got.Status.Phase)
+				}
+				if got := f.reconcile(); got.Status.Phase != v1alpha1.PhaseReady {
+					t.Fatalf("phase = %s, want Ready after correcting configuration", got.Status.Phase)
+				}
+				if got := f.reconcile(); got.Status.Phase != v1alpha1.PhaseDegraded {
+					t.Fatalf("phase = %s, want the corrected zero threshold evaluated", got.Status.Phase)
+				}
+			})
+		}
 	}
 }

@@ -23,6 +23,7 @@ import (
 // reconciler: failing calls to one of its Models degrade the class even though
 // its active probe passes, and healed calls recover it.
 func TestModelClassErrorRateFollowsRealCallsThroughPostgres(t *testing.T) {
+	threshold := int32(50)
 	ctx := context.Background()
 	pool := postgres.SharedTestPool()
 	backend := postgres.New(pool, zaptest.NewLogger(t))
@@ -48,7 +49,7 @@ func TestModelClassErrorRateFollowsRealCallsThroughPostgres(t *testing.T) {
 			Provisioner: "anthropic",
 			HealthProbe: &v1alpha1.HealthProbeSpec{
 				Endpoint: "https://api.example/" + namespace + "/health", Type: "error-rate-threshold",
-				ErrorRateThreshold: 50, FailureThreshold: 1, SuccessThreshold: 1,
+				ErrorRateThreshold: &threshold, FailureThreshold: 1, SuccessThreshold: 1,
 			},
 		},
 		Status: v1alpha1.ModelClassStatus{Phase: v1alpha1.PhaseReady, Provisioned: true, Health: "Healthy"},

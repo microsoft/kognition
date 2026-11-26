@@ -35,8 +35,8 @@ func (r *ModelClassReconciler) SetCallHealth(health store.ModelCallHealthStore) 
 
 // errorRateThreshold returns the configured error rate, in percent.
 func errorRateThreshold(probe *v1alpha1.HealthProbeSpec) int32 {
-	if probe.ErrorRateThreshold > 0 {
-		return probe.ErrorRateThreshold
+	if probe.ErrorRateThreshold != nil {
+		return *probe.ErrorRateThreshold
 	}
 	return defaultErrorRatePercent
 }

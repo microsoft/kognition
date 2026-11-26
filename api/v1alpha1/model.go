@@ -76,8 +76,8 @@ type HealthProbeSpec struct {
 	// ErrorRateThreshold is the error rate percentage (0-100) at which an
 	// "error-rate-threshold" probe degrades the class. It is measured over the
 	// provider failures of recent real model calls to the class's Models, needs at
-	// least 5 calls and defaults to 50 when unset.
-	ErrorRateThreshold int32 `json:"errorRateThreshold,omitempty" yaml:"errorRateThreshold,omitempty"`
+	// least 5 calls and defaults to 50 when unset. An explicit zero is preserved.
+	ErrorRateThreshold *int32 `json:"errorRateThreshold,omitempty" yaml:"errorRateThreshold,omitempty"`
 
 	// FailureThreshold is the number of consecutive probe failures before marking Degraded.
 	// Defaults to 3.

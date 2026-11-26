@@ -100,6 +100,7 @@ func TestModelReconcilerAdapter_ConfigureCallHealthDegradesModelsFromRealCalls(t
 }
 
 func TestModelClassReconcilerAdapter_ConfigureCallHealthDegradesClassesFromRealCalls(t *testing.T) {
+	threshold := int32(50)
 	registry := cpi.NewRegistry()
 	registry.MustRegister(healthyOpenAIDriver{})
 	class := api.ModelClass{
@@ -107,7 +108,7 @@ func TestModelClassReconcilerAdapter_ConfigureCallHealthDegradesClassesFromRealC
 		ObjectMeta: api.ObjectMeta{Name: "fast", ResourceVersion: 1, Finalizers: []string{"kognition.dev/model-class-protection"}},
 		Spec: api.ModelClassSpec{
 			Provisioner: "openai-compatible",
-			HealthProbe: &api.HealthProbeSpec{Endpoint: "https://gateway.example/health", Type: "error-rate-threshold", ErrorRateThreshold: 50, FailureThreshold: 1},
+			HealthProbe: &api.HealthProbeSpec{Endpoint: "https://gateway.example/health", Type: "error-rate-threshold", ErrorRateThreshold: &threshold, FailureThreshold: 1},
 		},
 		Status: api.ModelClassStatus{Phase: api.PhaseReady, Provisioned: true, Health: "Healthy"},
 	}

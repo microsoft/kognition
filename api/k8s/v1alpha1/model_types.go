@@ -95,11 +95,11 @@ type ModelHealthProbeSpec struct {
 	// ErrorRateThreshold is the error rate percentage (0-100) at which an
 	// "error-rate-threshold" probe degrades the class. It is measured over the
 	// provider failures of recent real model calls to the class's Models, needs at
-	// least 5 calls and defaults to 50 when unset.
+	// least 5 calls and defaults to 50 when unset. An explicit zero is preserved.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
-	ErrorRateThreshold int32 `json:"errorRateThreshold,omitempty"`
+	ErrorRateThreshold *int32 `json:"errorRateThreshold,omitempty"`
 
 	// FailureThreshold is the number of failures before marking unhealthy.
 	// +optional

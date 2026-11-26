@@ -96,6 +96,14 @@ func (r *ModelClassReconciler) Reconcile(ctx context.Context, req Request) (Resu
 		return Result{Requeue: true}, nil
 	}
 
+	// Active classes can receive probe configuration updates without re-registering.
+	switch mc.Status.Phase {
+	case v1alpha1.PhaseValidating, v1alpha1.PhaseReady, v1alpha1.PhaseDegraded:
+		if valid, _, _ := validateModelClassHealthProbe(mc.Spec.HealthProbe); !valid {
+			return r.reconcileRegistered(ctx, &mc)
+		}
+	}
+
 	// State machine dispatch
 	switch mc.Status.Phase {
 	case v1alpha1.PhaseRegistered:
@@ -328,7 +336,7 @@ func (r *ModelClassReconciler) reconcileDegraded(ctx context.Context, mc *v1alph
 	}
 
 	// Health probe configured — use stabilisation window for recovery.
-	passed, _, _ := r.probeHealth(ctx, mc)
+	passed, reason, message := r.probeHealth(ctx, mc)
 	mc.Status.LastProbeTime = time.Now().UTC().Format(time.RFC3339)
 
 	if passed {
@@ -371,6 +379,14 @@ func (r *ModelClassReconciler) reconcileDegraded(ctx context.Context, mc *v1alph
 	// Probe still failing — reset successes, stay degraded.
 	mc.Status.ConsecutiveSuccesses = 0
 	mc.Status.ConsecutiveFailures++
+	lc := lifecycle.SetCondition(
+		apiToLifecycleConditions(mc.Status.Conditions),
+		lifecycle.ConditionReady,
+		lifecycle.ConditionFalse,
+		reason,
+		message,
+	)
+	mc.Status.Conditions = lifecycleToAPIConditions(lc)
 	if err := r.updateModelClass(ctx, mc); err != nil {
 		return Result{}, fmt.Errorf("update degraded status: %w", err)
 	}
@@ -685,17 +701,8 @@ func (r *ModelClassReconciler) validateConfig(mc *v1alpha1.ModelClass) (bool, st
 		return false, "ProvisionerUnsupported", fmt.Sprintf("unsupported provisioner %q", mc.Spec.Provisioner)
 	}
 
-	if mc.Spec.HealthProbe != nil {
-		if mc.Spec.HealthProbe.Endpoint == "" {
-			return false, "HealthProbeInvalid", "healthProbe endpoint must be specified"
-		}
-		parsed, err := url.Parse(mc.Spec.HealthProbe.Endpoint)
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			return false, "HealthProbeInvalid", "healthProbe endpoint must be a valid URI"
-		}
-		if rate := mc.Spec.HealthProbe.ErrorRateThreshold; rate < 0 || rate > 100 {
-			return false, "HealthProbeInvalid", "healthProbe errorRateThreshold must be a percentage between 0 and 100"
-		}
+	if valid, reason, message := validateModelClassHealthProbe(mc.Spec.HealthProbe); !valid {
+		return false, reason, message
 	}
 
 	if mc.Spec.LatencyClass != "" {
@@ -712,6 +719,23 @@ func (r *ModelClassReconciler) validateConfig(mc *v1alpha1.ModelClass) (bool, st
 	}
 
 	return true, "ConfigValid", "provisioner and configuration validated"
+}
+
+func validateModelClassHealthProbe(probe *v1alpha1.HealthProbeSpec) (bool, string, string) {
+	if probe == nil {
+		return true, "", ""
+	}
+	if probe.Endpoint == "" {
+		return false, "HealthProbeInvalid", "healthProbe endpoint must be specified"
+	}
+	parsed, err := url.Parse(probe.Endpoint)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false, "HealthProbeInvalid", "healthProbe endpoint must be a valid URI"
+	}
+	if rate := probe.ErrorRateThreshold; rate != nil && (*rate < 0 || *rate > 100) {
+		return false, "HealthProbeInvalid", "healthProbe errorRateThreshold must be a percentage between 0 and 100"
+	}
+	return true, "", ""
 }
 
 func (r *ModelClassReconciler) handleDeletion(ctx context.Context, mc *v1alpha1.ModelClass) (Result, error) {
