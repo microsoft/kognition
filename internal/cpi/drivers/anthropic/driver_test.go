@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -162,6 +163,82 @@ func TestProbe_AuthFailure(t *testing.T) {
 	}
 	if result.Reason != "AuthenticationFailed" {
 		t.Errorf("Reason = %q, want %q", result.Reason, "AuthenticationFailed")
+	}
+}
+
+func TestProbe_ClassifiesHTTPStatus(t *testing.T) {
+	tests := []struct {
+		status        int
+		wantAvailable bool
+		wantReason    string
+	}{
+		{http.StatusOK, true, "Healthy"},
+		{http.StatusBadRequest, true, "Healthy"},
+		{http.StatusUnauthorized, false, "AuthenticationFailed"},
+		{http.StatusForbidden, false, "AuthenticationFailed"},
+		{http.StatusNotFound, false, "EndpointError"},
+		{http.StatusTooManyRequests, false, "RateLimited"},
+		{http.StatusInternalServerError, false, "EndpointError"},
+		{http.StatusBadGateway, false, "EndpointError"},
+		{http.StatusServiceUnavailable, false, "EndpointError"},
+		{529, false, "EndpointError"}, // Anthropic overloaded_error
+	}
+
+	for _, test := range tests {
+		t.Run(strconv.Itoa(test.status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/messages" || r.Method != http.MethodPost {
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+				w.WriteHeader(test.status)
+			}))
+			defer server.Close()
+
+			result, err := New(server.Client()).Probe(context.Background(), &v1alpha1.ModelSpec{
+				ModelID:  "claude-3-sonnet",
+				Endpoint: server.URL,
+			}, nil)
+			if err != nil {
+				t.Fatalf("Probe() error: %v", err)
+			}
+			if result.Available != test.wantAvailable || result.Reason != test.wantReason {
+				t.Fatalf("Probe() = available %t, reason %q; want available %t, reason %q",
+					result.Available, result.Reason, test.wantAvailable, test.wantReason)
+			}
+		})
+	}
+}
+
+func TestProbe_RateLimitedIncludesRetryAfter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	result, err := New(server.Client()).Probe(context.Background(), &v1alpha1.ModelSpec{
+		ModelID:  "claude-3-sonnet",
+		Endpoint: server.URL,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Probe() error: %v", err)
+	}
+	if result.Available || result.Reason != "RateLimited" || !strings.Contains(result.Message, "Retry-After: 30") {
+		t.Fatalf("Probe() = %+v, want unavailable RateLimited with Retry-After hint", result)
+	}
+}
+
+func TestProbe_EndpointUnreachable(t *testing.T) {
+	client := &http.Client{Transport: failingTransport{err: errors.New("connection refused")}}
+	result, err := New(client).Probe(context.Background(), &v1alpha1.ModelSpec{
+		ModelID:  "claude-3-sonnet",
+		Endpoint: "https://anthropic.example",
+	}, nil)
+	if err != nil {
+		t.Fatalf("Probe() error: %v", err)
+	}
+	if result.Available || result.Reason != "EndpointUnreachable" {
+		t.Fatalf("Probe() = %+v, want unavailable EndpointUnreachable", result)
 	}
 }
 

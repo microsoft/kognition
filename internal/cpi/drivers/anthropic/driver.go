@@ -95,23 +95,44 @@ func (d *Driver) Probe(ctx context.Context, model *v1alpha1.ModelSpec, creds *cp
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+	latency := time.Since(start).String()
+	if reason, message := classifyProbeStatus(resp); reason != "" {
 		return &cpi.HealthResult{
 			Available: false,
-			Latency:   time.Since(start).String(),
-			Reason:    "AuthenticationFailed",
-			Message:   fmt.Sprintf("HTTP %d", resp.StatusCode),
+			Latency:   latency,
+			Reason:    reason,
+			Message:   message,
 		}, nil
 	}
 
-	// 200 or 400 (validation error on the mini-request) both mean the endpoint is alive.
 	return &cpi.HealthResult{
 		Available:    true,
-		Latency:      time.Since(start).String(),
+		Latency:      latency,
 		Reason:       "Healthy",
 		Message:      "Anthropic API reachable",
 		Capabilities: []string{"chat"},
 	}, nil
+}
+
+// classifyProbeStatus maps the probe response to an unhealthy reason and message.
+// It returns an empty reason when the endpoint is alive: any 2xx, or 400 (a
+// validation error on the minimal probe request).
+func classifyProbeStatus(resp *http.Response) (reason, message string) {
+	status := resp.StatusCode
+	switch {
+	case status >= 200 && status < 300, status == http.StatusBadRequest:
+		return "", ""
+	case status == http.StatusUnauthorized, status == http.StatusForbidden:
+		return "AuthenticationFailed", fmt.Sprintf("HTTP %d", status)
+	case status == http.StatusTooManyRequests:
+		message = fmt.Sprintf("HTTP %d from Anthropic: rate limited", status)
+		if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+			message += fmt.Sprintf(" (Retry-After: %s)", retryAfter)
+		}
+		return "RateLimited", message
+	default:
+		return "EndpointError", fmt.Sprintf("HTTP %d from Anthropic", status)
+	}
 }
 
 func (d *Driver) Complete(ctx context.Context, req *cpi.CompletionRequest) (*cpi.CompletionResponse, error) {
