@@ -5,7 +5,7 @@ package controller
 
 import (
 	"context"
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -258,6 +258,10 @@ func (r *EvaluationRunReconciler) Reconcile(ctx context.Context, req Request) (R
 		return Result{}, nil
 	}
 	originalStatus := run.Status
+
+	if run.Status.DatasetDigest != "" && len(run.Status.DatasetDigest) != sha256.Size*2 {
+		return r.markRunFailed(ctx, &run, originalStatus, "DatasetDigestUpgradeRequired", "SHA-256 dataset digest required; create a new EvaluationRun after the hashing upgrade")
+	}
 
 	targetAgent, targetReason, targetMessage, err := r.resolveTargetAgent(ctx, &run)
 	if err != nil {
@@ -782,7 +786,7 @@ func evaluateAgentJobOutputWithMetrics(jobStatus v1alpha1.AgentJobStatus, thresh
 	if len(metrics) == 0 {
 		return nil, 0, false
 	}
-	metricIndex := make(map[string]int, len(metrics)+len(thresholds))
+	metricIndex := make(map[string]int, len(metrics))
 	for i, metric := range metrics {
 		metricIndex[metric.Metric] = i
 	}
@@ -1287,7 +1291,7 @@ func evaluationDatasetDigest(spec v1alpha1.EvaluationDatasetSpec) (string, error
 	if err != nil {
 		return "", fmt.Errorf("marshal EvaluationDataset spec: %w", err)
 	}
-	sum := sha1.Sum(data)
+	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
 }
 
@@ -1330,7 +1334,7 @@ func boundedResourceName(name string) string {
 	if len(name) <= 63 {
 		return name
 	}
-	sum := sha1.Sum([]byte(name))
+	sum := sha256.Sum256([]byte(name))
 	suffix := "-" + hex.EncodeToString(sum[:])[:8]
 	return strings.TrimRight(name[:63-len(suffix)], "-") + suffix
 }

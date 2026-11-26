@@ -28,6 +28,31 @@ type eventMemStore struct {
 	events map[string][]store.InstanceEvent
 }
 
+func TestMergeWorkflowStatusPreservesConcurrentConditions(t *testing.T) {
+	ready := v1alpha1.Condition{Type: "Ready", Status: "False"}
+	removed := v1alpha1.Condition{Type: "Removed", Status: "True"}
+	foreign := v1alpha1.Condition{Type: "Foreign", Status: "True"}
+	updated := v1alpha1.Condition{Type: "Ready", Status: "True"}
+	added := v1alpha1.Condition{Type: "Added", Status: "True"}
+	original := v1alpha1.WorkflowStatus{Conditions: []v1alpha1.Condition{ready, removed}}
+	desired := v1alpha1.WorkflowStatus{Conditions: []v1alpha1.Condition{updated, added}}
+	latest := v1alpha1.WorkflowStatus{Conditions: []v1alpha1.Condition{ready, removed, foreign}}
+	mergeWorkflowStatus(&latest, original, desired)
+	if len(latest.Conditions) != 3 {
+		t.Fatalf("merged conditions = %#v, want three conditions", latest.Conditions)
+	}
+	for _, want := range []v1alpha1.Condition{updated, added, foreign} {
+		got := restartLadderCondition(latest.Conditions, want.Type)
+		if got == nil || *got != want {
+			t.Fatalf("condition %q = %#v, want %#v", want.Type, got, want)
+		}
+	}
+	if !slices.Equal(original.Conditions, []v1alpha1.Condition{ready, removed}) ||
+		!slices.Equal(desired.Conditions, []v1alpha1.Condition{updated, added}) {
+		t.Fatal("merge mutated original or desired conditions")
+	}
+}
+
 type failingEventStore struct {
 	*memStore
 	err error

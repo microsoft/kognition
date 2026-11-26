@@ -430,7 +430,7 @@ func conditionsMatch(left, right *v1alpha1.Condition) bool {
 }
 
 func applyConditionChange(conditions []v1alpha1.Condition, conditionType string, desired *v1alpha1.Condition) []v1alpha1.Condition {
-	merged := make([]v1alpha1.Condition, 0, len(conditions)+1)
+	merged := make([]v1alpha1.Condition, 0, len(conditions))
 	for _, condition := range conditions {
 		if condition.Type != conditionType {
 			merged = append(merged, condition)

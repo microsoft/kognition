@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -868,6 +869,97 @@ func TestEvaluationRunReconcilerFailsWhenDatasetChangesAfterStarting(t *testing.
 	}
 	if _, err := store.Get(ctx, agentJobKind, "default", evaluationCaseJobName(run.ObjectMeta.Name, "added")); !errors.Is(err, storepkg.ErrNotFound) {
 		t.Fatalf("added dataset case created AgentJob, get error = %v", err)
+	}
+}
+
+func TestEvaluationDatasetDigestUsesSHA256(t *testing.T) {
+	spec := v1alpha1.EvaluationDatasetSpec{
+		Version: "v1",
+		Cases:   []v1alpha1.EvaluationDatasetCase{{ID: "first", Input: "First prompt"}},
+	}
+	data, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("%x", sha256.Sum256(data))
+	digest, err := evaluationDatasetDigest(spec)
+	if err != nil || digest != want || len(digest) != 64 {
+		t.Fatalf("digest = %q, error = %v, want SHA-256 %q", digest, err, want)
+	}
+	repeated, err := evaluationDatasetDigest(spec)
+	if err != nil || repeated != digest {
+		t.Fatalf("repeated digest = %q, error = %v, want %q", repeated, err, digest)
+	}
+	spec.Cases[0].Input = "Changed prompt"
+	changed, err := evaluationDatasetDigest(spec)
+	if err != nil || changed == digest {
+		t.Fatalf("changed digest = %q, error = %v, want a different SHA-256 digest", changed, err)
+	}
+}
+
+func TestBoundedResourceNameUsesSHA256(t *testing.T) {
+	for _, name := range []string{
+		"short", strings.Repeat("a", 63), strings.Repeat("a", 64),
+		strings.Repeat("a", 53) + "--" + strings.Repeat("b", 20),
+	} {
+		t.Run(fmt.Sprintf("length-%d", len(name)), func(t *testing.T) {
+			got := boundedResourceName(name)
+			if len(name) <= 63 {
+				if got != name {
+					t.Fatalf("bounded name = %q, want unchanged %q", got, name)
+				}
+				return
+			}
+			sum := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
+			want := strings.TrimRight(name[:54], "-") + "-" + sum[:8]
+			if got != want || len(got) > 63 || strings.HasSuffix(got, "-") {
+				t.Fatalf("bounded name = %q, want %q within DNS label bounds", got, want)
+			}
+		})
+	}
+}
+
+func TestEvaluationRunReconcilerRejectsLegacyDatasetDigestBeforeCreatingJobs(t *testing.T) {
+	for _, phase := range []v1alpha1.Phase{v1alpha1.PhasePending, v1alpha1.PhaseRunning, v1alpha1.PhaseReady, v1alpha1.PhaseFailed} {
+		t.Run(string(phase), func(t *testing.T) {
+			ctx := context.Background()
+			memory := newMemStore()
+			run := v1alpha1.EvaluationRun{
+				ObjectMeta: v1alpha1.ObjectMeta{Name: "legacy-g1", Namespace: "default", UID: "legacy-run"},
+				Spec: v1alpha1.EvaluationRunSpec{
+					TargetRef:  v1alpha1.EvaluationTargetRef{Kind: "Agent", Name: "assistant"},
+					DatasetRef: v1alpha1.EvaluationDatasetRef{Name: "dataset"},
+				},
+				Status: v1alpha1.EvaluationRunStatus{Phase: phase, DatasetDigest: strings.Repeat("a", 40)},
+			}
+			storeEvaluationRun(t, memory, run)
+			reconciler := NewEvaluationRunReconciler(memory, zaptest.NewLogger(t))
+			if _, err := reconciler.Reconcile(ctx, Request{Namespace: "default", Name: run.ObjectMeta.Name}); err != nil {
+				t.Fatal(err)
+			}
+			got := getEvaluationRun(t, memory, "default", run.ObjectMeta.Name)
+			if got.Status.DatasetDigest != run.Status.DatasetDigest {
+				t.Fatalf("legacy digest was overwritten: %q", got.Status.DatasetDigest)
+			}
+			if phase == v1alpha1.PhaseReady || phase == v1alpha1.PhaseFailed {
+				if got.Status.Phase != phase || got.Status.Degraded || got.Status.Message != "" {
+					t.Fatalf("terminal historical run was changed: %#v", got.Status)
+				}
+			} else {
+				if got.Status.Phase != v1alpha1.PhaseFailed || !got.Status.Degraded || got.Status.CompletedAt == nil ||
+					!strings.Contains(got.Status.Message, "create a new EvaluationRun") {
+					t.Fatalf("legacy run did not fail closed with rerun guidance: %#v", got.Status)
+				}
+				ready := restartLadderCondition(got.Status.Conditions, string(lifecycle.ConditionReady))
+				if ready == nil || ready.Reason != "DatasetDigestUpgradeRequired" || ready.Status != string(lifecycle.ConditionFalse) {
+					t.Fatalf("legacy run Ready condition = %#v", ready)
+				}
+			}
+			jobs, err := memory.List(ctx, agentJobKind, storepkg.ListOptions{Namespace: "default"})
+			if err != nil || len(jobs) != 0 {
+				t.Fatalf("legacy run created jobs: %d, error = %v", len(jobs), err)
+			}
+		})
 	}
 }
 

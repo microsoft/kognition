@@ -238,16 +238,20 @@ function proxyWriteAllowed(method, pathname, body, options) {
 }
 
 async function startAuthProxy(origin, token, options, onError) {
-  fixedOrigin(origin, "API target");
+  const apiTarget = new URL(fixedOrigin(origin, "API target"));
   if (typeof token !== "string" || token.length < 32 || /[\r\n]/.test(token)) {
     throw new Error("KOGNITION_RECORDING_TOKEN must contain the approved operator token");
   }
-  const transport = origin.startsWith("https:") ? https : http;
+  const transport = apiTarget.protocol === "https:" ? https : http;
   let chatRequests = 0;
   const server = http.createServer(async (request, response) => {
     try {
-      const target = new URL(request.url, origin);
-      if (target.origin !== origin || !target.pathname.startsWith("/apis/kognition.dev/v1alpha1/")) {
+      if (!request.url.startsWith("/") || request.url.startsWith("//") || request.url.includes("\\")) {
+        response.writeHead(403).end("pilot proxy target rejected");
+        return;
+      }
+      const target = new URL(request.url, apiTarget);
+      if (target.origin !== apiTarget.origin || !target.pathname.startsWith("/apis/kognition.dev/v1alpha1/")) {
         response.writeHead(403).end("pilot proxy target rejected");
         return;
       }
@@ -276,7 +280,11 @@ async function startAuthProxy(origin, token, options, onError) {
           return;
         }
       }
-      const upstream = transport.request(target, {
+      const upstream = transport.request({
+        protocol: apiTarget.protocol,
+        hostname: apiTarget.hostname.replace(/^\[|\]$/g, ""),
+        port: apiTarget.port,
+        path: target.pathname + target.search,
         method: request.method,
         headers: {
           authorization: `Bearer ${token}`,

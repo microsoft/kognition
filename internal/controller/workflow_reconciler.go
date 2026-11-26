@@ -447,7 +447,7 @@ func mergeWorkflowStatus(latest *v1alpha1.WorkflowStatus, original, desired v1al
 	if !reflect.DeepEqual(desired.StepStatuses, original.StepStatuses) {
 		latest.StepStatuses = desired.StepStatuses
 	}
-	conditionTypes := make(map[string]struct{}, len(original.Conditions)+len(desired.Conditions))
+	conditionTypes := make(map[string]struct{}, len(original.Conditions))
 	for _, condition := range original.Conditions {
 		conditionTypes[condition.Type] = struct{}{}
 	}
@@ -1271,7 +1271,7 @@ func (r *WorkflowReconciler) reconcileAcyclic(ctx context.Context, wf *v1alpha1.
 
 	// Compute final status.
 	wf.Status.CompletedSteps = sortedKeys(completed)
-	allActive := make([]string, 0, len(active)+len(dispatched))
+	allActive := make([]string, 0, len(active))
 	allActive = append(allActive, active...)
 	allActive = append(allActive, dispatched...)
 	sort.Strings(allActive)
@@ -2202,7 +2202,7 @@ func parseCSVTokens(raw string) []string {
 }
 
 func mergeOwnedFinalizer(latest, desired []string, owned string, removing bool) []string {
-	merged := make([]string, 0, len(latest)+1)
+	merged := make([]string, 0, len(latest))
 	for _, finalizer := range latest {
 		if finalizer != owned {
 			merged = append(merged, finalizer)

@@ -207,6 +207,19 @@ flowchart LR
   AgentJob -->|runs target or judge| Agent
 ```
 
+EvaluationRuns record the SHA-256 digest of the dataset specification as 64
+lowercase hexadecimal characters. A changed dataset fails an in-progress run
+closed before additional target or judge jobs are created.
+
+When upgrading from SHA-1 dataset digests, non-terminal runs with legacy digests
+fail with `DatasetDigestUpgradeRequired`. Create a new EvaluationRun against the
+reviewed dataset; do not overwrite the old run's digest to bypass the check.
+Completed historical runs are left unchanged. Generated names longer than 63
+characters now use a truncated SHA-256 suffix, so long EvaluationRun, target job,
+judge job and Solution promotion run names differ from pre-upgrade names.
+Drain in-flight evaluations before upgrading where possible, and inspect retained
+jobs and promotion runs before rerunning to avoid unintended duplicate model calls.
+
 ## Models, Tools, And Configuration
 
 ```mermaid

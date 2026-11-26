@@ -484,7 +484,7 @@ func (r *ModelClassReconciler) validateCandidate(ctx context.Context, modelClass
 		}
 		credentials = &cpi.Credentials{Type: values["type"], Data: values}
 	}
-	parameters := make(map[string]string, len(candidate.Spec.Parameters)+2)
+	parameters := make(map[string]string, len(candidate.Spec.Parameters))
 	for name, value := range candidate.Spec.Parameters {
 		parameters[name] = value
 	}
