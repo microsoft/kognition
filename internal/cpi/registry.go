@@ -6,6 +6,7 @@ package cpi
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // Registry holds registered CPI drivers keyed by provisioner name.
@@ -16,7 +17,18 @@ type Registry struct {
 	// observed holds recorder-wrapped views of drivers; it is nil until Observe
 	// is called with a recorder.
 	observed map[string]Driver
-	recorder CallRecorder
+	// recorder is read by every wrapper on each call, so replacing or clearing it
+	// also applies to drivers that were resolved earlier.
+	recorder atomic.Pointer[recorderBox]
+}
+
+type recorderBox struct{ CallRecorder }
+
+func (r *Registry) currentRecorder() CallRecorder {
+	if box := r.recorder.Load(); box != nil {
+		return box.CallRecorder
+	}
+	return nil
 }
 
 // NewRegistry creates an empty driver registry.
@@ -28,27 +40,30 @@ func NewRegistry() *Registry {
 
 // Observe reports the outcome of every Complete and Embed call made through
 // drivers returned by Get to recorder, including drivers registered later.
-// Calling it again replaces the recorder; a nil recorder stops observation.
+// Calling it again replaces the recorder and a nil recorder stops observation,
+// including for drivers that were already returned by Get.
 func (r *Registry) Observe(recorder CallRecorder) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.recorder = recorder
-	r.observed = nil
 	if recorder == nil {
+		r.recorder.Store(nil)
+		r.observed = nil
+		return
+	}
+	r.recorder.Store(&recorderBox{recorder})
+	if r.observed != nil {
 		return
 	}
 	r.observed = make(map[string]Driver, len(r.drivers))
 	for name, driver := range r.drivers {
-		r.observed[name] = Observe(driver, recorder)
+		r.observed[name] = observeWith(driver, r.currentRecorder)
 	}
 }
 
 // Observed reports whether a recorder is currently observing the registry's drivers.
 func (r *Registry) Observed() bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.observed != nil
+	return r.currentRecorder() != nil
 }
 
 // Register adds a driver to the registry. Returns an error if a driver
@@ -63,7 +78,7 @@ func (r *Registry) Register(d Driver) error {
 	}
 	r.drivers[name] = d
 	if r.observed != nil {
-		r.observed[name] = Observe(d, r.recorder)
+		r.observed[name] = observeWith(d, r.currentRecorder)
 	}
 	return nil
 }

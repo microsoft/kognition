@@ -62,6 +62,11 @@ func ClassifyCallError(err error) (reason string, providerFault bool) {
 		reason = NormalizeReason(providerErr.Reason)
 		return reason, reason != ReasonInvalidRequest && reason != ReasonOther
 	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Op == "parse" {
+		// A malformed endpoint is a local configuration error; no request was sent.
+		return ReasonOther, false
+	}
 	var netErr net.Error
 	switch {
 	case errors.Is(err, context.Canceled):
@@ -100,6 +105,12 @@ func Observe(driver Driver, recorder CallRecorder) Driver {
 	if recorder == nil {
 		return driver
 	}
+	return observeWith(driver, func() CallRecorder { return recorder })
+}
+
+// observeWith wraps driver with a recorder looked up on every call, so the
+// recorder can be replaced or cleared after the wrapper has been handed out.
+func observeWith(driver Driver, recorder func() CallRecorder) Driver {
 	base := &observedDriver{Driver: driver, recorder: recorder}
 	contracts, hasContracts := driver.(InvocationContractProvider)
 	counter, hasCounter := driver.(ExactTokenCounter)
@@ -117,7 +128,7 @@ func Observe(driver Driver, recorder CallRecorder) Driver {
 
 type observedDriver struct {
 	Driver
-	recorder CallRecorder
+	recorder func() CallRecorder
 }
 
 type observedContractDriver struct {
@@ -159,9 +170,13 @@ func (d *observedDriver) Embed(ctx context.Context, req *EmbedRequest) (*EmbedRe
 }
 
 func (d *observedDriver) record(operation, model string, start time.Time, err error) {
+	recorder := d.recorder()
+	if recorder == nil {
+		return
+	}
 	outcome := CallOutcome{Provider: d.Name(), Operation: operation, Model: model, Duration: time.Since(start)}
 	if err != nil {
 		outcome.Reason, outcome.ProviderFault = ClassifyCallError(err)
 	}
-	d.recorder.RecordCall(outcome)
+	recorder.RecordCall(outcome)
 }

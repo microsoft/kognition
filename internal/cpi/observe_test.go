@@ -105,6 +105,8 @@ func TestClassifyCallError(t *testing.T) {
 		{"client timeout", &url.Error{Op: "Post", URL: "http://x", Err: timeoutError{}}, ReasonTimeout, true},
 		{"connection refused", &url.Error{Op: "Post", URL: "http://x", Err: errors.New("connection refused")}, ReasonUnreachable, true},
 		{"network error", &net.OpError{Op: "dial", Err: errors.New("no route")}, ReasonUnreachable, true},
+		{"malformed endpoint is a local error", func() error { _, err := url.Parse("https://example.com/%zz"); return err }(), ReasonOther, false},
+		{"wrapped malformed endpoint is a local error", fmt.Errorf("build request: %w", &url.Error{Op: "parse", URL: "https://example.com/%zz", Err: errors.New("invalid URL escape")}), ReasonOther, false},
 		{"local or decode error", errors.New("anthropic: decode response: bad json"), ReasonOther, false},
 	}
 	for _, test := range tests {
@@ -326,4 +328,59 @@ func TestRegistryObserveReplacesAndClearsTheRecorder(t *testing.T) {
 	if got := mustGet(t, registry, "added-after-clear"); got.(*fakeDriver).name != "added-after-clear" {
 		t.Error("a driver registered after Observe(nil) must not be wrapped")
 	}
+}
+
+func TestRegistryObserveAppliesToPreviouslyResolvedDrivers(t *testing.T) {
+	registry := NewRegistry()
+	registry.MustRegister(newFakeDriver("fake"))
+	first, second := &recordingRecorder{}, &recordingRecorder{}
+	registry.Observe(first)
+	held := mustGet(t, registry, "fake")
+	call := func() {
+		t.Helper()
+		if _, err := held.Complete(context.Background(), &CompletionRequest{}); err != nil {
+			t.Fatalf("Complete() error: %v", err)
+		}
+	}
+
+	call()
+	registry.Observe(second)
+	call()
+	registry.Observe(nil)
+	call()
+	if len(first.all()) != 1 || len(second.all()) != 1 {
+		t.Fatalf("recorded (first %d, second %d), want (1, 1): a held driver must follow replacement and clearing", len(first.all()), len(second.all()))
+	}
+
+	registry.Observe(second)
+	call()
+	if len(second.all()) != 2 {
+		t.Errorf("second recorded %d outcomes, want 2 after observation resumed", len(second.all()))
+	}
+}
+
+func TestRegistryObserveIsSafeForConcurrentUse(t *testing.T) {
+	registry := NewRegistry()
+	registry.MustRegister(newFakeDriver("fake"))
+	registry.Observe(&recordingRecorder{})
+	held := mustGet(t, registry, "fake")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_, _ = held.Complete(context.Background(), &CompletionRequest{})
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				registry.Observe(&recordingRecorder{})
+				registry.Observe(nil)
+			}
+		}()
+	}
+	wg.Wait()
 }
