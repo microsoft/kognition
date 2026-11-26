@@ -6,7 +6,6 @@ package cpi
 import (
 	"os"
 	"testing"
-	"time"
 
 	v1alpha1 "github.com/kognition-ai/kognition/api/v1alpha1"
 	protocol "github.com/kognition-ai/kognition/proto/gen/kognition/v1alpha1"
@@ -57,7 +56,7 @@ func TestKnowledgeProviderDiscovery(t *testing.T) {
 	if err := host.discover(); err != nil {
 		t.Fatal(err)
 	}
-	waitForProviderReady(t, host, socketPath, 5*time.Second)
+	waitForProviderReady(t, host, socketPath, providerHostWait)
 	for _, snapshot := range [][]v1alpha1.ProviderEntry{host.GetProviders(), host.GetProvidersByDimension("knowledge")} {
 		if len(snapshot) != 1 || snapshot[0].Knowledge == nil {
 			t.Fatalf("missing discovered metadata: %#v", snapshot)
