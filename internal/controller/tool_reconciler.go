@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -563,10 +564,14 @@ func (r *ToolReconciler) applyHealthProbe(tool *v1alpha1.Tool, probePass bool, p
 	successes := getAnnotationInt32(tool.ObjectMeta.Annotations, annotationProbeSuccesses)
 
 	if probePass {
-		successes++
+		if successes < math.MaxInt32 {
+			successes++
+		}
 		failures = 0
 	} else {
-		failures++
+		if failures < math.MaxInt32 {
+			failures++
+		}
 		successes = 0
 	}
 
@@ -662,7 +667,7 @@ func getAnnotationInt32(annotations map[string]string, key string) int32 {
 	if !ok {
 		return 0
 	}
-	n, err := strconv.Atoi(v)
+	n, err := strconv.ParseInt(v, 10, 32)
 	if err != nil {
 		return 0
 	}

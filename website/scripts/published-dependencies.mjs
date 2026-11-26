@@ -251,8 +251,9 @@ function astroFiles(directory) {
 function packageScriptBodies(directory) {
   const bodies = new Set();
   for (const file of astroFiles(directory)) {
-    for (const match of readFileSync(file, 'utf8').matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
-      bodies.add(scriptBody(match[1]));
+    const $ = load(readFileSync(file, 'utf8'));
+    for (const script of $('script').toArray()) {
+      bodies.add(scriptBody($(script).text()));
     }
   }
   return bodies;

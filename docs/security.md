@@ -44,6 +44,23 @@ retain namespace, principal and Tool identifiers while returning the original
 error to the caller. Retries, quorum rules, leadership decisions and readiness
 updates retain their existing behavior.
 
+Resource-update, finalizer-deletion update and MemoryRecord right-to-be-forgotten
+failure logs retain kind, namespace, resource name and request UID when present,
+but omit raw storage and cascade errors. Their existing HTTP error responses and
+conflict handling are unchanged.
+
+### Endpoint and probe-state handling
+
+The Python OpenAI-compatible provider adds `api-version` only when the parsed
+endpoint hostname is `azure.com` or a subdomain of it. Azure-like text in URL
+paths, queries, fragments or credentials does not classify a host as Azure.
+This classification is not an outbound-access allowlist.
+
+Tool health-probe counter annotations are parsed with signed 32-bit bounds.
+Missing, malformed or out-of-range annotations retain the existing zero fallback;
+consecutive probe counters saturate at the maximum value instead of wrapping,
+so failure and recovery thresholds remain effective.
+
 ### Guarded Kubernetes Installation
 
 For a new release, the [fresh installer](getting-started/kubernetes.md) verifies
