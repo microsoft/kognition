@@ -83,29 +83,22 @@ func (d *Driver) Probe(ctx context.Context, model *v1alpha1.ModelSpec, creds *cp
 		}, nil
 	}
 	defer func() { _ = resp.Body.Close() }()
+	errorBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxProbeBodyBytes))
 	_, _ = io.Copy(io.Discard, resp.Body)
 
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+	latency := time.Since(start).String()
+	if reason, message := classifyProbeResponse(resp.StatusCode, resp.Header, errorBody); reason != "" {
 		return &cpi.HealthResult{
 			Available: false,
-			Latency:   time.Since(start).String(),
-			Reason:    "AuthenticationFailed",
-			Message:   fmt.Sprintf("HTTP %d from Bedrock", resp.StatusCode),
-		}, nil
-	}
-
-	if resp.StatusCode >= 400 && resp.StatusCode != http.StatusBadRequest {
-		return &cpi.HealthResult{
-			Available: false,
-			Latency:   time.Since(start).String(),
-			Reason:    "EndpointError",
-			Message:   fmt.Sprintf("HTTP %d from Bedrock", resp.StatusCode),
+			Latency:   latency,
+			Reason:    reason,
+			Message:   message,
 		}, nil
 	}
 
 	return &cpi.HealthResult{
 		Available:    true,
-		Latency:      time.Since(start).String(),
+		Latency:      latency,
 		Reason:       "Healthy",
 		Message:      "Bedrock endpoint reachable",
 		Capabilities: []string{"chat"},
