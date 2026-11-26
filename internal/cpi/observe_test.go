@@ -105,7 +105,7 @@ func TestClassifyCallError(t *testing.T) {
 		{"client timeout", &url.Error{Op: "Post", URL: "http://x", Err: timeoutError{}}, ReasonTimeout, true},
 		{"connection refused", &url.Error{Op: "Post", URL: "http://x", Err: errors.New("connection refused")}, ReasonUnreachable, true},
 		{"network error", &net.OpError{Op: "dial", Err: errors.New("no route")}, ReasonUnreachable, true},
-		{"malformed endpoint is a local error", func() error { _, err := url.Parse("https://example.com/%zz"); return err }(), ReasonOther, false},
+		{"malformed endpoint is a local error", parseURLError("https://example.com/%zz"), ReasonOther, false},
 		{"wrapped malformed endpoint is a local error", fmt.Errorf("build request: %w", &url.Error{Op: "parse", URL: "https://example.com/%zz", Err: errors.New("invalid URL escape")}), ReasonOther, false},
 		{"local or decode error", errors.New("anthropic: decode response: bad json"), ReasonOther, false},
 	}
@@ -285,6 +285,12 @@ func TestRegistryObserveWrapsExistingAndLaterDrivers(t *testing.T) {
 	if names := registry.List(); len(names) != 2 {
 		t.Errorf("List() = %v, want the two registered names", names)
 	}
+}
+
+// parseURLError takes the URL as a parameter so staticcheck SA1007 does not flag the deliberately invalid input.
+func parseURLError(raw string) error {
+	_, err := url.Parse(raw)
+	return err
 }
 
 func mustGet(t *testing.T, registry *Registry, provisioner string) Driver {
