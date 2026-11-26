@@ -99,6 +99,76 @@ func TestModelReconcilerAdapter_ConfigureCallHealthDegradesModelsFromRealCalls(t
 	}
 }
 
+func TestModelClassReconcilerAdapter_ConfigureCallHealthDegradesClassesFromRealCalls(t *testing.T) {
+	threshold := int32(50)
+	registry := cpi.NewRegistry()
+	registry.MustRegister(healthyOpenAIDriver{})
+	class := api.ModelClass{
+		TypeMeta:   api.TypeMeta{APIVersion: api.APIVersion, Kind: "ModelClass"},
+		ObjectMeta: api.ObjectMeta{Name: "fast", ResourceVersion: 1, Finalizers: []string{"kognition.dev/model-class-protection"}},
+		Spec: api.ModelClassSpec{
+			Provisioner: "openai-compatible",
+			HealthProbe: &api.HealthProbeSpec{Endpoint: "https://gateway.example/health", Type: "error-rate-threshold", ErrorRateThreshold: &threshold, FailureThreshold: 1},
+		},
+		Status: api.ModelClassStatus{Phase: api.PhaseReady, Provisioned: true, Health: "Healthy"},
+	}
+	model := api.Model{
+		TypeMeta:   api.TypeMeta{APIVersion: api.APIVersion, Kind: "Model"},
+		ObjectMeta: api.ObjectMeta{Namespace: "default", Name: "gpt"},
+		Spec:       api.ModelSpec{ClassName: "fast", ModelID: "gpt-4o", Endpoint: "https://gateway.example/v1"},
+	}
+	classData, _ := json.Marshal(class)
+	modelData, _ := json.Marshal(model)
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: "fast"}}
+	newStore := func() *classListingStore {
+		s := &classListingStore{fakeStore: newFakeStore(), models: [][]byte{modelData}}
+		s.getData["ModelClass//fast"] = classData
+		return s
+	}
+	storedClass := func(s *classListingStore) api.ModelClass {
+		var stored api.ModelClass
+		if err := json.Unmarshal(s.getData["ModelClass//fast"], &stored); err != nil {
+			t.Fatal(err)
+		}
+		return stored
+	}
+	evidence := staticCallHealth{records: []store.ModelCallHealth{{
+		Target: modelhealth.TargetKey("openai-compatible", model.Spec.Endpoint, model.Spec.ModelID),
+		Calls:  10, Faults: 8, ConsecutiveFaults: 2, LastFaultReason: cpi.ReasonTimeout, LastFaultAt: time.Now(),
+	}}}
+
+	without := newStore()
+	if _, err := NewModelClassReconcilerAdapter(without, registry, testLogger(t)).Reconcile(context.Background(), request); err != nil {
+		t.Fatalf("Reconcile() error: %v", err)
+	}
+	if got := storedClass(without).Status.Phase; got != api.PhaseReady {
+		t.Fatalf("phase = %s, want a class without passive health to stay Ready", got)
+	}
+
+	with := newStore()
+	adapter := NewModelClassReconcilerAdapter(with, registry, testLogger(t))
+	adapter.ConfigureCallHealth(evidence)
+	if _, err := adapter.Reconcile(context.Background(), request); err != nil {
+		t.Fatalf("Reconcile() error: %v", err)
+	}
+	if got := storedClass(with).Status.Phase; got != api.PhaseDegraded {
+		t.Fatalf("phase = %s, want the class degraded by an 80%% error rate", got)
+	}
+}
+
+// classListingStore lists the Models of the test, which fakeStore does not.
+type classListingStore struct {
+	*fakeStore
+	models [][]byte
+}
+
+func (s *classListingStore) List(_ context.Context, kind string, _ store.ListOptions) ([][]byte, error) {
+	if kind == "Model" {
+		return s.models, nil
+	}
+	return nil, nil
+}
+
 func TestModelReconcilerAdapter_EnqueueQueuesModelsWithoutBlocking(t *testing.T) {
 	adapter := NewModelReconcilerAdapter(newFakeStore(), cpi.NewRegistry(), testLogger(t))
 

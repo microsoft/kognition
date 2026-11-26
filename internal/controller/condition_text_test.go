@@ -259,8 +259,16 @@ func TestModelClassReconciler_SanitizesRetainedConditionOfDegradedClass(t *testi
 			if strings.ContainsAny(ready.Message, "\x1b\u202E") {
 				t.Errorf("retained Ready message still contains control characters: %q", ready.Message)
 			}
-			if tt.threshold > 1 && (ready.Status != "False" || !ready.LastTransitionTime.Equal(transition) || ready.Reason != "Down") {
+			if tt.threshold > 1 && (ready.Status != "False" || !ready.LastTransitionTime.Equal(transition)) {
 				t.Errorf("retained condition changed beyond text sanitization: %+v", *ready)
+			}
+			// A still-failing probe reports why the class stays degraded; a partial recovery keeps the old reason.
+			wantReason := "Down"
+			if !tt.available {
+				wantReason = "ProbeFailed"
+			}
+			if tt.threshold > 1 && ready.Reason != wantReason {
+				t.Errorf("retained Ready reason = %q, want %q", ready.Reason, wantReason)
 			}
 		})
 	}

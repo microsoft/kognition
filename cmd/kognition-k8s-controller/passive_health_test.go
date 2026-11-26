@@ -85,6 +85,7 @@ func TestPassiveModelHealthRecordsOutcomesAndRegistersItsRunnables(t *testing.T)
 	reconcilers := []managerReconciler{
 		stubManagerReconciler{calls: &atomic.Int32{}},
 		k8sctrl.NewModelReconcilerAdapter(nil, cpi.NewRegistry(), zap.NewNop()),
+		k8sctrl.NewModelClassReconcilerAdapter(nil, cpi.NewRegistry(), zap.NewNop()),
 	}
 	if err := passive.register(manager, nil, reconcilers, zap.NewNop()); err != nil {
 		t.Fatalf("register() error: %v", err)
@@ -106,15 +107,18 @@ func TestPassiveModelHealthRecordsOutcomesAndRegistersItsRunnables(t *testing.T)
 func TestPassiveModelHealthRegistrationFailures(t *testing.T) {
 	passive := newPassiveModelHealth(memoryCallHealth{})
 	withModel := []managerReconciler{k8sctrl.NewModelReconcilerAdapter(nil, cpi.NewRegistry(), zap.NewNop())}
+	withBoth := append([]managerReconciler{k8sctrl.NewModelClassReconcilerAdapter(nil, cpi.NewRegistry(), zap.NewNop())}, withModel...)
 
 	if err := passive.register(&startupManager{}, nil, []managerReconciler{stubManagerReconciler{calls: &atomic.Int32{}}}, zap.NewNop()); err == nil || !strings.Contains(err.Error(), "Model reconciler") {
 		t.Fatalf("a missing Model reconciler error = %v", err)
 	}
-
-	if err := passive.register(&failingAddManager{failOn: 1}, nil, withModel, zap.NewNop()); err == nil || !strings.Contains(err.Error(), "reporter") {
+	if err := passive.register(&startupManager{}, nil, withModel, zap.NewNop()); err == nil || !strings.Contains(err.Error(), "ModelClass reconciler") {
+		t.Fatalf("a missing ModelClass reconciler error = %v", err)
+	}
+	if err := passive.register(&failingAddManager{failOn: 1}, nil, withBoth, zap.NewNop()); err == nil || !strings.Contains(err.Error(), "reporter") {
 		t.Fatalf("a failing reporter registration error = %v", err)
 	}
-	if err := passive.register(&failingAddManager{failOn: 2}, nil, withModel, zap.NewNop()); err == nil || !strings.Contains(err.Error(), "watcher") {
+	if err := passive.register(&failingAddManager{failOn: 2}, nil, withBoth, zap.NewNop()); err == nil || !strings.Contains(err.Error(), "watcher") {
 		t.Fatalf("a failing watcher registration error = %v", err)
 	}
 }
@@ -130,7 +134,10 @@ func TestPassiveModelHealthRegistersLeaderOnlyConfigMapCollector(t *testing.T) {
 	}
 	passive := newPassiveModelHealth(sink)
 	manager := &startupManager{}
-	reconcilers := []managerReconciler{k8sctrl.NewModelReconcilerAdapter(nil, cpi.NewRegistry(), zap.NewNop())}
+	reconcilers := []managerReconciler{
+		k8sctrl.NewModelReconcilerAdapter(nil, cpi.NewRegistry(), zap.NewNop()),
+		k8sctrl.NewModelClassReconcilerAdapter(nil, cpi.NewRegistry(), zap.NewNop()),
+	}
 	if err := passive.register(manager, nil, reconcilers, zap.NewNop()); err != nil {
 		t.Fatal(err)
 	}

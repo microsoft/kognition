@@ -59,7 +59,7 @@ func ModelClassToK8s(in *api.ModelClass) *k8s.ModelClass {
 			IntervalSeconds:    in.Spec.HealthProbe.IntervalSeconds,
 			TimeoutSeconds:     in.Spec.HealthProbe.TimeoutSeconds,
 			LatencyThresholdMs: in.Spec.HealthProbe.LatencyThresholdMs,
-			ErrorRateThreshold: in.Spec.HealthProbe.ErrorRateThreshold,
+			ErrorRateThreshold: clonePointer(in.Spec.HealthProbe.ErrorRateThreshold),
 			FailureThreshold:   in.Spec.HealthProbe.FailureThreshold,
 			SuccessThreshold:   in.Spec.HealthProbe.SuccessThreshold,
 		}
@@ -112,7 +112,7 @@ func ModelClassFromK8s(in *k8s.ModelClass) *api.ModelClass {
 			IntervalSeconds:    in.Spec.HealthProbe.IntervalSeconds,
 			TimeoutSeconds:     in.Spec.HealthProbe.TimeoutSeconds,
 			LatencyThresholdMs: in.Spec.HealthProbe.LatencyThresholdMs,
-			ErrorRateThreshold: in.Spec.HealthProbe.ErrorRateThreshold,
+			ErrorRateThreshold: clonePointer(in.Spec.HealthProbe.ErrorRateThreshold),
 			FailureThreshold:   in.Spec.HealthProbe.FailureThreshold,
 			SuccessThreshold:   in.Spec.HealthProbe.SuccessThreshold,
 		}
