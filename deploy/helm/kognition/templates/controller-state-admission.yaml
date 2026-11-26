@@ -26,6 +26,7 @@
 {{- end }}
 {{- $gatewayUsers := list }}{{- range $writer := $writers }}{{- $gatewayUsers = append $gatewayUsers $writer.username }}{{- end }}
 {{- $modelGatewayUser := "" }}{{- range $writer := $writers }}{{- if eq $writer.component "model-gateway" }}{{- $modelGatewayUser = $writer.username }}{{- end }}{{- end }}
+{{- $healthWriters := list }}{{- range $writer := $writers }}{{- if or (eq $writer.component "model-gateway") (eq $writer.component "knowledge-gateway") }}{{- $healthWriters = append $healthWriters $writer }}{{- end }}{{- end }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -110,15 +111,18 @@ spec:
         'records.json' in object.binaryData &&
         size(object.binaryData['records.json']) > 0 &&
         size(object.binaryData['records.json']) <= 1228800
-{{- if $modelGatewayUser }}
-    # The Model Gateway may create and update only its own model call health
-    # objects; the dedicated model-call-health policy enforces their exact shape.
+{{- if $healthWriters }}
+    # The dedicated policy binds health publications to each gateway identity.
     - name: modelCallHealth
       expression: >-
         object != null &&
         request.operation in ['CREATE', 'UPDATE'] &&
         request.namespace == {{ .Release.Namespace | toJson }} &&
-        object.metadata.name.startsWith('kognition-mch-model-gateway-')
+        (false
+{{- range $writer := $healthWriters }}
+         || object.metadata.name.startsWith({{ printf "kognition-mch-%s-" $writer.component | toJson }})
+{{- end }}
+        )
 {{- end }}
   validations:
     - expression: >-
@@ -236,7 +240,7 @@ spec:
             has(object.data) && size(object.data) == 1 && 'fingerprint' in object.data &&
             object.data['fingerprint'].matches('^[0-9a-f]{64}$'))
 {{- end }}
-{{- if eq $writer.component "model-gateway" }}
+{{- if or (eq $writer.component "model-gateway") (eq $writer.component "knowledge-gateway") }}
         || variables.modelCallHealth
 {{- end }}
       message: Gateway ConfigMap writes require the exact writer's enrolled ledgers or append-only audit/cost records; legacy, foreign and Helm state cannot be adopted or deleted.
@@ -324,20 +328,20 @@ spec:
   validations:
     - expression: >-
         request.userInfo.username == {{ $controllerUser | toJson }}
-{{- if $modelGatewayUser }} ||
-        (request.userInfo.username == {{ $modelGatewayUser | toJson }} && request.operation != 'DELETE')
+{{- range $writer := $healthWriters }} ||
+        (request.userInfo.username == {{ $writer.username | toJson }} && request.operation != 'DELETE')
 {{- end }}
-      message: Model call health ConfigMaps are written by the controller{{ if $modelGatewayUser }} and the Model Gateway{{ end }}; only the controller may delete them.
+      message: Model call health ConfigMaps require an authorized controller or enabled model-calling gateway; only the controller may delete them.
       reason: Forbidden
     - expression: >-
         request.operation == 'DELETE' ||
         [object, oldObject].all(candidate, candidate == null || (
           candidate.metadata.namespace == request.namespace &&
-          candidate.metadata.name.matches('^kognition-mch-(controller|model-gateway)-[0-9a-f]{32}$') &&
+          candidate.metadata.name.matches('^kognition-mch-(controller|model-gateway|knowledge-gateway)-[0-9a-f]{32}$') &&
           (!has(candidate.immutable) || !candidate.immutable) &&
           has(candidate.metadata.labels) && size(candidate.metadata.labels) == 1 &&
           'kognition.dev/model-call-health' in candidate.metadata.labels &&
-          candidate.metadata.labels['kognition.dev/model-call-health'] in ['controller', 'model-gateway'] &&
+          candidate.metadata.labels['kognition.dev/model-call-health'] in ['controller', 'model-gateway', 'knowledge-gateway'] &&
           candidate.metadata.name.startsWith('kognition-mch-' + candidate.metadata.labels['kognition.dev/model-call-health'] + '-') &&
           (!has(candidate.metadata.annotations) || size(candidate.metadata.annotations) == 0) &&
           (!has(candidate.metadata.ownerReferences) || size(candidate.metadata.ownerReferences) == 0) &&
@@ -347,13 +351,13 @@ spec:
           size(candidate.data['health.json']) > 0 && size(candidate.data['health.json']) <= 921600))
       message: Model call health ConfigMaps must keep one component label, one health.json entry and no annotations, owner references or finalizers.
       reason: Forbidden
-{{- if $modelGatewayUser }}
+{{- range $writer := $healthWriters }}
     - expression: >-
         request.operation == 'DELETE' ||
-        request.userInfo.username != {{ $modelGatewayUser | toJson }} ||
-        (object.metadata.labels['kognition.dev/model-call-health'] == 'model-gateway' &&
-         object.metadata.name.startsWith('kognition-mch-model-gateway-'))
-      message: The Model Gateway may write only model call health ConfigMaps named and labeled for itself.
+        request.userInfo.username != {{ $writer.username | toJson }} ||
+        (object.metadata.labels['kognition.dev/model-call-health'] == {{ $writer.component | toJson }} &&
+         object.metadata.name.startsWith({{ printf "kognition-mch-%s-" $writer.component | toJson }}))
+      message: Each gateway may write only model call health ConfigMaps named and labeled for itself.
       reason: Forbidden
 {{- end }}
 ---

@@ -31,10 +31,12 @@ import (
 
 	k8s "github.com/kognition-ai/kognition/api/k8s/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/controller"
+	"github.com/kognition-ai/kognition/internal/cpi"
 	"github.com/kognition-ai/kognition/internal/gatewaybackend"
 	"github.com/kognition-ai/kognition/internal/k8s/knowledge"
 	"github.com/kognition-ai/kognition/internal/knowledgegateway"
 	"github.com/kognition-ai/kognition/internal/modelgateway"
+	"github.com/kognition-ai/kognition/internal/modelhealth"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/opa"
 	"github.com/kognition-ai/kognition/internal/runtimeauth"
@@ -178,6 +180,10 @@ func run(logger *zap.Logger) error {
 		return fmt.Errorf("configure Knowledge Gateway state backend: %w", err)
 	}
 	defer backend.Close()
+	callRecorder, healthReporter, err := knowledgeCallHealth(backend, controlNamespace, observability.NewCPICallMetrics(ctrlmetrics.Registry), logger)
+	if err != nil {
+		return err
+	}
 	policies := controller.NewInvocationPolicyEngine(
 		controller.NewToolGrantEngine(backend.Store, logger.Named("embedding-grants")),
 		controller.NewAgentPolicyReconciler(backend.Store, opa.NewEngine(), logger.Named("embedding-policies")),
@@ -204,7 +210,7 @@ func run(logger *zap.Logger) error {
 	audit := observability.NewCognitiveAuditLog(observability.NewTrustDecisionMetrics(ctrlmetrics.Registry).Wrap(backend.Audit))
 	embedder, err := modelgateway.NewEmbeddingExecutor(backend.Store, policies, &http.Client{}, logger,
 		modelgateway.WithQuotaChecker(quota), modelgateway.WithAuditLog(audit), modelgateway.WithObservability(tracePipeline.Tracer, tracePipeline.Collector),
-		modelgateway.WithCallRecorder(observability.NewCPICallMetrics(ctrlmetrics.Registry)))
+		modelgateway.WithCallRecorder(callRecorder))
 	if err != nil {
 		return fmt.Errorf("configure governed query embedding: %w", err)
 	}
@@ -219,16 +225,40 @@ func run(logger *zap.Logger) error {
 	httpServer := &http.Server{Addr: config.listenAddress, Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 35 * time.Second, WriteTimeout: 35 * time.Second}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	return serveKnowledgeGateway(ctx, httpServer, healthReporter, func() error {
+		logger.Info("Knowledge Gateway starting", zap.String("address", httpServer.Addr), zap.String("provider", config.providerName))
+		return httpServer.ListenAndServeTLS(config.runtimeCertificateFile, config.runtimePrivateKeyFile)
+	})
+}
+
+func knowledgeCallHealth(backend *gatewaybackend.Backend, namespace string, recorder cpi.CallRecorder, logger *zap.Logger) (cpi.CallRecorder, *modelhealth.Reporter, error) {
+	sink, err := backend.ModelCallHealthStore(namespace, "knowledge-gateway", logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("configure Knowledge Gateway passive health: %w", err)
+	}
+	if sink == nil {
+		return recorder, nil, nil
+	}
+	tracker := modelhealth.NewTracker()
+	return cpi.Recorders(recorder, tracker), modelhealth.NewReporter(tracker, sink, modelhealth.NewReporterID(), logger), nil
+}
+
+func serveKnowledgeGateway(ctx context.Context, httpServer *http.Server, reporter *modelhealth.Reporter, serve func() error) error {
+	if reporter != nil {
+		defer reporter.RunInBackground(ctx)()
+	}
 	serverErrors := make(chan error, 1)
 	go func() {
-		logger.Info("Knowledge Gateway starting", zap.String("address", httpServer.Addr), zap.String("provider", config.providerName))
-		serverErrors <- httpServer.ListenAndServeTLS(config.runtimeCertificateFile, config.runtimePrivateKeyFile)
+		serverErrors <- serve()
 	}()
 	select {
 	case <-ctx.Done():
 		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancelShutdown()
-		return httpServer.Shutdown(shutdownCtx)
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown Knowledge Gateway: %w", err)
+		}
+		return nil
 	case err := <-serverErrors:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil

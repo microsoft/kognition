@@ -104,6 +104,8 @@ func TestAdmissionAllowsStoreWrites(t *testing.T) {
 		{"controller", "controller", []Option{WithGarbageCollection()}},
 		{"controller", "model-gateway", nil},
 		{"model-gateway", "model-gateway", nil},
+		{"controller", "knowledge-gateway", nil},
+		{"knowledge-gateway", "knowledge-gateway", nil},
 	} {
 		t.Run(tc.serviceAccount+" writes "+tc.component, func(t *testing.T) {
 			c := admissionClient(t, tc.serviceAccount)
@@ -155,6 +157,10 @@ func TestAdmissionDeniesForeignStoreWrites(t *testing.T) {
 	}{
 		{"model gateway writing the controller's objects", "model-gateway", "controller"},
 		{"tool gateway writing model gateway objects", "tool-gateway", "model-gateway"},
+		{"knowledge gateway writing controller objects", "knowledge-gateway", "controller"},
+		{"knowledge gateway writing model gateway objects", "knowledge-gateway", "model-gateway"},
+		{"model gateway writing knowledge gateway objects", "model-gateway", "knowledge-gateway"},
+		{"tool gateway writing knowledge gateway objects", "tool-gateway", "knowledge-gateway"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := NewConfigMapStore(admissionClient(t, tc.serviceAccount), namespace, tc.component)
