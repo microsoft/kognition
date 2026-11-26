@@ -1,0 +1,64 @@
+<!-- Copyright (c) Microsoft Corporation.
+     Licensed under the MIT License. -->
+
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title description">
+  <title id="title">Kognition: Kubernetes for cognition</title>
+  <desc id="description">A dark social preview with the Kognition reconciliation-loop logo and the description: A declarative control plane for AI agents and workflows.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1280" y2="640" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#101C2D"/>
+      <stop offset="0.55" stop-color="#0A1320"/>
+      <stop offset="1" stop-color="#080E18"/>
+    </linearGradient>
+    <radialGradient id="halo">
+      <stop stop-color="#246899" stop-opacity="0.23"/>
+      <stop offset="1" stop-color="#246899" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="accent" x1="88" y1="0" x2="1192" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#71E5FF"/>
+      <stop offset="0.4" stop-color="#3B82F6"/>
+      <stop offset="0.72" stop-color="#55D6A9"/>
+      <stop offset="1" stop-color="#F4C95D"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#AAB7C8" stroke-opacity="0.035"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#background)"/>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+  <ellipse cx="994" cy="316" rx="410" ry="330" fill="url(#halo)"/>
+  <path d="M88 0H1192" stroke="url(#accent)" stroke-width="4"/>
+
+  <g fill="none" stroke="#71E5FF">
+    <circle cx="994" cy="316" r="226" stroke-opacity="0.08"/>
+    <circle cx="994" cy="316" r="196" stroke-opacity="0.12" stroke-dasharray="3 12"/>
+    <path d="M768 316H796M1192 316H1220M994 90V118M994 514V542" stroke-opacity="0.25"/>
+  </g>
+  <circle cx="994" cy="90" r="4" fill="#71E5FF"/>
+  <circle cx="1190" cy="428" r="4" fill="#55D6A9"/>
+  <circle cx="798" cy="428" r="4" fill="#F4C95D"/>
+
+  <!-- Crop the existing logo to its icon, preserving the project's brand asset. -->
+  <svg x="816" y="138" width="356" height="356" viewBox="0 0 300 300">
+    <image href="kognition-logo-dark.svg" width="1280" height="300"/>
+  </svg>
+
+  <g font-family="Segoe UI Variable Display, Segoe UI, sans-serif">
+    <text x="88" y="94" fill="#8EABC5" font-size="16" font-weight="600" letter-spacing="3">DECLARATIVE AI ORCHESTRATION</text>
+    <text x="80" y="250" fill="#F7FAFC" font-size="104" font-weight="720" letter-spacing="-3">Kognition</text>
+    <text x="88" y="305" fill="#71E5FF" font-size="26" font-weight="600" letter-spacing="1.5">KUBERNETES FOR COGNITION</text>
+    <text x="88" y="381" fill="#C4CFDD" font-size="27">
+      <tspan x="88">A declarative control plane</tspan>
+      <tspan x="88" dy="39">for AI agents and workflows.</tspan>
+    </text>
+    <text x="88" y="482" fill="#AAB7C8" font-size="20" font-weight="500">Declare.</text>
+    <circle cx="180" cy="475" r="3" fill="#71E5FF"/>
+    <text x="197" y="482" fill="#AAB7C8" font-size="20" font-weight="500">Reconcile.</text>
+    <circle cx="303" cy="475" r="3" fill="#55D6A9"/>
+    <text x="320" y="482" fill="#AAB7C8" font-size="20" font-weight="500">Observe.</text>
+    <path d="M88 530H1192" stroke="#AAB7C8" stroke-opacity="0.16"/>
+    <text x="88" y="578" fill="#F7FAFC" font-size="20" font-weight="600">microsoft/kognition</text>
+    <text x="1192" y="578" fill="#8EABC5" font-size="17" text-anchor="end">Agents / Workflows / Models / Tools / Memory / Knowledge</text>
+  </g>
+</svg>
