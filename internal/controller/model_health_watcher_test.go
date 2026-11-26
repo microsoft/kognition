@@ -24,6 +24,7 @@ type countingStore struct {
 	*callHealthStore
 	modelLists   atomic.Int32
 	classGets    atomic.Int32
+	secretGets   atomic.Int32
 	listErr      error
 	classGetErrs []error
 }
@@ -39,6 +40,9 @@ func (s *countingStore) List(ctx context.Context, kind string, opts store.ListOp
 }
 
 func (s *countingStore) Get(ctx context.Context, kind, namespace, name string) ([]byte, error) {
+	if kind == "SecretRef" {
+		s.secretGets.Add(1)
+	}
 	if kind == "ModelClass" {
 		call := int(s.classGets.Add(1)) - 1
 		if call < len(s.classGetErrs) && s.classGetErrs[call] != nil {
@@ -326,5 +330,177 @@ func TestModelClassCacheCachesSuccessesAndNotFoundButRetriesOtherErrors(t *testi
 	storeModel(t, backing.memStore, newPassiveModel("a-model", "anthropic"))
 	if _, err := cache.Get(ctx, modelKind, "default", "a-model"); err != nil {
 		t.Fatalf("other kinds must pass through: %v", err)
+	}
+}
+
+// watcherClock is the watcher's clock in tests.
+type watcherClock struct{ now time.Time }
+
+func (c *watcherClock) Now() time.Time          { return c.now }
+func (c *watcherClock) advance(d time.Duration) { c.now = c.now.Add(d) }
+
+func newBackoffWatcher(t *testing.T) (*ModelHealthWatcher, *countingStore, *enqueued, *watcherClock) {
+	t.Helper()
+	watcher, backing, queue := newWatcherFixture(t)
+	clock := &watcherClock{now: time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)}
+	watcher.now = clock.Now
+	return watcher, backing, queue, clock
+}
+
+// replaceModel stores model in place of the stored one, like a reconcile that
+// changed its status.
+func replaceModel(t *testing.T, s *callHealthStore, model v1alpha1.Model) {
+	t.Helper()
+	if err := s.memStore.Delete(context.Background(), modelKind, model.ObjectMeta.Namespace, model.ObjectMeta.Name); err != nil {
+		t.Fatal(err)
+	}
+	storeModel(t, s.memStore, model)
+}
+
+// markActivelyFailing gives the Model a Ready=False condition that has nothing to
+// do with passive health, like a failing probe.
+func markActivelyFailing(model v1alpha1.Model) v1alpha1.Model {
+	model.Status.Phase = v1alpha1.PhaseFailed
+	model.Status.Conditions = []v1alpha1.Condition{{Type: "Ready", Status: "False", Reason: "EndpointUnreachable", Message: "dial tcp: connection refused"}}
+	return model
+}
+
+func markReady(model v1alpha1.Model) v1alpha1.Model {
+	model.Status.Phase = v1alpha1.PhaseReady
+	model.Status.Conditions = []v1alpha1.Condition{{Type: "Ready", Status: "True", Reason: "Healthy", Message: "probe passed"}}
+	return model
+}
+
+func TestModelHealthWatcherDoesNotQueueAModelWhoseActiveCheckFails(t *testing.T) {
+	watcher, backing, queue, clock := newBackoffWatcher(t)
+	storeModel(t, backing.memStore, markActivelyFailing(newPassiveModel("unreachable", "anthropic")))
+	backing.set([]store.ModelCallHealth{faultRecord(passiveTarget("anthropic"), cpi.ReasonRateLimited)}, nil)
+
+	// Far longer than the backoff: the Model must not be queued at all, since a
+	// reconcile keeps its active failure and cannot apply the passive verdict.
+	for i := 0; i < 20; i++ {
+		if err := watcher.Check(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		clock.advance(DefaultModelHealthWatchInterval)
+	}
+	if got := queue.all(); len(got) != 0 {
+		t.Fatalf("queued %v, want a Model with an active failure never queued for passive degradation", got)
+	}
+	if !watcher.mayHaveDegraded {
+		t.Fatal("the watcher must keep watching while the evidence says the target is failing")
+	}
+
+	// Once the active failure is gone, the evidence applies and the Model is queued.
+	replaceModel(t, backing.callHealthStore, markReady(newPassiveModel("unreachable", "anthropic")))
+	if err := watcher.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := queue.all(); len(got) != 1 || got[0] != "default/unreachable" {
+		t.Fatalf("queued %v, want the Model queued once its active check passes", got)
+	}
+}
+
+func TestModelHealthWatcherQueuesTheSameOutcomeOnlyOncePerBackoff(t *testing.T) {
+	watcher, backing, queue, clock := newBackoffWatcher(t)
+	storeModel(t, backing.memStore, markReady(newPassiveModel("slow", "anthropic")))
+	backing.set([]store.ModelCallHealth{faultRecord(passiveTarget("anthropic"), cpi.ReasonTimeout)}, nil)
+	check := func() {
+		t.Helper()
+		if err := watcher.Check(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The reconcile that was queued never changes the status, as when the probe
+	// is still running or fails to be written. Checking every interval for two
+	// backoff periods queues the Model once per period: now, after one, after two.
+	for elapsed := time.Duration(0); elapsed <= 2*DefaultModelHealthRequeueBackoff; elapsed += DefaultModelHealthWatchInterval {
+		check()
+		clock.advance(DefaultModelHealthWatchInterval)
+	}
+	if got := queue.all(); len(got) != 3 {
+		t.Fatalf("queued %d times over two backoff periods, want once per period: %v", len(got), got)
+	}
+}
+func TestModelHealthWatcherQueuesAChangedOutcomeAtOnceDespiteTheBackoff(t *testing.T) {
+	watcher, backing, queue, clock := newBackoffWatcher(t)
+	target := passiveTarget("anthropic")
+	storeModel(t, backing.memStore, markReady(newPassiveModel("flaky", "anthropic")))
+	backing.set([]store.ModelCallHealth{faultRecord(target, cpi.ReasonTimeout)}, nil)
+	check := func() {
+		t.Helper()
+		if err := watcher.Check(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	check() // queued for degradation
+	// The reconcile degrades it, and the provider recovers 15 seconds later.
+	replaceModel(t, backing.callHealthStore, markPassivelyDegraded(newPassiveModel("flaky", "anthropic"), cpi.ReasonTimeout))
+	backing.set([]store.ModelCallHealth{recoveryRecord(target, 3)}, nil)
+	clock.advance(DefaultModelHealthWatchInterval)
+	check()
+	if got := queue.all(); len(got) != 2 {
+		t.Fatalf("queued %v, want the recovery queued at once, not held back by the earlier degradation", got)
+	}
+
+	// A degradation for another reason of a Model already degraded is also a change.
+	replaceModel(t, backing.callHealthStore, markPassivelyDegraded(newPassiveModel("flaky", "anthropic"), cpi.ReasonTimeout))
+	backing.set([]store.ModelCallHealth{faultRecord(target, cpi.ReasonAuthenticationFailed)}, nil)
+	clock.advance(DefaultModelHealthWatchInterval)
+	check()
+	clock.advance(DefaultModelHealthWatchInterval)
+	check()
+	if got := queue.all(); len(got) != 3 {
+		t.Fatalf("queued %v, want the new reason queued once and then held for the backoff", got)
+	}
+}
+
+func TestModelHealthWatcherForgetsModelsThatNeedNoMoreAttention(t *testing.T) {
+	watcher, backing, queue, clock := newBackoffWatcher(t)
+	target := passiveTarget("anthropic")
+	storeModel(t, backing.memStore, markReady(newPassiveModel("transient", "anthropic")))
+	backing.set([]store.ModelCallHealth{faultRecord(target, cpi.ReasonTimeout)}, nil)
+	if err := watcher.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(watcher.queued) != 1 {
+		t.Fatalf("remembered %d queued Models, want 1", len(watcher.queued))
+	}
+
+	// The status now reflects the evidence: nothing is pending.
+	replaceModel(t, backing.callHealthStore, markPassivelyDegraded(newPassiveModel("transient", "anthropic"), cpi.ReasonTimeout))
+	clock.advance(DefaultModelHealthWatchInterval)
+	if err := watcher.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(watcher.queued) != 0 {
+		t.Fatalf("remembered %v, want a Model whose status matches the evidence forgotten", watcher.queued)
+	}
+
+	// A new degradation of the same Model is queued at once, with no stale backoff.
+	replaceModel(t, backing.callHealthStore, markReady(newPassiveModel("transient", "anthropic")))
+	clock.advance(DefaultModelHealthWatchInterval)
+	if err := watcher.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := queue.all(); len(got) != 2 {
+		t.Fatalf("queued %v, want the Model queued again as soon as it needs it", got)
+	}
+
+	// A deleted Model is forgotten too, and an idle watcher keeps nothing.
+	if err := backing.memStore.Delete(context.Background(), modelKind, "default", "transient"); err != nil {
+		t.Fatal(err)
+	}
+	backing.set(nil, nil)
+	for i := 0; i < 2; i++ {
+		clock.advance(DefaultModelHealthWatchInterval)
+		if err := watcher.Check(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(watcher.queued) != 0 || watcher.mayHaveDegraded {
+		t.Fatalf("remembered %v, mayHaveDegraded=%t, want an idle watcher to hold nothing", watcher.queued, watcher.mayHaveDegraded)
 	}
 }

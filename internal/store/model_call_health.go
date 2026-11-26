@@ -22,6 +22,10 @@ type ModelCallHealth struct {
 	// reporter's current run of provider failures or successes.
 	ConsecutiveFaults    int32
 	ConsecutiveSuccesses int32
+	// StreakStartedAt is when that run began, zero when unknown. Readers use it to
+	// count only the part of a run that no other reporter's opposite outcome
+	// interrupted.
+	StreakStartedAt time.Time
 	// LastFaultReason is the failure reason of the most recent provider failure.
 	LastFaultReason string
 	// LastFaultAt and LastSuccessAt are the reporter's observation times, zero

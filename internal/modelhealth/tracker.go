@@ -17,7 +17,9 @@ const (
 	Window = 5 * time.Minute
 
 	maxEventsPerTarget = 32
-	maxTrackedTargets  = 512
+	// maxTrackedTargets bounds the destinations and credentials tracked, which is
+	// what one reporter may publish.
+	maxTrackedTargets = store.MaxModelCallHealthTargets
 )
 
 type event struct {
@@ -30,6 +32,12 @@ type event struct {
 // implements cpi.CallRecorder and is safe for concurrent use. Only outcomes that
 // say something about the provider are kept: successes and provider failures.
 // Invalid requests, cancellations and local errors are ignored.
+//
+// A call is attributed to what its outcome is about. A success counts for the
+// destination and for the credential that made it. A failure of the credential,
+// rejected credentials or exhausted quota or billing, counts only for that
+// credential, so one account's failures cannot degrade the destination for
+// another. Every other failure counts only for the destination.
 type Tracker struct {
 	mu      sync.Mutex
 	targets map[string][]event
@@ -53,10 +61,23 @@ func (t *Tracker) RecordCall(call cpi.CallOutcome) {
 	if fault {
 		entry.reason = cpi.NormalizeReason(call.Reason)
 	}
-	key := TargetKey(call.Provider, call.Endpoint, call.Model)
+	destination := TargetKey(call.Provider, call.Endpoint, call.Model)
+	credential := CredentialKey(destination, call.Credential)
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	switch {
+	case !fault:
+		t.appendLocked(destination, entry)
+		t.appendLocked(credential, entry)
+	case credentialScoped(entry.reason):
+		t.appendLocked(credential, entry)
+	default:
+		t.appendLocked(destination, entry)
+	}
+}
+
+func (t *Tracker) appendLocked(key string, entry event) {
 	events, known := t.targets[key]
 	if !known && len(t.targets) >= maxTrackedTargets {
 		t.evictStalestLocked()
@@ -122,12 +143,15 @@ func summarize(target string, events []event) store.ModelCallHealth {
 		}
 	}
 	last := events[len(events)-1].fault
+	run := 0
 	for i := len(events) - 1; i >= 0 && events[i].fault == last; i-- {
-		if last {
-			summary.ConsecutiveFaults++
-		} else {
-			summary.ConsecutiveSuccesses++
-		}
+		run++
+		summary.StreakStartedAt = events[i].at
+	}
+	if last {
+		summary.ConsecutiveFaults = int32(run)
+	} else {
+		summary.ConsecutiveSuccesses = int32(run)
 	}
 	return summary
 }

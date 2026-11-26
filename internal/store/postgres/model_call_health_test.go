@@ -49,7 +49,7 @@ func TestModelCallHealthRoundTripsRecords(t *testing.T) {
 	successAt := faultAt.Add(-time.Second)
 
 	records := []store.ModelCallHealth{
-		{Target: prefix + "-faulty", Calls: 10, Faults: 6, ConsecutiveFaults: 4, LastFaultReason: "RateLimited", LastFaultAt: faultAt, LastSuccessAt: successAt},
+		{Target: prefix + "-faulty", Calls: 10, Faults: 6, ConsecutiveFaults: 4, StreakStartedAt: faultAt.Add(-3 * time.Second), LastFaultReason: "RateLimited", LastFaultAt: faultAt, LastSuccessAt: successAt},
 		{Target: prefix + "-clean", Calls: 3, ConsecutiveSuccesses: 3, LastSuccessAt: successAt},
 	}
 	if err := backend.ReplaceModelCallHealth(ctx, prefix+"-a", records); err != nil {
@@ -62,12 +62,12 @@ func TestModelCallHealthRoundTripsRecords(t *testing.T) {
 	}
 	faulty := got[prefix+"-faulty"]
 	if faulty.Calls != 10 || faulty.Faults != 6 || faulty.ConsecutiveFaults != 4 || faulty.LastFaultReason != "RateLimited" ||
-		!faulty.LastFaultAt.Equal(faultAt) || !faulty.LastSuccessAt.Equal(successAt) {
+		!faulty.LastFaultAt.Equal(faultAt) || !faulty.LastSuccessAt.Equal(successAt) || !faulty.StreakStartedAt.Equal(faultAt.Add(-3*time.Second)) {
 		t.Errorf("faulty record = %+v, want the published values", faulty)
 	}
 	clean := got[prefix+"-clean"]
-	if clean.ConsecutiveSuccesses != 3 || !clean.LastFaultAt.IsZero() || clean.LastFaultReason != "" {
-		t.Errorf("clean record = %+v, want no fault and a zero fault time", clean)
+	if clean.ConsecutiveSuccesses != 3 || !clean.LastFaultAt.IsZero() || clean.LastFaultReason != "" || !clean.StreakStartedAt.IsZero() {
+		t.Errorf("clean record = %+v, want no fault, a zero fault time and an unknown streak start", clean)
 	}
 }
 

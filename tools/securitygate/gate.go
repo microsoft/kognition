@@ -23,7 +23,7 @@ import (
 )
 
 const migrationTarget = "kognition/templates/migrations-configmap.yaml"
-const migrationDigest = "b690c091cfa7d24d24ef8b1029c6aff1a2c73e295772afd6706f071189b4348f"
+const migrationDigest = "c483d0002492b09345f9a83b328a8b8391c903ff30cb195ce40fa7bedacce2ca"
 const migrationMessage = `ConfigMap 'security-test-kognition-migrations' in 'control' namespace stores secrets in key(s) or value(s) '{"        (status <> 'Prepared' AND preparation_token ", "006_token_reservations.sql", "007_token_reservation_quota_periods.sql"}'`
 
 type finding struct {

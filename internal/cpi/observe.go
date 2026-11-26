@@ -40,6 +40,10 @@ type CallOutcome struct {
 	// default applies. It may carry credentials in its URL, so it must not be
 	// exported to metrics or logs; use it only to derive an opaque key.
 	Endpoint string
+	// Credential identifies the secret the call presented, as returned by
+	// CredentialFingerprint, empty when the call presented none. Like Endpoint it
+	// must not be exported to metrics or logs.
+	Credential string
 	// Duration is the wall-clock time of the driver call.
 	Duration time.Duration
 	// Reason classifies a failure and is empty on success.
@@ -154,31 +158,31 @@ type observedContractCounterDriver struct {
 func (d *observedDriver) Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error) {
 	start := time.Now()
 	resp, err := d.Driver.Complete(ctx, req)
-	var model, endpoint string
+	var model, endpoint, credential string
 	if req != nil {
-		model, endpoint = req.Model, req.Endpoint
+		model, endpoint, credential = req.Model, req.Endpoint, CredentialFingerprint(req.Creds)
 	}
-	d.record(OperationComplete, model, endpoint, start, err)
+	d.record(OperationComplete, model, endpoint, credential, start, err)
 	return resp, err
 }
 
 func (d *observedDriver) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
 	start := time.Now()
 	resp, err := d.Driver.Embed(ctx, req)
-	var model, endpoint string
+	var model, endpoint, credential string
 	if req != nil {
-		model, endpoint = req.Model, req.Endpoint
+		model, endpoint, credential = req.Model, req.Endpoint, CredentialFingerprint(req.Creds)
 	}
-	d.record(OperationEmbed, model, endpoint, start, err)
+	d.record(OperationEmbed, model, endpoint, credential, start, err)
 	return resp, err
 }
 
-func (d *observedDriver) record(operation, model, endpoint string, start time.Time, err error) {
+func (d *observedDriver) record(operation, model, endpoint, credential string, start time.Time, err error) {
 	recorder := d.recorder()
 	if recorder == nil {
 		return
 	}
-	outcome := CallOutcome{Provider: d.Name(), Operation: operation, Model: model, Endpoint: endpoint, Duration: time.Since(start)}
+	outcome := CallOutcome{Provider: d.Name(), Operation: operation, Model: model, Endpoint: endpoint, Credential: credential, Duration: time.Since(start)}
 	if err != nil {
 		outcome.Reason, outcome.ProviderFault = ClassifyCallError(err)
 	}

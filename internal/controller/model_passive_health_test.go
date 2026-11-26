@@ -270,7 +270,7 @@ func TestModelReconciler_PassiveHealthIsOptionalForTheStore(t *testing.T) {
 	if r.callHealth != nil {
 		t.Fatal("a store without passive health support must not enable it")
 	}
-	if verdict := r.passiveVerdict(context.Background(), "anthropic", &v1alpha1.Model{}); verdict.Degraded {
+	if verdict := r.passiveVerdict(context.Background(), "default", "anthropic", &v1alpha1.Model{}); verdict.Degraded {
 		t.Fatalf("passiveVerdict() = %+v, want healthy without a health store", verdict)
 	}
 }

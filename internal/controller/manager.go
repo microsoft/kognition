@@ -19,6 +19,7 @@ type Manager struct {
 	store       store.Store
 	controllers []*Controller
 	runnables   []Runnable
+	background  []Runnable
 	informers   map[string]*Informer // kind -> shared informer
 	election    *LeaderElector
 	mu          sync.Mutex
@@ -71,6 +72,17 @@ func (m *Manager) AddRunnable(runnable Runnable) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.runnables = append(m.runnables, runnable)
+}
+
+// AddBackgroundRunnable registers work that starts with the controllers but
+// outlives them: its context is canceled only after every controller and
+// runnable has returned, so it can still handle what they produced while they
+// drained, such as publishing the outcomes of their last model calls. The context
+// is not derived from the manager's cancellation, but keeps its values.
+func (m *Manager) AddBackgroundRunnable(runnable Runnable) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.background = append(m.background, runnable)
 }
 
 // AddEventHandler registers an additional handler on an already-registered
@@ -132,7 +144,21 @@ func (m *Manager) runControllers(ctx context.Context) {
 		}(runnable)
 	}
 
+	backgroundCtx, stopBackground := context.WithCancel(context.WithoutCancel(ctx))
+	var background sync.WaitGroup
+	for _, runnable := range m.background {
+		background.Add(1)
+		go func(r Runnable) {
+			defer background.Done()
+			if err := r.Start(backgroundCtx); err != nil {
+				m.logger.Error("manager background runnable error", zap.Error(err))
+			}
+		}(runnable)
+	}
+
 	<-ctx.Done()
 	m.logger.Info("shutting down controller manager")
 	wg.Wait()
+	stopBackground()
+	background.Wait()
 }

@@ -27,6 +27,8 @@ type lifecycleServerStub struct {
 	stop        chan struct{}
 	stopOnce    sync.Once
 	shutdowns   int
+	// onShutdown runs while the server drains, before Shutdown returns.
+	onShutdown func()
 }
 
 func newLifecycleServerStub() *lifecycleServerStub {
@@ -44,6 +46,9 @@ func (s *lifecycleServerStub) Start() error {
 
 func (s *lifecycleServerStub) Shutdown(context.Context) error {
 	s.shutdowns++
+	if s.onShutdown != nil {
+		s.onShutdown()
+	}
 	s.stopOnce.Do(func() { close(s.stop) })
 	return s.shutdownErr
 }
@@ -251,9 +256,117 @@ func TestStartModelHealthReporterPublishesAndStopWaitsForTheFinalPublish(t *test
 	// stop() returns only after the final publish, so the outcome recorded just
 	// before shutdown must already be in the store.
 	published := sink.last()
-	if len(published) != 1 || published[0].Calls != 1 {
+	if !publishedOneSuccessfulCall(published) {
 		t.Fatalf("final publish = %+v, want the outcome recorded before stop()", published)
 	}
+}
+
+// publishedOneSuccessfulCall reports whether records are the evidence of exactly
+// one successful call: it counts for the destination and for the credential that
+// made it, so it is published as two streams of one call each.
+func publishedOneSuccessfulCall(records []store.ModelCallHealth) bool {
+	if len(records) != 2 {
+		return false
+	}
+	for _, record := range records {
+		if record.Calls != 1 || record.Faults != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// A request that finishes while the server drains completes after the command's
+// context is canceled. Its model call must still be published: the reporter stops
+// only when the runtime's resources are closed, after the drain.
+func TestStartModelHealthReporterOutlivesItsContextUntilStopped(t *testing.T) {
+	tracker := modelhealth.NewTracker()
+	sink := &publishRecorder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := startModelHealthReporter(ctx, modelhealth.NewReporter(tracker, sink, "apiserver-test", zap.NewNop()))
+
+	cancel()
+	// Give a reporter that wrongly follows ctx time to make its final publish and
+	// exit; a correct one is not affected by the wait.
+	time.Sleep(50 * time.Millisecond)
+	tracker.RecordCall(cpi.CallOutcome{Provider: "anthropic", Operation: cpi.OperationComplete, Model: "claude", Endpoint: "https://api.example"})
+	stop()
+
+	if published := sink.last(); len(published) == 0 {
+		t.Fatal("an outcome recorded after the context was canceled was never published")
+	}
+}
+
+func TestStartModelHealthReporterKeepsTheContextValues(t *testing.T) {
+	type key struct{}
+	sink := &contextRecordingSink{}
+	tracker := modelhealth.NewTracker()
+	tracker.RecordCall(cpi.CallOutcome{Provider: "anthropic", Operation: cpi.OperationComplete, Model: "claude"})
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), key{}, "request-scoped"))
+	stop := startModelHealthReporter(ctx, modelhealth.NewReporter(tracker, sink, "apiserver-test", zap.NewNop()))
+	cancel()
+	stop()
+
+	if got := sink.value(key{}); got != "request-scoped" {
+		t.Fatalf("the publish saw context value %v, want the command context's values preserved", got)
+	}
+}
+
+// contextRecordingSink remembers a value of the context of the last publish.
+type contextRecordingSink struct {
+	publishRecorder
+	mu   sync.Mutex
+	seen context.Context
+}
+
+func (c *contextRecordingSink) ReplaceModelCallHealth(ctx context.Context, reporter string, records []store.ModelCallHealth) error {
+	c.mu.Lock()
+	c.seen = ctx
+	c.mu.Unlock()
+	return c.publishRecorder.ReplaceModelCallHealth(ctx, reporter, records)
+}
+
+func (c *contextRecordingSink) value(key any) any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.seen == nil {
+		return nil
+	}
+	return c.seen.Value(key)
+}
+
+// The runtime closes the reporter with its other resources, which
+// runServerLifecycle does only after the server has shut down.
+func TestModelHealthReporterPublishesCallsFinishedWhileTheServerDrains(t *testing.T) {
+	tracker := modelhealth.NewTracker()
+	sink := &publishRecorder{}
+	start, stop := modelHealthReporting(modelhealth.NewReporter(tracker, sink, "apiserver-test", zap.NewNop()))
+	ctx, cancel := context.WithCancel(context.Background())
+	start(ctx)
+
+	server := newLifecycleServerStub()
+	server.onShutdown = func() {
+		// A request still in flight completes some time into the drain.
+		time.Sleep(50 * time.Millisecond)
+		tracker.RecordCall(cpi.CallOutcome{Provider: "anthropic", Operation: cpi.OperationComplete, Model: "claude", Endpoint: "https://api.example"})
+	}
+	done := make(chan error, 1)
+	go func() { done <- runServerLifecycle(ctx, server, &listenerLifecycleStub{}, stop, zap.NewNop()) }()
+	<-server.started
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("runServerLifecycle: %v", err)
+	}
+
+	published := sink.last()
+	if !publishedOneSuccessfulCall(published) {
+		t.Fatalf("published = %+v, want the call that finished during the drain", published)
+	}
+}
+
+func TestModelHealthReportingStopIsSafeWhenTheRuntimeNeverStartedIt(t *testing.T) {
+	_, stop := modelHealthReporting(modelhealth.NewReporter(modelhealth.NewTracker(), &publishRecorder{}, "apiserver-test", zap.NewNop()))
+	stop()
 }
 
 type publishRecorder struct {

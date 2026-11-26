@@ -99,6 +99,9 @@ func TestGatewayReportsProviderCallsToTheConfiguredRecorder(t *testing.T) {
 	if got.Provider != adapter.Name() || got.Operation != cpi.OperationComplete || got.Model != "opaque-deployment" || !got.Succeeded() {
 		t.Fatalf("outcome = %+v, want a successful complete call to opaque-deployment through %s", got, adapter.Name())
 	}
+	if got.Credential != fixtureCredentialFingerprint() || got.Credential == "" {
+		t.Fatalf("credential = %q, want the fingerprint of the Model's secret, the same the direct calls report", got.Credential)
+	}
 	if _, supported := mustDriver(t, registry, adapter.Name()).(cpi.InvocationContractProvider); !supported {
 		t.Fatal("observing the registry hid the adapter's invocation contract support")
 	}
@@ -213,6 +216,16 @@ func TestGatewayReportsDirectProviderCallsToTheConfiguredRecorder(t *testing.T) 
 			if got.Provider != "openai-compatible" || got.Operation != cpi.OperationComplete || got.Model != "mock" || got.Reason != test.reason || got.ProviderFault != test.fault {
 				t.Fatalf("outcome = %+v, want reason %q fault %t", got, test.reason, test.fault)
 			}
+			if got.Endpoint != upstream.URL || got.Credential != fixtureCredentialFingerprint() {
+				t.Fatalf("outcome = %+v, want the Model's endpoint %q and the fingerprint of its secret, which the health evidence is attributed by", got, upstream.URL)
+			}
 		})
 	}
+}
+
+// fixtureCredentialFingerprint is the fingerprint of the secret the fixture's Model
+// presents. The gateway keeps the "type" entry in the values it resolves and the
+// other call sites do not, so every path must still agree on it.
+func fixtureCredentialFingerprint() string {
+	return cpi.CredentialFingerprint(&cpi.Credentials{Type: "api-key", Data: map[string]string{"apiKey": "upstream-secret"}})
 }

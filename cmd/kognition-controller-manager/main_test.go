@@ -64,7 +64,13 @@ type callHealthCapableStore struct {
 }
 
 func runnableTypes(mgr *controller.Manager) []string {
-	runnables := reflect.ValueOf(mgr).Elem().FieldByName("runnables")
+	return runnableTypesIn(mgr, "runnables")
+}
+
+// runnableTypesIn lists the types of the manager's runnables of one kind: "runnables"
+// stop with the controllers and "background" outlive them.
+func runnableTypesIn(mgr *controller.Manager, field string) []string {
+	runnables := reflect.ValueOf(mgr).Elem().FieldByName(field)
 	types := make([]string, 0, runnables.Len())
 	for index := 0; index < runnables.Len(); index++ {
 		types = append(types, runnables.Index(index).Elem().Type().String())
@@ -94,8 +100,8 @@ func TestPassiveModelHealthRecordsOutcomesAndRegistersItsRunnables(t *testing.T)
 	base := &callRecorder{}
 	recorder := passive.recorder(base)
 	recorder.RecordCall(cpi.CallOutcome{Provider: "anthropic", Operation: cpi.OperationComplete, Model: "claude"})
-	if len(base.outcomes) != 1 || len(passive.tracker.Snapshot()) != 1 {
-		t.Fatalf("outcomes reached the base recorder %d times and the tracker %d times, want once each", len(base.outcomes), len(passive.tracker.Snapshot()))
+	if len(base.outcomes) != 1 || len(passive.tracker.Snapshot()) != 2 {
+		t.Fatalf("outcomes reached the base recorder %d times and the tracker holds %d streams, want one outcome and the destination and credential streams of its success", len(base.outcomes), len(passive.tracker.Snapshot()))
 	}
 	if only := passive.recorder(nil); only != cpi.CallRecorder(passive.tracker) {
 		t.Fatal("without a base recorder the tracker must be the recorder")
@@ -105,8 +111,12 @@ func TestPassiveModelHealthRecordsOutcomesAndRegistersItsRunnables(t *testing.T)
 	modelController := mgr.Register(controller.ControllerConfig{Name: "model-controller", Kind: "Model", Reconciler: nil})
 	passive.register(mgr, st, modelController, zap.NewNop())
 	types := runnableTypes(mgr)
-	if !slices.Contains(types, "*modelhealth.Reporter") || !slices.Contains(types, "*controller.ModelHealthWatcher") {
-		t.Fatalf("runnables = %v, want the passive health reporter and watcher", types)
+	background := runnableTypesIn(mgr, "background")
+	if !slices.Contains(types, "*controller.ModelHealthWatcher") || slices.Contains(types, "*modelhealth.Reporter") {
+		t.Fatalf("runnables = %v, want the watcher, which stops with the controllers, and not the reporter", types)
+	}
+	if len(background) != 1 || background[0] != "*modelhealth.Reporter" {
+		t.Fatalf("background runnables = %v, want only the reporter, which must outlive the controllers to publish their last outcomes", background)
 	}
 }
 

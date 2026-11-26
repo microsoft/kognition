@@ -112,5 +112,6 @@ func (r *Reporter) Flush(ctx context.Context) error {
 func sameSummary(a, b store.ModelCallHealth) bool {
 	return a.Target == b.Target && a.Calls == b.Calls && a.Faults == b.Faults &&
 		a.ConsecutiveFaults == b.ConsecutiveFaults && a.ConsecutiveSuccesses == b.ConsecutiveSuccesses &&
+		a.StreakStartedAt.Equal(b.StreakStartedAt) &&
 		a.LastFaultReason == b.LastFaultReason && a.LastFaultAt.Equal(b.LastFaultAt) && a.LastSuccessAt.Equal(b.LastSuccessAt)
 }

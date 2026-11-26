@@ -181,7 +181,9 @@ func (p *passiveModelHealth) register(mgr *controller.Manager, st store.Store, m
 	if p == nil {
 		return
 	}
-	mgr.AddRunnable(modelhealth.NewReporter(p.tracker, p.sink, modelhealth.NewReporterID(), logger))
+	// The reporter outlives the controllers so that it publishes the outcomes of the
+	// model calls they were still making while they shut down.
+	mgr.AddBackgroundRunnable(modelhealth.NewReporter(p.tracker, p.sink, modelhealth.NewReporterID(), logger))
 	mgr.AddRunnable(controller.NewModelHealthWatcher(st, p.sink, modelController.OnUpdate, logger))
 }
 

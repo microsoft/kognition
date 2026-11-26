@@ -132,6 +132,9 @@ func TestQueryEmbeddingReportsProviderCallsToTheConfiguredRecorder(t *testing.T)
 	if got := recorder.outcomes[0]; got.Operation != cpi.OperationEmbed || got.Model != "opaque-embedding-deployment" || !got.Succeeded() {
 		t.Fatalf("outcome = %+v, want a successful embed call", got)
 	}
+	if got := recorder.outcomes[0]; got.Endpoint == "" || got.Credential != fixtureCredentialFingerprint() {
+		t.Fatalf("outcome = %+v, want the Model's endpoint and the fingerprint of its secret", got)
+	}
 }
 
 func TestQueryEmbeddingRejectsRevocationOrMissingEvidenceBeforeProvider(t *testing.T) {

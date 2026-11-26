@@ -52,15 +52,16 @@ func (s *Store) ReplaceModelCallHealth(ctx context.Context, reporter string, rec
 	batch := &pgx.Batch{}
 	for _, record := range records {
 		batch.Queue(`INSERT INTO model_call_health
-			(reporter, target, calls, faults, consecutive_faults, consecutive_successes, last_fault_reason, last_fault_at, last_success_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, transaction_timestamp())
+			(reporter, target, calls, faults, consecutive_faults, consecutive_successes, streak_started_at, last_fault_reason, last_fault_at, last_success_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, transaction_timestamp())
 			ON CONFLICT (reporter, target) DO UPDATE SET
 				calls = EXCLUDED.calls, faults = EXCLUDED.faults,
 				consecutive_faults = EXCLUDED.consecutive_faults, consecutive_successes = EXCLUDED.consecutive_successes,
+				streak_started_at = EXCLUDED.streak_started_at,
 				last_fault_reason = EXCLUDED.last_fault_reason, last_fault_at = EXCLUDED.last_fault_at,
 				last_success_at = EXCLUDED.last_success_at, updated_at = EXCLUDED.updated_at`,
 			reporter, record.Target, record.Calls, record.Faults, record.ConsecutiveFaults, record.ConsecutiveSuccesses,
-			record.LastFaultReason, nullableTime(record.LastFaultAt), nullableTime(record.LastSuccessAt))
+			nullableTime(record.StreakStartedAt), record.LastFaultReason, nullableTime(record.LastFaultAt), nullableTime(record.LastSuccessAt))
 	}
 	if batch.Len() > 0 {
 		results := transaction.SendBatch(ctx, batch)
@@ -86,7 +87,7 @@ func (s *Store) ReplaceModelCallHealth(ctx context.Context, reporter string, rec
 
 func (s *Store) ListModelCallHealth(ctx context.Context, maxAge time.Duration) ([]store.ModelCallHealth, error) {
 	rows, err := s.pool.Query(ctx, `SELECT target, calls, faults, consecutive_faults, consecutive_successes,
-			last_fault_reason, last_fault_at, last_success_at
+			streak_started_at, last_fault_reason, last_fault_at, last_success_at
 		FROM model_call_health
 		WHERE updated_at >= transaction_timestamp() - make_interval(secs => $1)
 		ORDER BY target, reporter`, maxAge.Seconds())
@@ -98,10 +99,13 @@ func (s *Store) ListModelCallHealth(ctx context.Context, maxAge time.Duration) (
 	var records []store.ModelCallHealth
 	for rows.Next() {
 		var record store.ModelCallHealth
-		var faultAt, successAt *time.Time
+		var streakAt, faultAt, successAt *time.Time
 		if err := rows.Scan(&record.Target, &record.Calls, &record.Faults, &record.ConsecutiveFaults, &record.ConsecutiveSuccesses,
-			&record.LastFaultReason, &faultAt, &successAt); err != nil {
+			&streakAt, &record.LastFaultReason, &faultAt, &successAt); err != nil {
 			return nil, fmt.Errorf("scan model call health: %w", err)
+		}
+		if streakAt != nil {
+			record.StreakStartedAt = *streakAt
 		}
 		if faultAt != nil {
 			record.LastFaultAt = *faultAt

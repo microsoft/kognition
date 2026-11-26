@@ -179,7 +179,7 @@ func (r *ModelReconciler) evaluate(ctx context.Context, namespace string, model 
 		}
 	}
 
-	if verdict := r.passiveVerdict(ctx, provider, model); verdict.Degraded {
+	if verdict := r.passiveVerdict(ctx, namespace, provider, model); verdict.Degraded {
 		return false, time.Since(start), verdict.Reason, verdict.Message
 	}
 	return true, time.Since(start), health.Reason, health.Message
@@ -230,7 +230,7 @@ func resolveModelProvider(ctx context.Context, st store.Store, model *v1alpha1.M
 // passiveVerdict reports whether real calls to the Model's target are failing. A
 // store failure keeps the previous verdict, so a monitoring outage neither
 // degrades nor heals a Model.
-func (r *ModelReconciler) passiveVerdict(ctx context.Context, provider string, model *v1alpha1.Model) modelhealth.Verdict {
+func (r *ModelReconciler) passiveVerdict(ctx context.Context, namespace, provider string, model *v1alpha1.Model) modelhealth.Verdict {
 	if r.callHealth == nil {
 		return modelhealth.Verdict{}
 	}
@@ -240,14 +240,22 @@ func (r *ModelReconciler) passiveVerdict(ctx context.Context, provider string, m
 		r.logger.Warn("read passive model health", zap.Error(err))
 		return previous
 	}
-	target := modelhealth.TargetKey(provider, model.Spec.Endpoint, model.Spec.ModelID)
+	targets := modelHealthTargets(ctx, r.store, namespace, provider, model)
 	var matching []store.ModelCallHealth
 	for _, record := range records {
-		if record.Target == target {
+		if targets.Contains(record.Target) {
 			matching = append(matching, record)
 		}
 	}
-	return modelhealth.Evaluate(modelhealth.Merge(matching), wasDegraded)
+	return modelhealth.EvaluateModel(modelhealth.MergeByTarget(matching), targets, previous, wasDegraded)
+}
+
+// modelHasActiveFailure reports whether the Model is unready for a reason other
+// than passive health, such as a failing probe or an unresolvable ModelClass. The
+// passive verdict only applies to a Model whose active checks pass.
+func modelHasActiveFailure(model *v1alpha1.Model) bool {
+	ready := lifecycle.GetCondition(apiToLifecycleConditions(model.Status.Conditions), lifecycle.ConditionReady)
+	return ready != nil && ready.Status == string(lifecycle.ConditionFalse) && !strings.HasPrefix(ready.Message, modelhealth.MessagePrefix)
 }
 
 // modelPassiveDegradation reports whether the Model is currently marked degraded
