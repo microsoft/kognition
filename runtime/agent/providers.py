@@ -122,8 +122,10 @@ def create_model(config: AgentConfig) -> BaseChatModel:
         if config.model_endpoint and config.model_endpoint != "https://api.openai.com/v1":
             kwargs["base_url"] = config.model_endpoint
         # Azure endpoints require api-version as a query parameter.
-        if config.api_version and config.model_endpoint and "azure.com" in config.model_endpoint:
-            kwargs["default_query"] = {"api-version": config.api_version}
+        if config.api_version and config.model_endpoint:
+            hostname = urlparse(config.model_endpoint).hostname or ""
+            if hostname == "azure.com" or hostname.endswith(".azure.com"):
+                kwargs["default_query"] = {"api-version": config.api_version}
 
         return ChatOpenAI(**kwargs)
 

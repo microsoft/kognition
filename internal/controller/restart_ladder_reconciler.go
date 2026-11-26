@@ -174,7 +174,7 @@ func (r *RestartLadderReconciler) Reconcile(ctx context.Context, req Request) (R
 	)
 
 	if err := r.executeLadderAction(ctx, action, &instance); err != nil {
-		log.Error("ladder action failed", zap.String("action", string(action)), zap.Error(err))
+		log.Error("ladder action failed", zap.String("action", string(action)))
 		// Still count the attempt.
 	}
 
@@ -430,7 +430,7 @@ func conditionsMatch(left, right *v1alpha1.Condition) bool {
 }
 
 func applyConditionChange(conditions []v1alpha1.Condition, conditionType string, desired *v1alpha1.Condition) []v1alpha1.Condition {
-	merged := make([]v1alpha1.Condition, 0, len(conditions)+1)
+	merged := make([]v1alpha1.Condition, 0, len(conditions))
 	for _, condition := range conditions {
 		if condition.Type != conditionType {
 			merged = append(merged, condition)

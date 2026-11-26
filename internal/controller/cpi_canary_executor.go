@@ -310,7 +310,7 @@ func (e *CPICanaryExecutor) resolveCanaryRequest(ctx context.Context, request Ca
 			return nil, err
 		}
 	}
-	parameters := make(map[string]string, len(model.Spec.Parameters)+2)
+	parameters := make(map[string]string, len(model.Spec.Parameters))
 	for key, value := range model.Spec.Parameters {
 		parameters[key] = value
 	}

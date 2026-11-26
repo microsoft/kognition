@@ -189,7 +189,7 @@ func (le *LeaderElector) tryAcquire(ctx context.Context) bool {
 
 	err = le.store.Update(ctx, leaseKind, leaseNamespace, le.cfg.LeaseName, data, wrapper.Metadata.ResourceVersion)
 	if err != nil {
-		le.logger.Warn("failed to take over expired lease", zap.Error(err))
+		le.logger.Warn("failed to take over expired lease", zap.String("lease", le.cfg.LeaseName), zap.String("identity", le.cfg.Identity))
 		return false
 	}
 

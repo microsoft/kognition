@@ -25,6 +25,39 @@ type restartLadderConflictStore struct {
 	concurrentLadderAction *v1alpha1.RestartAction
 }
 
+func TestApplyConditionChangePreservesOtherConditions(t *testing.T) {
+	foreign := v1alpha1.Condition{Type: "Foreign", Status: "True"}
+	ready := v1alpha1.Condition{Type: "Ready", Status: "False"}
+	conditions := []v1alpha1.Condition{foreign, ready}
+	for _, test := range []struct {
+		name          string
+		conditionType string
+		desired       *v1alpha1.Condition
+		wantLen       int
+	}{
+		{name: "add", conditionType: "New", desired: &v1alpha1.Condition{Type: "New", Status: "True"}, wantLen: 3},
+		{name: "replace", conditionType: "Ready", desired: &v1alpha1.Condition{Type: "Ready", Status: "True"}, wantLen: 2},
+		{name: "remove", conditionType: "Ready", wantLen: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := applyConditionChange(conditions, test.conditionType, test.desired)
+			if len(got) != test.wantLen || got[0] != foreign {
+				t.Fatalf("merged conditions = %#v, want %d entries and preserved foreign condition", got, test.wantLen)
+			}
+			if test.desired != nil && got[len(got)-1] != *test.desired {
+				t.Fatalf("desired condition lost: %#v", got)
+			}
+			if conditions[0] != foreign || conditions[1] != ready {
+				t.Fatalf("input conditions were mutated: %#v", conditions)
+			}
+		})
+	}
+	got := applyConditionChange(nil, ready.Type, &ready)
+	if len(got) != 1 || got[0] != ready {
+		t.Fatalf("condition not added to empty input: %#v", got)
+	}
+}
+
 type restartLadderPersistentConflictStore struct {
 	*memStore
 	afterConflictErr error

@@ -298,3 +298,77 @@ test("authenticated proxy forwards real payloads, refuses other writes and does 
   assert.equal(capped.status, 429);
   assert.equal(observed.length, 4);
 });
+
+test("authenticated proxy pins its upstream destination independently of incoming request targets", async t => {
+  const observed = [];
+  let attackerRequests = 0;
+  const upstream = http.createServer((request, response) => {
+    observed.push(request.url);
+    response.writeHead(200).end("approved upstream");
+  });
+  const attacker = http.createServer((_request, response) => {
+    attackerRequests++;
+    response.writeHead(200).end("unapproved upstream");
+  });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  await new Promise(resolve => attacker.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${upstream.address().port}`;
+  const attackerOrigin = `http://127.0.0.1:${attacker.address().port}`;
+  const errors = [];
+  const proxy = await startAuthProxy(`${origin}/`, "test-operator-credential".padEnd(40, "x"), options, error => errors.push(error));
+  t.after(async () => {
+    await new Promise(resolve => proxy.server.close(resolve));
+    await new Promise(resolve => upstream.close(resolve));
+    await new Promise(resolve => attacker.close(resolve));
+  });
+  const prefix = "/apis/kognition.dev/v1alpha1/namespaces/default";
+  const rawRequest = requestTarget => new Promise((resolve, reject) => {
+    const request = http.get({
+      hostname: "127.0.0.1", port: proxy.server.address().port, path: requestTarget,
+      headers: { host: new URL(attackerOrigin).host },
+    }, response => {
+      response.resume();
+      response.on("end", () => resolve(response.statusCode));
+    });
+    request.on("error", reject);
+  });
+  for (const target of [
+    `${attackerOrigin}${prefix}/agents`,
+    `//127.0.0.1:${attacker.address().port}${prefix}/agents`,
+    `/\\127.0.0.1:${attacker.address().port}${prefix}/agents`,
+    `${origin}${prefix}/agents`,
+    `${prefix}/../../../../other-api`,
+  ]) {
+    assert.equal(await rawRequest(target), 403, target);
+  }
+  assert.equal(observed.length, 0);
+  const approvedPath = `${prefix}/agents?continue=${encodeURIComponent(attackerOrigin)}`;
+  assert.equal(await rawRequest(approvedPath), 200);
+  assert.deepEqual(observed, [approvedPath]);
+  assert.equal(attackerRequests, 0);
+  assert.deepEqual(errors, []);
+});
+
+test("authenticated proxy preserves literal IPv6 loopback destinations", async t => {
+  const upstream = http.createServer((_request, response) => response.writeHead(200).end("IPv6 upstream"));
+  try {
+    await new Promise((resolve, reject) => {
+      upstream.once("error", reject);
+      upstream.listen(0, "::1", resolve);
+    });
+  } catch (error) {
+    if (error.code !== "EAFNOSUPPORT" && error.code !== "EADDRNOTAVAIL") throw error;
+    t.skip("IPv6 loopback is unavailable");
+    return;
+  }
+  const errors = [];
+  const proxy = await startAuthProxy(`http://[::1]:${upstream.address().port}`, "test-operator-credential".padEnd(40, "x"), options, error => errors.push(error));
+  t.after(async () => {
+    await new Promise(resolve => proxy.server.close(resolve));
+    await new Promise(resolve => upstream.close(resolve));
+  });
+  const response = await fetch(`${proxy.origin}/apis/kognition.dev/v1alpha1/agents`);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "IPv6 upstream");
+  assert.deepEqual(errors, []);
+});

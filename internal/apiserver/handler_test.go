@@ -2852,8 +2852,32 @@ func TestCreateStoreError(t *testing.T) {
 	}
 }
 
+const resourceFailureLogSecret = "synthetic-resource-backend-credential-do-not-log"
+
+func assertResourceFailureLog(t *testing.T, logs *observer.ObservedLogs, message, kind, name string) {
+	t.Helper()
+	entries := logs.FilterMessage(message).All()
+	if len(entries) != 1 {
+		t.Fatalf("log %q count = %d, want 1", message, len(entries))
+	}
+	fields := entries[0].ContextMap()
+	if fields["kind"] != kind || fields["namespace"] != "default" || fields["name"] != name {
+		t.Fatalf("missing resource correlation fields: %v", fields)
+	}
+	if _, exists := fields["error"]; exists {
+		t.Fatal("raw resource error field was logged")
+	}
+	for _, entry := range logs.All() {
+		if strings.Contains(entry.Message, resourceFailureLogSecret) || strings.Contains(fmt.Sprint(entry.ContextMap()), resourceFailureLogSecret) {
+			t.Fatalf("sensitive content reached log %q", entry.Message)
+		}
+	}
+}
+
 func TestUpdateStoreError(t *testing.T) {
 	srv, es := newErrTestServer(t)
+	core, logs := observer.New(zap.ErrorLevel)
+	srv.logger = zap.New(core)
 	agent := map[string]any{
 		"metadata": map[string]any{"name": "up-agent"},
 		"spec":     map[string]any{"model": "gpt-4"},
@@ -2862,15 +2886,16 @@ func TestUpdateStoreError(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create: want 201, got %d", rec.Code)
 	}
-	es.updateErr = errors.New("deadlock detected")
+	es.updateErr = fmt.Errorf("deadlock detected: %w", errors.New(resourceFailureLogSecret))
 	updated := map[string]any{
 		"metadata": map[string]any{"name": "up-agent", "resourceVersion": float64(1)},
 		"spec":     map[string]any{"model": "gpt-5"},
 	}
 	rec = doReq(t, srv, "PUT", "/apis/kognition.dev/v1alpha1/namespaces/default/agents/up-agent", updated)
-	if rec.Code != http.StatusInternalServerError {
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), resourceFailureLogSecret) {
 		t.Fatalf("update: want 500, got %d: %s", rec.Code, rec.Body.String())
 	}
+	assertResourceFailureLog(t, logs, "update failed", "Agent", "up-agent")
 }
 
 func TestUpdateGetOldObjectError(t *testing.T) {
@@ -2988,6 +3013,8 @@ func TestDeleteStoreError(t *testing.T) {
 
 func TestDeleteWithFinalizersUpdateError(t *testing.T) {
 	srv, es := newErrTestServer(t)
+	core, logs := observer.New(zap.ErrorLevel)
+	srv.logger = zap.New(core)
 
 	// Create a resource with finalizers.
 	agent := map[string]any{
@@ -3003,12 +3030,13 @@ func TestDeleteWithFinalizersUpdateError(t *testing.T) {
 	}
 
 	// Inject update error — the delete-with-finalizers path does an Update.
-	es.updateErr = errors.New("serialization failure")
+	es.updateErr = fmt.Errorf("serialization failure: %w", errors.New(resourceFailureLogSecret))
 
 	rec = doReq(t, srv, "DELETE", "/apis/kognition.dev/v1alpha1/namespaces/default/agents/fin-del-fail", nil)
-	if rec.Code != http.StatusInternalServerError {
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), resourceFailureLogSecret) {
 		t.Fatalf("delete-update: want 500, got %d: %s", rec.Code, rec.Body.String())
 	}
+	assertResourceFailureLog(t, logs, "update for delete failed", "Agent", "fin-del-fail")
 }
 
 func TestWatchStoreError(t *testing.T) {
@@ -3267,7 +3295,9 @@ func TestMemoryRecordRTBFEndpoint_CascadesAndReturnsResult(t *testing.T) {
 
 func TestMemoryRecordRTBFEndpoint_Returns500WhenAuditAppendFails(t *testing.T) {
 	srv, es := newErrTestServer(t)
-	es.appendEventErr = errors.New("append failed")
+	core, logs := observer.New(zap.ErrorLevel)
+	srv.logger = zap.New(core)
+	es.appendEventErr = fmt.Errorf("append failed: %w", errors.New(resourceFailureLogSecret))
 
 	recA := map[string]any{
 		"apiVersion": "kognition.dev/v1alpha1",
@@ -3293,9 +3323,10 @@ func TestMemoryRecordRTBFEndpoint_Returns500WhenAuditAppendFails(t *testing.T) {
 	}
 
 	rec := doReq(t, srv, "POST", "/apis/kognition.dev/v1alpha1/namespaces/default/memoryrecords/rec-a/rtbf", nil)
-	if rec.Code != http.StatusInternalServerError {
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), resourceFailureLogSecret) {
 		t.Fatalf("rtbf audit fail: want 500, got %d: %s", rec.Code, rec.Body.String())
 	}
+	assertResourceFailureLog(t, logs, "rtbf failed", "MemoryRecord", "rec-a")
 }
 
 func TestToInt64Variants(t *testing.T) {
@@ -4097,6 +4128,61 @@ func TestWorkflowRunApproval_IncompleteApprovalConfigurationUsesSingleApproval(t
 			response := doReq(t, srv, http.MethodPost, path, map[string]any{"step": "execute", "decision": "approve"})
 			if response.Code != http.StatusOK {
 				t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestWorkflowRunApproval_FailureLogsOmitRawErrors(t *testing.T) {
+	const secret = "synthetic-backend-credential-do-not-log"
+	failure := fmt.Errorf("backend operation failed: %w", errors.Join(errors.New(secret), errors.New("another failure")))
+	for _, stage := range []string{"lookup", "update"} {
+		t.Run(stage, func(t *testing.T) {
+			memory := newMemStore()
+			const runName = "run-log-error"
+			seedWorkflowRunForApproval(t, memory, "default", runName, "wf-error")
+			core, logs := observer.New(zap.ErrorLevel)
+			var storage APIServerStore
+			message := "lookup required approvers failed"
+			if stage == "lookup" {
+				storage = &workflowGetErrorStore{memStore: memory, err: failure}
+			} else {
+				storage = &errStore{memStore: memory, updateErr: failure}
+				message = "update workflowrun for approval failed"
+			}
+			server := New(Config{Addr: ":0"}, storage, zap.New(core))
+			response := doReq(t, server, http.MethodPost,
+				"/apis/kognition.dev/v1alpha1/namespaces/default/workflowruns/"+runName+"/approval",
+				map[string]any{"step": "execute", "decision": "approve"})
+			if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), secret) {
+				t.Fatalf("approval failure response changed: %d %s", response.Code, response.Body.String())
+			}
+			raw, err := memory.Get(context.Background(), "WorkflowRun", "default", runName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var run map[string]any
+			if err := json.Unmarshal(raw, &run); err != nil {
+				t.Fatal(err)
+			}
+			if annotations, ok := run["metadata"].(map[string]any)["annotations"].(map[string]any); ok && annotations[workflowApprovedStepsAnnotation] != nil {
+				t.Fatal("failed approval persisted an approved step")
+			}
+			entries := logs.FilterMessage(message).All()
+			if len(entries) != 1 {
+				t.Fatalf("failure log count = %d, want 1", len(entries))
+			}
+			fields := entries[0].ContextMap()
+			if fields["namespace"] != "default" || fields["workflowrun"] != runName {
+				t.Fatalf("missing correlation fields: %v", fields)
+			}
+			if _, exists := fields["error"]; exists {
+				t.Fatal("raw approval error field was logged")
+			}
+			for _, entry := range logs.All() {
+				if strings.Contains(entry.Message, secret) || strings.Contains(fmt.Sprint(entry.ContextMap()), secret) {
+					t.Fatalf("sensitive content reached log %q", entry.Message)
+				}
 			}
 		})
 	}

@@ -7,11 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/k8s/dispatcher"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -97,6 +100,7 @@ func TestAgentRuntimeStatusRefreshesWhenProvisioningFails(t *testing.T) {
 		ObjectMeta: api.ObjectMeta{Namespace: "work", Name: "worker", UID: "worker-uid"},
 		Spec:       api.AgentSpec{ModelRef: api.LocalObjectReference{Name: "chat"}, Replicas: &replicas},
 	}
+
 	model := &api.Model{Spec: api.ModelSpec{Provider: "openai", ModelID: "chat"}}
 	for key, object := range map[string]any{"Agent/work/worker": agent, "Model/work/chat": model} {
 		data, err := json.Marshal(object)
@@ -160,5 +164,121 @@ func TestAgentRuntimeStatusRefreshesWhenProvisioningFails(t *testing.T) {
 	}
 	if got := reconcileReady(); got != "0/2" {
 		t.Fatalf("ready after failed recreation = %v, want 0/2 instead of a stale 2/2", got)
+	}
+}
+
+func TestAgentRuntimeWarningsDoNotLogSensitiveErrors(t *testing.T) {
+	const secret = "synthetic-kubernetes-credential-do-not-log"
+	failure := fmt.Errorf("remote API rejected request: %w", errors.Join(errors.New(secret), errors.New("backend response")))
+	st := newFakeStore()
+	replicas := int32(1)
+	agent := &api.Agent{
+		TypeMeta:   api.TypeMeta{APIVersion: api.APIVersion, Kind: "Agent"},
+		ObjectMeta: api.ObjectMeta{Namespace: "work", Name: "worker", UID: "worker-uid"},
+		Spec:       api.AgentSpec{ModelRef: api.LocalObjectReference{Name: "chat"}, Replicas: &replicas},
+	}
+	model := &api.Model{Spec: api.ModelSpec{Provider: "openai", ModelID: "chat"}}
+	for key, object := range map[string]any{"Agent/work/worker": agent, "Model/work/chat": model} {
+		data, err := json.Marshal(object)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st.getData[key] = data
+	}
+	admin := fake.NewClientBuilder().WithScheme(SetupScheme()).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*appsv1.Deployment); ok {
+					return failure
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	core, logs := observer.New(zap.WarnLevel)
+	logger := zap.New(core)
+	runtime := dispatcher.NewK8sDispatcher(admin, st, logger, dispatcher.Config{AgentImage: "runtime:v1"})
+	adapter := NewAgentReconcilerAdapter(st, runtime, logger)
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "work", Name: "worker"}}
+	if _, err := adapter.Reconcile(context.Background(), request); err != nil {
+		t.Fatalf("runtime warning changed reconciliation behavior: %v", err)
+	}
+	assertAgentRuntimeWarningLogs(t, logs, request, secret, "failed to ensure agent runtime", "failed to refresh agent runtime status")
+}
+
+type runtimeRefreshFailureStore struct {
+	*fakeStore
+	getCount int
+	failure  error
+}
+
+func (s *runtimeRefreshFailureStore) Get(ctx context.Context, kind, namespace, name string) ([]byte, error) {
+	s.getCount++
+	if s.getCount == 2 && s.failure != nil {
+		return nil, s.failure
+	}
+	return s.fakeStore.Get(ctx, kind, namespace, name)
+}
+
+func TestAgentRuntimeLookupAndOwnerAnnotationWarningsDoNotLogSensitiveErrors(t *testing.T) {
+	const secret = "synthetic-kubernetes-credential-do-not-log"
+	failure := fmt.Errorf("remote API response: %w", errors.New(secret))
+	for _, stage := range []string{"lookup", "owner-annotations"} {
+		t.Run(stage, func(t *testing.T) {
+			st := &runtimeRefreshFailureStore{fakeStore: newFakeStore()}
+			message := "failed to ensure owner annotations"
+			if stage == "lookup" {
+				st.failure = failure
+				message = "failed to load agent for runtime refresh"
+			}
+			deploymentCalls := 0
+			admin := fake.NewClientBuilder().WithScheme(SetupScheme()).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(_ context.Context, _ client.WithWatch, _ client.ObjectKey, object client.Object, _ ...client.GetOption) error {
+						if _, ok := object.(*appsv1.Deployment); !ok {
+							t.Errorf("unexpected runtime lookup: %T", object)
+						}
+						deploymentCalls++
+						return failure
+					},
+				}).Build()
+			core, logs := observer.New(zap.WarnLevel)
+			logger := zap.New(core)
+			runtime := dispatcher.NewK8sDispatcher(admin, st, logger, dispatcher.Config{AgentImage: "runtime:v1"})
+			adapter := NewAgentReconcilerAdapter(st, runtime, logger)
+			request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "work", Name: "worker"}}
+			if _, err := adapter.Reconcile(context.Background(), request); err != nil {
+				t.Fatalf("runtime warning changed reconciliation behavior: %v", err)
+			}
+			wantDeploymentCalls := 1
+			if stage == "lookup" {
+				wantDeploymentCalls = 0
+			}
+			if st.getCount != 2 || deploymentCalls != wantDeploymentCalls {
+				t.Fatalf("runtime refresh calls changed: gets=%d deployment gets=%d, want gets=2 deployment gets=%d", st.getCount, deploymentCalls, wantDeploymentCalls)
+			}
+			assertAgentRuntimeWarningLogs(t, logs, request, secret, message)
+		})
+	}
+}
+
+func assertAgentRuntimeWarningLogs(t *testing.T, logs *observer.ObservedLogs, request ctrl.Request, secret string, messages ...string) {
+	t.Helper()
+	for _, message := range messages {
+		entries := logs.FilterMessage(message).All()
+		if len(entries) != 1 {
+			t.Fatalf("warning %q count = %d, want 1", message, len(entries))
+		}
+		fields := entries[0].ContextMap()
+		if fields["namespace"] != request.Namespace || fields["agent"] != request.Name || fields["requestUID"] == nil || fields["requestUID"] == "" {
+			t.Fatalf("missing warning correlation fields: %v", fields)
+		}
+		if _, exists := fields["error"]; exists {
+			t.Fatal("raw runtime error field was logged")
+		}
+	}
+	for _, entry := range logs.All() {
+		if strings.Contains(entry.Message, secret) || strings.Contains(fmt.Sprint(entry.ContextMap()), secret) {
+			t.Fatalf("sensitive runtime content reached logs: %s", entry.Message)
+		}
 	}
 }

@@ -151,7 +151,7 @@ func (r *SolutionReconciler) reconcilePromotionGates(ctx context.Context, soluti
 		if err != nil {
 			return false, "", "", fmt.Errorf("identify promotion EvaluationRun for %q: %w", name, err)
 		}
-		runRaw, err := r.store.Get(ctx, evaluationRunKind, solution.ObjectMeta.Namespace, runName)
+		run, err := r.getSolutionPromotionRun(ctx, solution, &evaluation, revision, runName)
 		if errors.Is(err, store.ErrNotFound) {
 			if err := r.createSolutionPromotionRun(ctx, solution, &evaluation, revision, runName); err != nil {
 				return false, "", "", fmt.Errorf("create promotion EvaluationRun %q: %w", runName, err)
@@ -162,10 +162,7 @@ func (r *SolutionReconciler) reconcilePromotionGates(ctx context.Context, soluti
 		if err != nil {
 			return false, "", "", fmt.Errorf("get promotion EvaluationRun %q: %w", runName, err)
 		}
-		var run v1alpha1.EvaluationRun
-		if err := json.Unmarshal(runRaw, &run); err != nil {
-			return false, "", "", fmt.Errorf("unmarshal promotion EvaluationRun %q: %w", runName, err)
-		}
+		runName = run.Name
 		if run.Status.Phase == v1alpha1.PhaseReady && run.Status.Passed && !run.Status.Degraded {
 			continue
 		}
@@ -197,12 +194,7 @@ func (r *SolutionReconciler) createSolutionPromotionRun(ctx context.Context, sol
 			Labels:          map[string]string{"kognition.dev/solution": solution.ObjectMeta.Name, "kognition.dev/evaluation": evaluation.ObjectMeta.Name},
 			OwnerReferences: []v1alpha1.OwnerReference{{APIVersion: v1alpha1.APIVersion, Kind: solutionKind, Name: solution.ObjectMeta.Name, UID: solution.ObjectMeta.UID}},
 		},
-		Spec: v1alpha1.EvaluationRunSpec{
-			EvaluationRef: v1alpha1.LocalObjectReference{Name: evaluation.ObjectMeta.Name},
-			TargetRef:     v1alpha1.EvaluationTargetRef{Kind: solutionKind, Name: solution.ObjectMeta.Name, Revision: &revision},
-			DatasetRef:    evaluation.Spec.DatasetRef, Graders: cloneEvaluationGraders(evaluation.Spec.Graders),
-			MetricThresholds: cloneEvaluationMetricThresholds(evaluation.Spec.MetricThresholds),
-		},
+		Spec:   evaluationRunSpecSnapshot(evaluation, v1alpha1.EvaluationTargetRef{Kind: solutionKind, Name: solution.Name, Revision: &revision}),
 		Status: v1alpha1.EvaluationRunStatus{Phase: v1alpha1.PhasePending},
 	}
 	data, err := json.Marshal(run)
@@ -221,7 +213,47 @@ func solutionPromotionRunName(solution string, revision int64, evaluation *v1alp
 		return "", err
 	}
 	digest := sha256.Sum256(spec)
-	return boundedResourceName(fmt.Sprintf("%s-r%d-%s-%s", solution, revision, evaluation.ObjectMeta.Name, hex.EncodeToString(digest[:])[:8])), nil
+	return boundedResourceName(solutionPromotionRunPrefix(solution, revision, evaluation.Name) + hex.EncodeToString(digest[:])[:8]), nil
+}
+
+func solutionPromotionRunPrefix(solution string, revision int64, evaluation string) string {
+	return fmt.Sprintf("%s-r%d-%s-", solution, revision, evaluation)
+}
+
+func (r *SolutionReconciler) getSolutionPromotionRun(ctx context.Context, solution *v1alpha1.Solution, evaluation *v1alpha1.Evaluation, revision int64, name string) (*v1alpha1.EvaluationRun, error) {
+	run, err := readEvaluationRun(ctx, r.store, solution.Namespace, name)
+	if !errors.Is(err, store.ErrNotFound) || len(solutionPromotionRunPrefix(solution.Name, revision, evaluation.Name))+8 <= 63 {
+		return run, err
+	}
+	items, err := r.store.List(ctx, evaluationRunKind, store.ListOptions{
+		Namespace: solution.Namespace,
+		LabelSelector: map[string]string{
+			"kognition.dev/solution": solution.Name, "kognition.dev/evaluation": evaluation.Name,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list existing promotion EvaluationRuns: %w", err)
+	}
+	spec := evaluationRunSpecSnapshot(evaluation, v1alpha1.EvaluationTargetRef{Kind: solutionKind, Name: solution.Name, Revision: &revision})
+	var existing *v1alpha1.EvaluationRun
+	for _, item := range items {
+		var candidate v1alpha1.EvaluationRun
+		if err := json.Unmarshal(item, &candidate); err != nil {
+			return nil, fmt.Errorf("unmarshal existing promotion EvaluationRun: %w", err)
+		}
+		if !alternateBoundedResourceName(candidate.Name, name) ||
+			!evaluationRunMatchesSnapshot(&candidate, solutionKind, solution.ObjectMeta, spec) {
+			continue
+		}
+		if existing != nil {
+			return nil, fmt.Errorf("multiple existing promotion EvaluationRuns match Solution %q revision %d and Evaluation %q", solution.Name, revision, evaluation.Name)
+		}
+		existing = &candidate
+	}
+	if existing != nil {
+		return existing, nil
+	}
+	return nil, store.ErrNotFound
 }
 
 func (r *SolutionReconciler) updatePromotionBlockedStatus(ctx context.Context, solution *v1alpha1.Solution, originalStatus v1alpha1.SolutionStatus, originalFinalizers []string, revision int64, reason, message string) (Result, error) {

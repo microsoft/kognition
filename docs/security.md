@@ -26,6 +26,41 @@ authentication, RBAC, TLS, and audit apply. The controls in the "API
 authentication" and "TLS" sections below are specific to **standalone mode**.
 Network, pod-hardening, PDB, and provider-auth controls apply to both.
 
+### Failure-log confidentiality
+
+Tool Gateway invocation-failure logs retain namespace, Agent, Tool and invocation
+identifiers, but omit raw backend errors. Agent runtime-refresh warnings retain
+the failure stage in their message plus namespace, Agent and request UID, without
+logging raw provisioning, observation or status-update errors. Remote diagnostics
+can contain credentials even when truncated; do not add their free-form messages
+back to these logs. HTTP error behavior and reconciliation outcomes are unchanged.
+
+Workflow approval lookup/update failures, controller retry warnings, index-run
+reflection update failures, expired-lease takeover failures, Agent KB/Tool
+condition-update failures and restart-ladder action failures also omit raw error
+content. Their messages identify the failure stage and retain resource, retry,
+lease or action metadata where applicable. Workflow tool-invocation warnings
+retain namespace, principal and Tool identifiers while returning the original
+error to the caller. Retries, quorum rules, leadership decisions and readiness
+updates retain their existing behavior.
+
+Resource-update, finalizer-deletion update and MemoryRecord right-to-be-forgotten
+failure logs retain kind, namespace, resource name and request UID when present,
+but omit raw storage and cascade errors. Their existing HTTP error responses and
+conflict handling are unchanged.
+
+### Endpoint and probe-state handling
+
+The Python OpenAI-compatible provider adds `api-version` only when the parsed
+endpoint hostname is `azure.com` or a subdomain of it. Azure-like text in URL
+paths, queries, fragments or credentials does not classify a host as Azure.
+This classification is not an outbound-access allowlist.
+
+Tool health-probe counter annotations are parsed with signed 32-bit bounds.
+Missing, malformed or out-of-range annotations retain the existing zero fallback;
+consecutive probe counters saturate at the maximum value instead of wrapping,
+so failure and recovery thresholds remain effective.
+
 ### Guarded Kubernetes Installation
 
 For a new release, the [fresh installer](getting-started/kubernetes.md) verifies

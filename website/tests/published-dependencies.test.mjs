@@ -123,6 +123,21 @@ test('inline executable scripts need chunk or renderer-package evidence and are 
   }
 });
 
+test('package script extraction follows HTML parsing for closing tags, attributes and comments', (t) => {
+  const { root, directory, inputs } = fixture(t);
+  const authored = path.join(root, 'node_modules', '@astrojs', 'starlight', 'components');
+  mkdirSync(authored, { recursive: true });
+  const body = 'window.theme = () => "a > b";';
+  for (const closingTag of ['</script>', '</script >', '</script\t>', '</script\n>', '</SCRIPT >']) {
+    writeFileSync(path.join(authored, 'Theme.astro'), `<script is:inline data-example="a > b">${body}${closingTag}`);
+    writeFileSync(path.join(directory, 'index.html'), `<script>${body}</script>`);
+    const evidence = createPublishedManifest(inputs);
+    assert(evidence.files.find((file) => file.path === 'index.html').packages.includes('node_modules/@astrojs/starlight'));
+  }
+  writeFileSync(path.join(authored, 'Theme.astro'), `<!-- <script>${body}</script> --><script>window.theme = () => 1;</script>`);
+  assert.throws(() => createPublishedManifest(inputs), /Inline executable script has no source-package evidence/);
+});
+
 test('inline code that differs from provider code only inside a string literal is not attributed to the provider', (t) => {
   const { root, directory, inputs } = fixture(t);
   const authored = path.join(root, 'node_modules', '@astrojs', 'starlight', 'components');

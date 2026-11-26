@@ -221,14 +221,13 @@ func (i *defaultWorkflowToolInvoker) endToolSpan(ctx context.Context, span *obse
 	}
 }
 
-// logAndReturn records the invocation error at Warn level so the failure is
+// logAndReturn records the invocation failure without raw error content so it is
 // observable even when the reconciler's event stream is a no-op (K8s mode).
 func (i *defaultWorkflowToolInvoker) logAndReturn(namespace, principal, toolName string, err error) error {
 	i.logger.Warn("tool invocation failed",
 		zap.String("namespace", namespace),
 		zap.String("principal", principal),
 		zap.String("tool", toolName),
-		zap.Error(err),
 	)
 	return err
 }

@@ -17,6 +17,28 @@ type usageEventWriterStub struct {
 	err     error
 }
 
+func TestWithTokenTypePreservesInputLabels(t *testing.T) {
+	for _, labels := range []prometheus.Labels{nil, {}, {"agent": "planner", "token_type": "old"}} {
+		got := withTokenType(labels, "prompt")
+		wantLen := len(labels)
+		if _, exists := labels["token_type"]; !exists {
+			wantLen++
+		}
+		if got["token_type"] != "prompt" || len(got) != wantLen {
+			t.Fatalf("token labels = %v, input = %v", got, labels)
+		}
+		if labels != nil {
+			if got["agent"] != labels["agent"] {
+				t.Fatalf("agent label lost: %v", got)
+			}
+			got["agent"] = "changed"
+			if labels["agent"] == "changed" || labels["token_type"] == "prompt" {
+				t.Fatalf("input labels were mutated: %v", labels)
+			}
+		}
+	}
+}
+
 func (s *usageEventWriterStub) ApplyUsageEvent(context.Context, CostRecord) (bool, error) {
 	return s.applied, s.err
 }

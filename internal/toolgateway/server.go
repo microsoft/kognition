@@ -121,7 +121,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		ToolName: claims.ToolName, ToolResourceVersion: claims.ToolResourceVersion, CapabilityIssued: true, CapabilityID: claims.ID, InvocationID: claims.InvocationID, Input: body.Input,
 	})
 	if err != nil {
-		s.logger.Info("tool invocation failed", zap.String("namespace", claims.Namespace), zap.String("agent", claims.AgentName), zap.String("tool", claims.ToolName), zap.String("invocation", claims.InvocationID), zap.Error(err))
+		s.logger.Info("tool invocation failed", zap.String("namespace", claims.Namespace), zap.String("agent", claims.AgentName), zap.String("tool", claims.ToolName), zap.String("invocation", claims.InvocationID))
 		s.writeInvocationError(writer, response, err)
 		return
 	}
