@@ -50,6 +50,9 @@ func NewEmbeddingExecutor(storage store.Store, authorizer ModelAccessAuthorizer,
 	if server.drivers == nil || server.quota == nil || server.audit == nil || server.tracer == nil {
 		return nil, errors.New("query embedding requires registered adapters, quota enforcement, audit and usage tracing")
 	}
+	if server.recorder != nil {
+		server.drivers.Observe(server.recorder)
+	}
 	return &EmbeddingExecutor{server: server}, nil
 }
 
