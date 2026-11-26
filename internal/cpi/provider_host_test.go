@@ -191,12 +191,17 @@ func waitForProviderAbsent(t *testing.T, host *ProviderHost, socketPath string, 
 	t.Fatal("failed provider connection was not released for retry")
 }
 
-// providerHostWait bounds every wait for the provider host. It covers a whole
-// registration (a dial and three RPCs, each bounded by the host timeouts of a few
-// seconds), because a wait shorter than the host's own bounds fails a test that
-// the host is still about to satisfy. A test returns as soon as its condition
-// holds, so the bound only matters on a slow or loaded machine.
-const providerHostWait = 20 * time.Second
+// providerHostWait bounds every wait for the provider host. A registration is a
+// dial plus three RPCs, each with its own host deadline, so the longest valid
+// one under DefaultProviderHostConfig (the most generous config these tests use)
+// is ConnectTimeout + 3*HealthCheckTimeout. The bound adds scheduling margin on
+// top, because a wait shorter than the host's own deadlines fails a test the host
+// is still about to satisfy. A test returns as soon as its condition holds, so
+// the bound only matters on a slow or loaded machine.
+var providerHostWait = func() time.Duration {
+	cfg := DefaultProviderHostConfig()
+	return cfg.ConnectTimeout + 3*cfg.HealthCheckTimeout + 15*time.Second
+}()
 
 // waitForProviderState polls until ready reports true for the provider on
 // socketPath and returns that entry. The host lists a provider as soon as its
