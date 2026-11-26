@@ -381,7 +381,7 @@ func TestDefaultWorkflowToolInvokerPreservesExecutionError(t *testing.T) {
 			executor := &workflowRecordingExecutor{err: executionErr}
 			invoker := NewDefaultWorkflowToolInvoker(memoryStore, nil, runtime.NewToolDispatcher(executor, nil), zap.New(core))
 			output, err := invoker.InvokeTool(context.Background(), "tenant-a", "workflow:nightly", "http-get", nil)
-			if err != executionErr || output != nil || executor.calls != 1 {
+			if !errors.Is(err, executionErr) || output != nil || executor.calls != 1 {
 				t.Fatalf("original execution error or dispatch behavior changed: error=%v output=%v calls=%d", err, output, executor.calls)
 			}
 			assertConfidentialFailureLog(t, logs, "tool invocation failed", map[string]any{

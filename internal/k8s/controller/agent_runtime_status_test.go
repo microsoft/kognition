@@ -202,7 +202,68 @@ func TestAgentRuntimeWarningsDoNotLogSensitiveErrors(t *testing.T) {
 	if _, err := adapter.Reconcile(context.Background(), request); err != nil {
 		t.Fatalf("runtime warning changed reconciliation behavior: %v", err)
 	}
-	for _, message := range []string{"failed to ensure agent runtime", "failed to refresh agent runtime status"} {
+	assertAgentRuntimeWarningLogs(t, logs, request, secret, "failed to ensure agent runtime", "failed to refresh agent runtime status")
+}
+
+type runtimeRefreshFailureStore struct {
+	*fakeStore
+	getCount int
+	failure  error
+}
+
+func (s *runtimeRefreshFailureStore) Get(ctx context.Context, kind, namespace, name string) ([]byte, error) {
+	s.getCount++
+	if s.getCount == 2 && s.failure != nil {
+		return nil, s.failure
+	}
+	return s.fakeStore.Get(ctx, kind, namespace, name)
+}
+
+func TestAgentRuntimeLookupAndOwnerAnnotationWarningsDoNotLogSensitiveErrors(t *testing.T) {
+	const secret = "synthetic-kubernetes-credential-do-not-log"
+	failure := fmt.Errorf("remote API response: %w", errors.New(secret))
+	for _, stage := range []string{"lookup", "owner-annotations"} {
+		t.Run(stage, func(t *testing.T) {
+			st := &runtimeRefreshFailureStore{fakeStore: newFakeStore()}
+			message := "failed to ensure owner annotations"
+			if stage == "lookup" {
+				st.failure = failure
+				message = "failed to load agent for runtime refresh"
+			}
+			deploymentCalls := 0
+			admin := fake.NewClientBuilder().WithScheme(SetupScheme()).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(_ context.Context, _ client.WithWatch, _ client.ObjectKey, object client.Object, _ ...client.GetOption) error {
+						if _, ok := object.(*appsv1.Deployment); !ok {
+							t.Errorf("unexpected runtime lookup: %T", object)
+						}
+						deploymentCalls++
+						return failure
+					},
+				}).Build()
+			core, logs := observer.New(zap.WarnLevel)
+			logger := zap.New(core)
+			runtime := dispatcher.NewK8sDispatcher(admin, st, logger, dispatcher.Config{AgentImage: "runtime:v1"})
+			adapter := NewAgentReconcilerAdapter(st, runtime, logger)
+			request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "work", Name: "worker"}}
+			if _, err := adapter.Reconcile(context.Background(), request); err != nil {
+				t.Fatalf("runtime warning changed reconciliation behavior: %v", err)
+			}
+			wantDeploymentCalls := 1
+			if stage == "lookup" {
+				wantDeploymentCalls = 0
+			}
+			if st.getCount != 2 || deploymentCalls != wantDeploymentCalls {
+				t.Fatalf("runtime refresh calls changed: gets=%d deployment gets=%d, want gets=2 deployment gets=%d", st.getCount, deploymentCalls, wantDeploymentCalls)
+			}
+			assertAgentRuntimeWarningLogs(t, logs, request, secret, message)
+		})
+	}
+}
+
+func assertAgentRuntimeWarningLogs(t *testing.T, logs *observer.ObservedLogs, request ctrl.Request, secret string, messages ...string) {
+	t.Helper()
+	for _, message := range messages {
 		entries := logs.FilterMessage(message).All()
 		if len(entries) != 1 {
 			t.Fatalf("warning %q count = %d, want 1", message, len(entries))
