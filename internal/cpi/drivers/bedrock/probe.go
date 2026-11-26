@@ -17,7 +17,8 @@ const (
 
 // classifyProbeResponse maps a Converse probe response to an unhealthy reason and
 // message. It returns an empty reason when the endpoint is alive: any 2xx, or a
-// 400 ValidationException that does not reject the model itself.
+// 400 ValidationException that does not reject the model itself. A 429
+// ModelNotReadyException reports ModelUnavailable rather than RateLimited.
 func classifyProbeResponse(status int, header http.Header, body []byte) (reason, message string) {
 	switch {
 	case status >= 200 && status < 300:
@@ -30,6 +31,13 @@ func classifyProbeResponse(status int, header http.Header, body []byte) (reason,
 	case status == http.StatusUnauthorized, status == http.StatusForbidden:
 		return "AuthenticationFailed", fmt.Sprintf("HTTP %d from Bedrock", status)
 	case status == http.StatusTooManyRequests:
+		errorType, _, _ := strings.Cut(header.Get("X-Amzn-Errortype"), ":")
+		if _, name, ok := strings.Cut(errorType, "#"); ok {
+			errorType = name
+		}
+		if errorType == "ModelNotReadyException" {
+			return "ModelUnavailable", fmt.Sprintf("HTTP %d from Bedrock: model is not ready to serve inference requests", status)
+		}
 		message = fmt.Sprintf("HTTP %d from Bedrock: throttled", status)
 		if retryAfter := header.Get("Retry-After"); retryAfter != "" {
 			message += fmt.Sprintf(" (Retry-After: %s)", retryAfter)
