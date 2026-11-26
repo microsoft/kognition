@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
+	"github.com/kognition-ai/kognition/internal/cpi"
 	"github.com/kognition-ai/kognition/internal/k8s/knowledge"
 	"github.com/kognition-ai/kognition/internal/modelinvocation"
 	"github.com/kognition-ai/kognition/internal/observability"
@@ -35,7 +36,7 @@ type queryEmbeddingFixture struct {
 	dimensions int
 }
 
-func newQueryEmbeddingFixture(t *testing.T) *queryEmbeddingFixture {
+func newQueryEmbeddingFixture(t *testing.T, extra ...Option) *queryEmbeddingFixture {
 	t.Helper()
 	_, storage, authorizer, _, _, _ := fixture(t)
 	result := &queryEmbeddingFixture{storage: storage, authorizer: authorizer, quota: &recordingModelQuota{}, audit: &modelAuditStore{}, dimensions: 3}
@@ -95,7 +96,8 @@ func newQueryEmbeddingFixture(t *testing.T) *queryEmbeddingFixture {
 	result.binding = &knowledge.ResolvedBinding{ProviderName: "pgvector", Scope: scope, EmbeddingDimension: 3}
 	tracer := observability.NewTracer(observability.TracerConfig{SampleRate: 1})
 	tracer.SetFallibleCostSink(func(observability.CostRecord) error { return nil })
-	result.executor, err = NewEmbeddingExecutor(storage, authorizer, upstream.Client(), zap.NewNop(), WithQuotaChecker(result.quota), WithAuditLog(observability.NewCognitiveAuditLog(result.audit)), WithObservability(tracer, nil))
+	options := append([]Option{WithQuotaChecker(result.quota), WithAuditLog(observability.NewCognitiveAuditLog(result.audit)), WithObservability(tracer, nil)}, extra...)
+	result.executor, err = NewEmbeddingExecutor(storage, authorizer, upstream.Client(), zap.NewNop(), options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +117,20 @@ func TestQueryEmbeddingUsesSharedContractsAndServerCredentials(t *testing.T) {
 	}
 	if _, err := f.executor.server.core.Authorize(context.Background(), "team-a", "planner", "embedding-model"); err == nil {
 		t.Fatal("embedding authorization weakened chat Model assignment")
+	}
+}
+
+func TestQueryEmbeddingReportsProviderCallsToTheConfiguredRecorder(t *testing.T) {
+	recorder := &recordedCalls{}
+	f := newQueryEmbeddingFixture(t, WithCallRecorder(recorder))
+	if _, err := f.executor.EmbedQuery(context.Background(), f.claims, "docs", f.binding, "regions", "query-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.outcomes) != 1 {
+		t.Fatalf("recorded %d outcomes, want 1: %+v", len(recorder.outcomes), recorder.outcomes)
+	}
+	if got := recorder.outcomes[0]; got.Operation != cpi.OperationEmbed || got.Model != "opaque-embedding-deployment" || !got.Succeeded() {
+		t.Fatalf("outcome = %+v, want a successful embed call", got)
 	}
 }
 

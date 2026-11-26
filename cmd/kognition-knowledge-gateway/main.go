@@ -203,7 +203,8 @@ func run(logger *zap.Logger) error {
 	})
 	audit := observability.NewCognitiveAuditLog(observability.NewTrustDecisionMetrics(ctrlmetrics.Registry).Wrap(backend.Audit))
 	embedder, err := modelgateway.NewEmbeddingExecutor(backend.Store, policies, &http.Client{}, logger,
-		modelgateway.WithQuotaChecker(quota), modelgateway.WithAuditLog(audit), modelgateway.WithObservability(tracePipeline.Tracer, tracePipeline.Collector))
+		modelgateway.WithQuotaChecker(quota), modelgateway.WithAuditLog(audit), modelgateway.WithObservability(tracePipeline.Tracer, tracePipeline.Collector),
+		modelgateway.WithCallRecorder(observability.NewCPICallMetrics(ctrlmetrics.Registry)))
 	if err != nil {
 		return fmt.Errorf("configure governed query embedding: %w", err)
 	}

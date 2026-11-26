@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -53,6 +54,7 @@ type Server struct {
 	quota     ModelQuotaChecker
 	audit     *observability.CognitiveAuditLog
 	drivers   *cpi.Registry
+	recorder  cpi.CallRecorder
 }
 
 // Option configures optional Model Gateway dependencies.
@@ -61,6 +63,13 @@ type Option func(*Server)
 // WithCPIRegistry uses administrator-registered adapters rather than a new discovery mechanism.
 func WithCPIRegistry(registry *cpi.Registry) Option {
 	return func(server *Server) { server.drivers = registry }
+}
+
+// WithCallRecorder reports the outcome of every provider call made through the
+// gateway's CPI registry. Observation applies to the registry in use after all
+// options are applied, so it also covers a registry supplied by WithCPIRegistry.
+func WithCallRecorder(recorder cpi.CallRecorder) Option {
+	return func(server *Server) { server.recorder = recorder }
 }
 
 // WithObservability emits model-inference spans after the gateway verifies a
@@ -119,6 +128,9 @@ func newServer(store store.Store, issuer *runtimeauth.ModelSessionCapabilityIssu
 	}
 	if server.drivers == nil {
 		return nil, errors.New("model gateway CPI registry is required")
+	}
+	if server.recorder != nil {
+		server.drivers.Observe(server.recorder)
 	}
 	return server, nil
 }
@@ -399,18 +411,25 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, mode
 			request.Header.Set(header, value)
 		}
 	}
+	start := time.Now()
 	response, err := s.client.Do(request)
 	if err != nil {
+		s.recordCall(auth.Provider, model.Spec.ModelID, start, err)
 		writeError(w, http.StatusBadGateway, "model provider is unavailable")
 		return cpi.Usage{}, nil, "", err
 	}
 	defer func() { _ = response.Body.Close() }()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxRequestBytes+1))
 	if err != nil || len(responseBody) > maxRequestBytes {
+		if err == nil {
+			err = errors.New("model provider response is too large")
+		}
+		s.recordCall(auth.Provider, model.Spec.ModelID, start, err)
 		writeError(w, http.StatusBadGateway, "model provider response is unavailable")
 		return cpi.Usage{}, nil, "", errors.New("read model provider response")
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		s.recordCall(auth.Provider, model.Spec.ModelID, start, &cpi.ProviderError{Provider: auth.Provider, Status: response.StatusCode, Reason: cpi.ClassifyStatus(response.StatusCode)})
 		if response.StatusCode >= http.StatusInternalServerError {
 			writeError(w, http.StatusBadGateway, "model provider is unavailable")
 			return cpi.Usage{}, nil, "", fmt.Errorf("model provider returned %s", response.Status)
@@ -424,10 +443,25 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, mode
 	}
 	usage, reported := completionUsage(responseBody)
 	if !reported {
-		writeError(w, http.StatusBadGateway, "model provider response omitted token usage")
-		return cpi.Usage{}, nil, "", errors.New("model provider response omitted token usage")
+		err := errors.New("model provider response omitted token usage")
+		s.recordCall(auth.Provider, model.Spec.ModelID, start, err)
+		writeError(w, http.StatusBadGateway, err.Error())
+		return cpi.Usage{}, nil, "", err
 	}
+	s.recordCall(auth.Provider, model.Spec.ModelID, start, nil)
 	return usage, responseBody, contentType, nil
+}
+
+// recordCall reports a direct provider call; calls through the CPI registry are recorded by the observed drivers.
+func (s *Server) recordCall(provider, model string, start time.Time, err error) {
+	if s.recorder == nil {
+		return
+	}
+	outcome := cpi.CallOutcome{Provider: provider, Operation: cpi.OperationComplete, Model: model, Duration: time.Since(start)}
+	if err != nil {
+		outcome.Reason, outcome.ProviderFault = cpi.ClassifyCallError(err)
+	}
+	s.recorder.RecordCall(outcome)
 }
 
 func (s *Server) startModelSpan(ctx context.Context, claims *runtimeauth.ModelSessionCapabilityClaims, agentIdentity string, authorized *AuthorizedModel, provider string) *observability.Span {
