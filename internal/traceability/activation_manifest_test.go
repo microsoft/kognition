@@ -44,25 +44,59 @@ func encodeActivationDocuments(test *testing.T, objects []*unstructured.Unstruct
 
 func TestActivationRejectsUnsafeManifest(test *testing.T) {
 	original := activationDocuments(test)
-	for _, kind := range []string{"ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"} {
-		test.Run("model-dispatch/"+kind, func(test *testing.T) {
-			objects := copyActivationDocuments(original)
-			removed := false
-			for index, object := range objects {
-				if object.GetKind() == kind && strings.HasSuffix(object.GetName(), "-model-dispatch") {
-					objects = append(objects[:index], objects[index+1:]...)
-					removed = true
-					break
+	for _, protection := range []string{"model-dispatch", "model-call-health"} {
+		for _, kind := range []string{"ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"} {
+			test.Run(protection+"/"+kind, func(test *testing.T) {
+				objects := copyActivationDocuments(original)
+				removed := false
+				for index, object := range objects {
+					if object.GetKind() == kind && strings.HasSuffix(object.GetName(), "-"+protection) {
+						objects = append(objects[:index], objects[index+1:]...)
+						removed = true
+						break
+					}
 				}
-			}
-			if !removed {
-				test.Fatal("canary receipt protection missing from rendered chart")
-			}
-			if _, err := activation.Parse(strings.NewReader(encodeActivationDocuments(test, objects))); err == nil {
-				test.Fatal("activation accepted an omitted canary receipt protection")
-			}
-		})
+				if !removed {
+					test.Fatalf("%s protection missing from rendered chart", protection)
+				}
+				if _, err := activation.Parse(strings.NewReader(encodeActivationDocuments(test, objects))); err == nil {
+					test.Fatalf("activation accepted omitted %s protection", protection)
+				}
+			})
+		}
 	}
+	test.Run("model-call-health/replacement-pair", func(test *testing.T) {
+		objects := copyActivationDocuments(original)
+		replaced := 0
+		for _, object := range objects {
+			if !strings.HasSuffix(object.GetName(), "-model-call-health") {
+				continue
+			}
+			switch object.GetKind() {
+			case "ValidatingAdmissionPolicy":
+				object.SetName("replacement-policy")
+				if err := unstructured.SetNestedSlice(object.Object, []interface{}{
+					map[string]interface{}{"expression": "true", "reason": "Forbidden"},
+				}, "spec", "validations"); err != nil {
+					test.Fatal(err)
+				}
+				replaced++
+			case "ValidatingAdmissionPolicyBinding":
+				object.SetName("replacement-policy")
+				if err := unstructured.SetNestedField(object.Object, "replacement-policy", "spec", "policyName"); err != nil {
+					test.Fatal(err)
+				}
+				replaced++
+			}
+		}
+		if replaced != 2 {
+			test.Fatalf("replaced %d objects, want one policy and binding pair", replaced)
+		}
+		_, err := activation.Parse(strings.NewReader(encodeActivationDocuments(test, objects)))
+		if err == nil || !strings.Contains(err.Error(), "model call health enforcement is required") {
+			test.Fatalf("want missing model call health enforcement, got %v", err)
+		}
+	})
 	for _, kind := range []string{"ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding"} {
 		test.Run("gateway-leases/"+kind, func(test *testing.T) {
 			objects := copyActivationDocuments(original)

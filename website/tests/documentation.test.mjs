@@ -133,7 +133,7 @@ test('installation entry points stay generic and preserve the selected AKS targe
   const bootstrap = readFileSync(path.join(docsDirectory, 'bootstrapping.md'), 'utf8');
   assert.match(bootstrap, /^### Configure an Azure tenant$/m);
   const verification = readFileSync(path.join(docsDirectory, 'features', 'knowledge-provider-execution', 'bootstrap-verification-contract.md'), 'utf8');
-  assert.match(verification, /Nine policies and nine bindings/);
+  assert.match(verification, /Ten policies and ten bindings/);
 });
 
 test('canonical Markdown links resolve to site routes or repository sources and fail closed', async () => {

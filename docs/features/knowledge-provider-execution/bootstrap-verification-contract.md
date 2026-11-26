@@ -42,7 +42,7 @@ The protected inventory contains exactly:
 
 | Objects | API version | Requirement |
 | --- | --- | --- |
-| Nine policies and nine bindings | `admissionregistration.k8s.io/v1` | Same-name pairs; Fail policies with rules, conditions and Forbidden validations; Deny bindings without narrowed scope or parameters |
+| Ten policies and ten bindings | `admissionregistration.k8s.io/v1` | Same-name pairs; Fail policies with rules, conditions and Forbidden validations; Deny bindings without narrowed scope or parameters |
 | Guard Deployment | `apps/v1` | Independent guard service account; positive replica count |
 | Guard Service and ServiceAccount | `v1` | Exact guard name and installation namespace |
 | Guard webhook configuration | `admissionregistration.k8s.io/v1` | Exact two ordered webhook identities, service target, controller/namespace/name conditions, rules and delivery settings |
@@ -52,6 +52,11 @@ The protected inventory contains exactly:
 | Optional scoped Cilium API egress policy | `cilium.io/v2` | Exact installation release/component selectors; only `host` and `kube-apiserver` on TCP 443/6443 |
 | Optional Cilium node-health ingress policies | `cilium.io/v2` | Known control-plane component selectors; only node/health entities and one TCP port |
 | Optional runtime probe policy | `cilium.io/v2` (`CiliumClusterwideNetworkPolicy`) | Managed runtime selector restricted to enrolled namespaces, node/health entities and TCP 8080; no egress |
+
+The `-state`, `-gateway-leases` and `-model-call-health` policy/binding pairs
+must have the exact installation release and namespace identity. Replacing one
+with an unrelated Fail/Deny pair fails verification even when the total count
+remains ten.
 
 Probe policies set `enableDefaultDeny.ingress` and `enableDefaultDeny.egress`
 to `false`. They add node-health allowances while preserving the default-deny

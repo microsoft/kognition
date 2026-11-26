@@ -109,8 +109,8 @@ func Parse(reader io.Reader) (Manifest, error) {
 			}
 		}
 	}
-	if result.Namespace == "" || result.Controller == "" || result.Controller == "default" || counts["ValidatingAdmissionPolicy"] != 9 || counts["ValidatingAdmissionPolicyBinding"] != 9 || counts["Deployment"] != 1 || counts["Service"] != 1 || counts["ValidatingWebhookConfiguration"] != 1 || len(result.Namespaces) == 0 {
-		return result, errors.New("manifest must contain one controller, one independent guard, nine admission policies and bindings, and dedicated workload baselines")
+	if result.Namespace == "" || result.Controller == "" || result.Controller == "default" || counts["ValidatingAdmissionPolicy"] != 10 || counts["ValidatingAdmissionPolicyBinding"] != 10 || counts["Deployment"] != 1 || counts["Service"] != 1 || counts["ValidatingWebhookConfiguration"] != 1 || len(result.Namespaces) == 0 {
+		return result, errors.New("manifest must contain one controller, one independent guard, ten admission policies and bindings, and dedicated workload baselines")
 	}
 	if result.KnowledgeGateway && (gatewayNamespace != result.Namespace || gatewayName != strings.TrimSuffix(result.Guard, "-admission-guard")+"-knowledge-gateway") {
 		return result, errors.New("Knowledge Gateway must belong to the reviewed installation release")
@@ -408,7 +408,7 @@ func (manifest Manifest) validate() error {
 			bindings[policy] = true
 		}
 	}
-	if counts["ValidatingAdmissionPolicy"] != 9 || counts["ValidatingAdmissionPolicyBinding"] != 9 || counts["Deployment"] != 1 || counts["Service"] != 1 || counts["ServiceAccount"] != 1 || counts["ValidatingWebhookConfiguration"] != 1 || counts["NetworkPolicy"] != len(manifest.Namespaces) || counts["Role"] != len(manifest.Namespaces) || counts["RoleBinding"] != len(manifest.Namespaces) {
+	if counts["ValidatingAdmissionPolicy"] != 10 || counts["ValidatingAdmissionPolicyBinding"] != 10 || counts["Deployment"] != 1 || counts["Service"] != 1 || counts["ServiceAccount"] != 1 || counts["ValidatingWebhookConfiguration"] != 1 || counts["NetworkPolicy"] != len(manifest.Namespaces) || counts["Role"] != len(manifest.Namespaces) || counts["RoleBinding"] != len(manifest.Namespaces) {
 		return errors.New("incomplete bootstrap policy and guard inventory")
 	}
 	switch manifest.StdioIsolationProfile {
@@ -433,6 +433,10 @@ func (manifest Manifest) validate() error {
 	statePolicy := strings.TrimSuffix(manifest.Deployment, "-k8s-controller") + "-" + manifest.Namespace + "-state"
 	if !policies[statePolicy] || !bindings[statePolicy] {
 		return errors.New("installation state enforcement is required for activation")
+	}
+	modelCallHealthPolicy := strings.TrimSuffix(manifest.Deployment, "-k8s-controller") + "-" + manifest.Namespace + "-model-call-health"
+	if !policies[modelCallHealthPolicy] || !bindings[modelCallHealthPolicy] {
+		return errors.New("model call health enforcement is required for activation")
 	}
 	for _, namespace := range manifest.Namespaces {
 		if !baselines[namespace] || !seen["Role/"+namespace+"/"+manifest.Guard] || !seen["RoleBinding/"+namespace+"/"+manifest.Guard] {
