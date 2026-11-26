@@ -20,23 +20,12 @@ var _ store.ModelCallHealthStore = (*Store)(nil)
 const modelCallHealthRetention = time.Hour
 
 func (s *Store) ReplaceModelCallHealth(ctx context.Context, reporter string, records []store.ModelCallHealth) error {
-	if reporter == "" {
-		return fmt.Errorf("model call health requires a reporter")
-	}
-	if len(records) > store.MaxModelCallHealthTargets {
-		return fmt.Errorf("model call health accepts at most %d targets per reporter", store.MaxModelCallHealthTargets)
+	if err := store.ValidateModelCallHealth(reporter, records); err != nil {
+		return err
 	}
 	// A nil array would be sent as NULL and make the delete below match nothing.
 	targets := make([]string, 0, len(records))
-	seen := make(map[string]struct{}, len(records))
 	for _, record := range records {
-		if err := validateModelCallHealth(record); err != nil {
-			return err
-		}
-		if _, duplicate := seen[record.Target]; duplicate {
-			return fmt.Errorf("model call health target %q is published twice", record.Target)
-		}
-		seen[record.Target] = struct{}{}
 		targets = append(targets, record.Target)
 	}
 
@@ -119,18 +108,4 @@ func (s *Store) ListModelCallHealth(ctx context.Context, maxAge time.Duration) (
 		return nil, fmt.Errorf("list model call health: %w", err)
 	}
 	return records, nil
-}
-
-func validateModelCallHealth(record store.ModelCallHealth) error {
-	switch {
-	case record.Target == "" || len(record.Target) > store.MaxModelCallHealthTargetLength:
-		return fmt.Errorf("model call health target must be 1 to %d characters", store.MaxModelCallHealthTargetLength)
-	case len(record.LastFaultReason) > store.MaxModelCallHealthReasonLength:
-		return fmt.Errorf("model call health reason must be at most %d characters", store.MaxModelCallHealthReasonLength)
-	case record.Calls < 0 || record.Faults < 0 || record.Faults > record.Calls:
-		return fmt.Errorf("model call health requires 0 <= faults <= calls")
-	case record.ConsecutiveFaults < 0 || record.ConsecutiveSuccesses < 0:
-		return fmt.Errorf("model call health streaks must not be negative")
-	}
-	return nil
 }

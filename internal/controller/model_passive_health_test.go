@@ -265,6 +265,21 @@ func TestModelReconciler_PassiveDegradationDoesNotChurnTheStore(t *testing.T) {
 	}
 }
 
+func TestModelReconciler_SetCallHealthEnablesPassiveHealthForAnyStore(t *testing.T) {
+	s := newMemStore()
+	r := NewModelReconciler(s, testRegistry(), zaptest.NewLogger(t))
+	storeModel(t, s, newPassiveModel("claude", "anthropic"))
+
+	health := newCallHealthStore()
+	health.set([]store.ModelCallHealth{faultRecord(passiveTarget("anthropic"), cpi.ReasonTimeout)}, nil)
+	r.SetCallHealth(health)
+
+	reconcileModel(t, r, "default", "claude")
+	if got := getModel(t, s, "default", "claude"); got.Status.Available || readyCondition(t, got).Reason != cpi.ReasonTimeout {
+		t.Fatalf("available=%t, want the model degraded by the health store set after construction", got.Status.Available)
+	}
+}
+
 func TestModelReconciler_PassiveHealthIsOptionalForTheStore(t *testing.T) {
 	r := NewModelReconciler(newMemStore(), testRegistry(), zaptest.NewLogger(t))
 	if r.callHealth != nil {

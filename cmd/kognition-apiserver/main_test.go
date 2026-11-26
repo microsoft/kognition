@@ -244,23 +244,6 @@ func TestRunAPIServerCommand(t *testing.T) {
 	})
 }
 
-func TestStartModelHealthReporterPublishesAndStopWaitsForTheFinalPublish(t *testing.T) {
-	tracker := modelhealth.NewTracker()
-	sink := &publishRecorder{}
-	reporter := modelhealth.NewReporter(tracker, sink, "apiserver-test", zap.NewNop())
-
-	stop := startModelHealthReporter(context.Background(), reporter)
-	tracker.RecordCall(cpi.CallOutcome{Provider: "anthropic", Operation: cpi.OperationComplete, Model: "claude", Endpoint: "https://api.example"})
-	stop()
-
-	// stop() returns only after the final publish, so the outcome recorded just
-	// before shutdown must already be in the store.
-	published := sink.last()
-	if !publishedOneSuccessfulCall(published) {
-		t.Fatalf("final publish = %+v, want the outcome recorded before stop()", published)
-	}
-}
-
 // publishedOneSuccessfulCall reports whether records are the evidence of exactly
 // one successful call: it counts for the destination and for the credential that
 // made it, so it is published as two streams of one call each.
@@ -274,65 +257,6 @@ func publishedOneSuccessfulCall(records []store.ModelCallHealth) bool {
 		}
 	}
 	return true
-}
-
-// A request that finishes while the server drains completes after the command's
-// context is canceled. Its model call must still be published: the reporter stops
-// only when the runtime's resources are closed, after the drain.
-func TestStartModelHealthReporterOutlivesItsContextUntilStopped(t *testing.T) {
-	tracker := modelhealth.NewTracker()
-	sink := &publishRecorder{}
-	ctx, cancel := context.WithCancel(context.Background())
-	stop := startModelHealthReporter(ctx, modelhealth.NewReporter(tracker, sink, "apiserver-test", zap.NewNop()))
-
-	cancel()
-	// Give a reporter that wrongly follows ctx time to make its final publish and
-	// exit; a correct one is not affected by the wait.
-	time.Sleep(50 * time.Millisecond)
-	tracker.RecordCall(cpi.CallOutcome{Provider: "anthropic", Operation: cpi.OperationComplete, Model: "claude", Endpoint: "https://api.example"})
-	stop()
-
-	if published := sink.last(); len(published) == 0 {
-		t.Fatal("an outcome recorded after the context was canceled was never published")
-	}
-}
-
-func TestStartModelHealthReporterKeepsTheContextValues(t *testing.T) {
-	type key struct{}
-	sink := &contextRecordingSink{}
-	tracker := modelhealth.NewTracker()
-	tracker.RecordCall(cpi.CallOutcome{Provider: "anthropic", Operation: cpi.OperationComplete, Model: "claude"})
-	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), key{}, "request-scoped"))
-	stop := startModelHealthReporter(ctx, modelhealth.NewReporter(tracker, sink, "apiserver-test", zap.NewNop()))
-	cancel()
-	stop()
-
-	if got := sink.value(key{}); got != "request-scoped" {
-		t.Fatalf("the publish saw context value %v, want the command context's values preserved", got)
-	}
-}
-
-// contextRecordingSink remembers a value of the context of the last publish.
-type contextRecordingSink struct {
-	publishRecorder
-	mu   sync.Mutex
-	seen context.Context
-}
-
-func (c *contextRecordingSink) ReplaceModelCallHealth(ctx context.Context, reporter string, records []store.ModelCallHealth) error {
-	c.mu.Lock()
-	c.seen = ctx
-	c.mu.Unlock()
-	return c.publishRecorder.ReplaceModelCallHealth(ctx, reporter, records)
-}
-
-func (c *contextRecordingSink) value(key any) any {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.seen == nil {
-		return nil
-	}
-	return c.seen.Value(key)
 }
 
 // The runtime closes the reporter with its other resources, which

@@ -5,12 +5,16 @@ package controller
 
 import (
 	"context"
+	"strings"
 
 	"go.uber.org/zap"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	k8s "github.com/kognition-ai/kognition/api/k8s/v1alpha1"
 	intctrl "github.com/kognition-ai/kognition/internal/controller"
@@ -26,13 +30,41 @@ type ModelReconcilerAdapter struct {
 	internal *intctrl.ModelReconciler
 	logger   *zap.Logger
 	events   eventEmitter
+	// healthEvents carries Models whose passive health changed, from the health
+	// watcher to the controller's work queue.
+	healthEvents chan event.GenericEvent
 }
 
 // NewModelReconcilerAdapter creates an adapter that delegates to the internal ModelReconciler.
 func NewModelReconcilerAdapter(s store.Store, registry *cpi.Registry, logger *zap.Logger) *ModelReconcilerAdapter {
 	return &ModelReconcilerAdapter{
-		internal: intctrl.NewModelReconciler(s, registry, logger),
-		logger:   logger,
+		internal:     intctrl.NewModelReconciler(s, registry, logger),
+		logger:       logger,
+		healthEvents: make(chan event.GenericEvent, healthEventBuffer),
+	}
+}
+
+// healthEventBuffer is how many queued Models the adapter holds for the work
+// queue. Overflow is dropped: the watcher queues a Model again on its next check
+// for as long as its status does not match the evidence.
+const healthEventBuffer = 256
+
+// ConfigureCallHealth enables passive model health from a store shared with the
+// processes that make model calls.
+func (a *ModelReconcilerAdapter) ConfigureCallHealth(health store.ModelCallHealthStore) {
+	a.internal.SetCallHealth(health)
+}
+
+// Enqueue queues the Model identified by a "namespace/name" key for
+// reconciliation. It never blocks and ignores malformed keys.
+func (a *ModelReconcilerAdapter) Enqueue(key string) {
+	namespace, name, found := strings.Cut(key, "/")
+	if !found || namespace == "" || name == "" {
+		return
+	}
+	select {
+	case a.healthEvents <- event.GenericEvent{Object: &k8s.Model{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}}}:
+	default:
 	}
 }
 
@@ -58,6 +90,7 @@ func (a *ModelReconcilerAdapter) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("model").
 		For(&k8s.Model{}).
+		WatchesRawSource(source.Channel(a.healthEvents, &handler.EnqueueRequestForObject{})).
 		Watches(&k8s.ModelInvocationProfile{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, object client.Object) []reconcile.Request {
 			var models k8s.ModelList
 			if err := mgr.GetClient().List(ctx, &models, client.InNamespace(object.GetNamespace())); err != nil {

@@ -90,6 +90,28 @@ func (r *Reporter) Start(ctx context.Context) error {
 	}
 }
 
+// RunInBackground publishes until the returned function is called, which stops
+// the reporter and waits for its final publish. Callers stop it before closing
+// the store the reporter writes to.
+//
+// The reporter deliberately does not end with ctx. The context of a command is
+// canceled when its shutdown begins, but the requests it is serving keep draining
+// for a while and the model calls they complete must still be published, so the
+// reporter keeps running until stop is called after the drain. It keeps ctx's
+// values, and its final publish stays bounded by finalReportTimeout.
+func (r *Reporter) RunInBackground(ctx context.Context) (stop func()) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = r.Start(ctx)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
 // Flush publishes the tracker's current summaries unless nothing changed since the
 // last publish and the heartbeat is not yet due. A reporter with nothing to
 // publish and nothing published does not touch the store.

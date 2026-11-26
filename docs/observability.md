@@ -53,7 +53,22 @@ A Model is degraded when, within the last five minutes, its destination or its c
 
 The controller manager's health watcher queues a Model when its status no longer matches the evidence. It does not queue a Model that is unready for another reason, such as a failing probe, because reconciling it would keep that failure and only repeat the probe, and it queues a Model for the same outcome at most once a minute. A recovery or a change of reason is queued at once. Outcomes of calls that finish while the API server or the controller manager shuts down are still published, because the reporter stops only after requests and controllers have drained.
 
-Passive health reports and drives fallback selection; it does not block calls to a degraded Model. It is not shared in Kubernetes mode yet, so Models there keep reporting only their active probe.
+Passive health reports and drives fallback selection; it does not block calls to a degraded Model.
+
+Kubernetes support is wired on the Go side: the controller and Model Gateway
+publish one ConfigMap per reporter in the controller namespace. Reads validate
+the component/name shape and reporter hash, reject duplicate targets, and ignore
+stale or malformed evidence. The leader-only collector runs at startup and every
+five minutes even when the controller makes no model calls. It streams beyond the
+reader's 2,000-object page bound and removes reporters inactive for over an hour,
+using UID and resource-version preconditions so refreshed or replaced objects
+survive a sweep. Cleanup failures are logged and retried on a later sweep; they
+do not fail publications. The Model Gateway keeps its reporter alive while HTTP
+requests drain and makes its final publication before closing the backend.
+
+The Kubernetes admission-policy and RBAC changes are still a separate deployment
+prerequisite. Until they are installed, writes are rejected and logged, and Models
+there keep reporting only their active probe.
 
 ## Exported Spans
 
