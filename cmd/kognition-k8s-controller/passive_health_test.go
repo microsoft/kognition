@@ -12,10 +12,14 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 
 	intctrl "github.com/kognition-ai/kognition/internal/controller"
 	"github.com/kognition-ai/kognition/internal/cpi"
+	"github.com/kognition-ai/kognition/internal/k8s/callhealth"
 	k8sctrl "github.com/kognition-ai/kognition/internal/k8s/controller"
 	"github.com/kognition-ai/kognition/internal/modelhealth"
 	"github.com/kognition-ai/kognition/internal/store"
@@ -106,10 +110,37 @@ func TestPassiveModelHealthRegistrationFailures(t *testing.T) {
 	if err := passive.register(&startupManager{}, nil, []managerReconciler{stubManagerReconciler{calls: &atomic.Int32{}}}, zap.NewNop()); err == nil || !strings.Contains(err.Error(), "Model reconciler") {
 		t.Fatalf("a missing Model reconciler error = %v", err)
 	}
+
 	if err := passive.register(&failingAddManager{failOn: 1}, nil, withModel, zap.NewNop()); err == nil || !strings.Contains(err.Error(), "reporter") {
 		t.Fatalf("a failing reporter registration error = %v", err)
 	}
 	if err := passive.register(&failingAddManager{failOn: 2}, nil, withModel, zap.NewNop()); err == nil || !strings.Contains(err.Error(), "watcher") {
 		t.Fatalf("a failing watcher registration error = %v", err)
+	}
+}
+
+func TestPassiveModelHealthRegistersLeaderOnlyConfigMapCollector(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	sink, err := callhealth.NewConfigMapStore(fake.NewClientBuilder().WithScheme(scheme).Build(), "kognition-system", "controller", callhealth.WithGarbageCollection())
+	if err != nil {
+		t.Fatal(err)
+	}
+	passive := newPassiveModelHealth(sink)
+	manager := &startupManager{}
+	reconcilers := []managerReconciler{k8sctrl.NewModelReconcilerAdapter(nil, cpi.NewRegistry(), zap.NewNop())}
+	if err := passive.register(manager, nil, reconcilers, zap.NewNop()); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.runnables) != 3 {
+		t.Fatalf("registered %d runnables, want reporter, watcher and collector", len(manager.runnables))
+	}
+	if collector, ok := manager.runnables[2].(*callhealth.ConfigMapStore); !ok || collector != sink || !collector.NeedLeaderElection() {
+		t.Fatal("the registered collector must be the leader-only health store")
+	}
+	if err := passive.register(&failingAddManager{failOn: 3}, nil, reconcilers, zap.NewNop()); err == nil || !strings.Contains(err.Error(), "collector") {
+		t.Fatalf("collector registration failure = %v", err)
 	}
 }

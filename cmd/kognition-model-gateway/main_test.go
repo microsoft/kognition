@@ -5,8 +5,13 @@ package main
 
 import (
 	"context"
+	"errors"
+	"net"
+	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -14,14 +19,120 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/kognition-ai/kognition/internal/cpi"
 	"github.com/kognition-ai/kognition/internal/gatewaybackend"
 	"github.com/kognition-ai/kognition/internal/k8s/callhealth"
+	"github.com/kognition-ai/kognition/internal/modelhealth"
 	"github.com/kognition-ai/kognition/internal/store"
 )
 
 type healthCapableStore struct {
 	gatewaybackend.Store
 	store.ModelCallHealthStore
+}
+
+type drainHealthSink struct {
+	store.ModelCallHealthStore
+	published chan []store.ModelCallHealth
+}
+
+func (s *drainHealthSink) ReplaceModelCallHealth(_ context.Context, _ string, records []store.ModelCallHealth) error {
+	s.published <- records
+	return nil
+}
+
+func TestServeModelGatewayFlushesAfterInFlightRequestsDrain(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	tracker := modelhealth.NewTracker()
+	outcome := cpi.CallOutcome{Provider: "openai", Operation: cpi.OperationComplete, Model: "m", Reason: cpi.ReasonRateLimited, ProviderFault: true}
+	tracker.RecordCall(outcome)
+	sink := &drainHealthSink{published: make(chan []store.ModelCallHealth, 2)}
+	reporter := modelhealth.NewReporter(tracker, sink, "gateway-pod", zap.NewNop())
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(entered)
+		<-release
+		tracker.RecordCall(outcome)
+		w.WriteHeader(http.StatusNoContent)
+	}), ReadHeaderTimeout: time.Second}
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	listenerClosed := make(chan struct{})
+	serve := func(_ context.Context, server *http.Server) error {
+		err := server.Serve(listener)
+		close(listenerClosed)
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- serveModelGateway(ctx, server, reporter, serve, zap.NewNop()) }()
+	requestDone := make(chan error, 1)
+	go func() {
+		httpClient := &http.Client{Timeout: 5 * time.Second}
+		response, err := httpClient.Get("http://" + listener.Addr().String())
+		if err == nil {
+			err = response.Body.Close()
+		}
+		requestDone <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("in-flight request never started")
+	}
+	cancel()
+	select {
+	case <-listenerClosed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not close the listener")
+	}
+	select {
+	case records := <-sink.published:
+		t.Fatalf("reporter stopped before the request drained: %+v", records)
+	case <-time.After(100 * time.Millisecond):
+	}
+	unblock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("gateway did not finish draining")
+	}
+	if err := <-requestDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case records := <-sink.published:
+		if len(records) != 1 || records[0].Calls != 2 || records[0].Faults != 2 {
+			t.Fatalf("final publication = %+v, want both calls including the one completed during drain", records)
+		}
+	default:
+		t.Fatal("gateway returned before the final publication completed")
+	}
+}
+
+func TestServeModelGatewayReturnsListenerErrors(t *testing.T) {
+	for _, wantErr := range []error{errors.New("listen failed"), http.ErrServerClosed} {
+		serve := func(context.Context, *http.Server) error { return wantErr }
+		err := serveModelGateway(context.Background(), &http.Server{}, nil, serve, zap.NewNop())
+		if errors.Is(wantErr, http.ErrServerClosed) {
+			if err != nil {
+				t.Fatalf("closed server error = %v, want nil", err)
+			}
+		} else if !errors.Is(err, wantErr) {
+			t.Fatalf("listener error = %v, want %v", err, wantErr)
+		}
+	}
 }
 
 type plainStore struct{ gatewaybackend.Store }

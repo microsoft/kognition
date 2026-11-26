@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,7 +52,10 @@ const (
 	garbageCollectionInterval = 5 * time.Minute
 )
 
-var componentPattern = regexp.MustCompile(`^[a-z]+(-[a-z]+)*$`)
+var (
+	componentPattern    = regexp.MustCompile(`^[a-z]+(-[a-z]+)*$`)
+	reporterHashPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+)
 
 // payload is the content of one reporter's ConfigMap.
 type payload struct {
@@ -82,12 +86,12 @@ type ConfigMapStore struct {
 	logger    *zap.Logger
 	now       func() time.Time
 
-	collectGarbage bool
+	collectGarbage     bool
+	collectionInterval time.Duration
 
-	mu        sync.Mutex
-	cached    []payload
-	cachedAt  time.Time
-	collected time.Time
+	mu       sync.Mutex
+	cached   []payload
+	cachedAt time.Time
 }
 
 var _ store.ModelCallHealthStore = (*ConfigMapStore)(nil)
@@ -95,8 +99,8 @@ var _ store.ModelCallHealthStore = (*ConfigMapStore)(nil)
 // Option configures a ConfigMapStore.
 type Option func(*ConfigMapStore)
 
-// WithGarbageCollection makes the store delete the ConfigMaps of reporters that
-// stopped publishing. Only enable it for an identity that may delete ConfigMaps.
+// WithGarbageCollection enables periodic cleanup when the store is registered
+// with a manager. Only enable it for an identity that may delete ConfigMaps.
 func WithGarbageCollection() Option {
 	return func(s *ConfigMapStore) { s.collectGarbage = true }
 }
@@ -119,7 +123,7 @@ func NewConfigMapStore(kubernetesClient client.Client, namespace, component stri
 	if len(component) > 32 || !componentPattern.MatchString(component) {
 		return nil, fmt.Errorf("Kubernetes model call health store requires a lowercase component name, got %q", component)
 	}
-	s := &ConfigMapStore{client: kubernetesClient, namespace: namespace, component: component, logger: zap.NewNop(), now: time.Now}
+	s := &ConfigMapStore{client: kubernetesClient, namespace: namespace, component: component, logger: zap.NewNop(), now: time.Now, collectionInterval: garbageCollectionInterval}
 	for _, option := range options {
 		option(s)
 	}
@@ -127,8 +131,22 @@ func NewConfigMapStore(kubernetesClient client.Client, namespace, component stri
 }
 
 func (s *ConfigMapStore) objectName(reporter string) string {
+	return objectName(s.component, reporter)
+}
+
+func objectName(component, reporter string) string {
 	sum := sha256.Sum256([]byte(reporter))
-	return NamePrefix + s.component + "-" + hex.EncodeToString(sum[:16])
+	return NamePrefix + component + "-" + hex.EncodeToString(sum[:16])
+}
+
+func isHealthConfigMap(configMap *corev1.ConfigMap) bool {
+	component := configMap.Labels[HealthLabel]
+	prefix := NamePrefix + component + "-"
+	_, hasHealth := configMap.Data[DataKey]
+	return hasHealth && len(component) <= 32 && componentPattern.MatchString(component) &&
+		strings.HasPrefix(configMap.Name, prefix) && reporterHashPattern.MatchString(strings.TrimPrefix(configMap.Name, prefix)) &&
+		len(configMap.Labels) == 1 && len(configMap.Data) == 1 && len(configMap.BinaryData) == 0 &&
+		len(configMap.OwnerReferences) == 0 && len(configMap.Finalizers) == 0
 }
 
 func (s *ConfigMapStore) ReplaceModelCallHealth(ctx context.Context, reporter string, records []store.ModelCallHealth) error {
@@ -153,7 +171,8 @@ func (s *ConfigMapStore) ReplaceModelCallHealth(ctx context.Context, reporter st
 			}
 			switch err := s.client.Create(ctx, created); {
 			case err == nil:
-				return s.afterWrite(ctx)
+				s.invalidateCache()
+				return nil
 			case apierrors.IsAlreadyExists(err):
 				continue
 			default:
@@ -163,13 +182,14 @@ func (s *ConfigMapStore) ReplaceModelCallHealth(ctx context.Context, reporter st
 		if err != nil {
 			return fmt.Errorf("load model call health: %w", err)
 		}
-		if existing.Labels[HealthLabel] != s.component {
+		if existing.Labels[HealthLabel] != s.component || !isHealthConfigMap(&existing) {
 			return fmt.Errorf("ConfigMap %s/%s exists but is not model call health owned by %q", key.Namespace, key.Name, s.component)
 		}
 		existing.Data = map[string]string{DataKey: string(encoded)}
 		switch err := s.client.Update(ctx, &existing); {
 		case err == nil:
-			return s.afterWrite(ctx)
+			s.invalidateCache()
+			return nil
 		case apierrors.IsConflict(err):
 			continue
 		default:
@@ -223,13 +243,9 @@ func (s *ConfigMapStore) listConfigMaps(ctx context.Context) ([]corev1.ConfigMap
 	var items []corev1.ConfigMap
 	continueToken := ""
 	for page := 0; page < maxListPages; page++ {
-		var configMaps corev1.ConfigMapList
-		options := []client.ListOption{client.InNamespace(s.namespace), client.HasLabels{HealthLabel}, client.Limit(listPageSize)}
-		if continueToken != "" {
-			options = append(options, client.Continue(continueToken))
-		}
-		if err := s.client.List(ctx, &configMaps, options...); err != nil {
-			return nil, fmt.Errorf("list model call health: %w", err)
+		configMaps, err := s.listConfigMapPage(ctx, continueToken)
+		if err != nil {
+			return nil, err
 		}
 		items = append(items, configMaps.Items...)
 		if continueToken = configMaps.Continue; continueToken == "" {
@@ -239,61 +255,115 @@ func (s *ConfigMapStore) listConfigMaps(ctx context.Context) ([]corev1.ConfigMap
 	return nil, fmt.Errorf("model call health spans more than %d pages", maxListPages)
 }
 
-// afterWrite drops the read cache, so the writer sees its own publication, and
-// collects abandoned ConfigMaps when this store is allowed to.
-func (s *ConfigMapStore) afterWrite(ctx context.Context) error {
-	s.mu.Lock()
-	s.cached = nil
-	due := s.collectGarbage && s.now().Sub(s.collected) >= garbageCollectionInterval
-	if due {
-		s.collected = s.now()
+func (s *ConfigMapStore) listConfigMapPage(ctx context.Context, continueToken string) (corev1.ConfigMapList, error) {
+	var configMaps corev1.ConfigMapList
+	options := []client.ListOption{client.InNamespace(s.namespace), client.HasLabels{HealthLabel}, client.Limit(listPageSize)}
+	if continueToken != "" {
+		options = append(options, client.Continue(continueToken))
 	}
-	s.mu.Unlock()
-	if due {
-		if err := s.collect(ctx); err != nil {
-			s.logger.Warn("collect abandoned model call health", zap.Error(err))
+	if err := s.client.List(ctx, &configMaps, options...); err != nil {
+		return configMaps, fmt.Errorf("list model call health: %w", err)
+	}
+	valid := configMaps.Items[:0]
+	for index := range configMaps.Items {
+		if isHealthConfigMap(&configMaps.Items[index]) {
+			valid = append(valid, configMaps.Items[index])
 		}
 	}
-	return nil
+	configMaps.Items = valid
+	return configMaps, nil
+}
+
+func (s *ConfigMapStore) invalidateCache() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cached = nil
+}
+
+// Start collects abandoned reporters independently of this process's traffic.
+func (s *ConfigMapStore) Start(ctx context.Context) error {
+	if !s.collectGarbage {
+		return nil
+	}
+	s.sweep(ctx)
+	ticker := time.NewTicker(s.collectionInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			s.sweep(ctx)
+		}
+	}
+}
+
+// NeedLeaderElection keeps cleanup on the elected controller replica.
+func (*ConfigMapStore) NeedLeaderElection() bool { return true }
+
+func (s *ConfigMapStore) sweep(ctx context.Context) {
+	sweepCtx, cancel := context.WithTimeout(ctx, garbageCollectionInterval)
+	defer cancel()
+	if err := s.collect(sweepCtx); err != nil && ctx.Err() == nil {
+		s.logger.Warn("collect abandoned model call health", zap.Error(err))
+	}
 }
 
 func (s *ConfigMapStore) collect(ctx context.Context) error {
-	configMaps, err := s.listConfigMaps(ctx)
-	if err != nil {
-		return err
-	}
 	cutoff := s.now().Add(-retention)
 	var failures []error
-	for index := range configMaps {
-		configMap := &configMaps[index]
-		lastUpdate := configMap.CreationTimestamp.Time
-		if published, ok := parse(configMap); ok {
-			lastUpdate = published.UpdatedAt
+	continueToken := ""
+	for {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(failures, err)...)
 		}
-		if !lastUpdate.Before(cutoff) {
-			continue
+		configMaps, err := s.listConfigMapPage(ctx, continueToken)
+		if err != nil {
+			return errors.Join(append(failures, err)...)
 		}
-		if err := s.client.Delete(ctx, configMap); err != nil && !apierrors.IsNotFound(err) {
-			failures = append(failures, err)
+		for index := range configMaps.Items {
+			configMap := &configMaps.Items[index]
+			lastUpdate := configMap.CreationTimestamp.Time
+			if published, ok := parse(configMap); ok {
+				lastUpdate = published.UpdatedAt
+			}
+			if !lastUpdate.Before(cutoff) {
+				continue
+			}
+			preconditions := client.Preconditions{UID: &configMap.UID, ResourceVersion: &configMap.ResourceVersion}
+			if err := s.client.Delete(ctx, configMap, preconditions); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+				failures = append(failures, err)
+			}
+		}
+		if continueToken = configMaps.Continue; continueToken == "" {
+			return errors.Join(failures...)
 		}
 	}
-	return errors.Join(failures...)
 }
 
 // parse decodes a health ConfigMap. Anything malformed or out of bounds is
 // skipped rather than failing the read, since a single bad object must not hide
 // every other reporter.
 func parse(configMap *corev1.ConfigMap) (payload, bool) {
+	if !isHealthConfigMap(configMap) {
+		return payload{}, false
+	}
 	raw, ok := configMap.Data[DataKey]
 	if !ok || len(raw) > maxPayloadBytes {
 		return payload{}, false
 	}
 	var published payload
-	if err := json.Unmarshal([]byte(raw), &published); err != nil || published.UpdatedAt.IsZero() || len(published.Records) > store.MaxModelCallHealthTargets {
+	if err := json.Unmarshal([]byte(raw), &published); err != nil || published.Reporter == "" || published.UpdatedAt.IsZero() ||
+		len(published.Records) > store.MaxModelCallHealthTargets || configMap.Name != objectName(configMap.Labels[HealthLabel], published.Reporter) {
 		return payload{}, false
 	}
 	valid := published.Records[:0:0]
+	seen := make(map[string]struct{}, len(published.Records))
 	for _, entry := range published.Records {
+		if _, duplicate := seen[entry.Target]; duplicate {
+			return payload{}, false
+		}
+		seen[entry.Target] = struct{}{}
 		if store.ValidateModelCallHealthRecord(decodeRecord(entry)) == nil {
 			valid = append(valid, entry)
 		}

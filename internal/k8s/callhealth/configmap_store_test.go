@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -63,15 +64,19 @@ func newTestStore(t *testing.T, kubernetesClient client.Client, component string
 	return s, c
 }
 
-func healthConfigMap(namespace, name, component string, updatedAt time.Time, records ...record) *corev1.ConfigMap {
-	encoded, _ := json.Marshal(payload{Reporter: name, UpdatedAt: updatedAt, Records: records})
+func healthConfigMap(namespace, reporter, component string, updatedAt time.Time, records ...record) *corev1.ConfigMap {
+	encoded, _ := json.Marshal(payload{Reporter: reporter, UpdatedAt: updatedAt, Records: records})
+	name := objectName(component, reporter)
 	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name, Labels: map[string]string{HealthLabel: component}, CreationTimestamp: metav1.NewTime(updatedAt)},
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name, UID: types.UID(name), Labels: map[string]string{HealthLabel: component}, CreationTimestamp: metav1.NewTime(updatedAt)},
 		Data:       map[string]string{DataKey: string(encoded)},
 	}
 }
 
 func rawConfigMap(name string, labels, data map[string]string) *corev1.ConfigMap {
+	if component := labels[HealthLabel]; component != "" {
+		name = objectName(component, name)
+	}
 	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: name, Labels: labels}, Data: data}
 }
 
@@ -285,8 +290,7 @@ func TestReplaceAndListReportAPIFailures(t *testing.T) {
 	ctx := context.Background()
 	records := []store.ModelCallHealth{{Target: "t", Calls: 1}}
 	apiErr := errors.New("api unavailable")
-	probe, _ := newTestStore(t, newFakeClient(t, interceptor.Funcs{}), "controller")
-	existing := healthConfigMap(testNamespace, probe.objectName("r"), "controller", epoch)
+	existing := healthConfigMap(testNamespace, "r", "controller", epoch)
 
 	for name, test := range map[string]struct {
 		funcs   interceptor.Funcs
@@ -450,8 +454,10 @@ func TestListReadsEveryPageAndBoundsThem(t *testing.T) {
 
 func TestGarbageCollectionRemovesOnlyAbandonedReporters(t *testing.T) {
 	stale := healthConfigMap(testNamespace, "kognition-mch-model-gateway-stale", "model-gateway", epoch.Add(-3*time.Hour), record{Target: "t", Calls: 1})
-	malformedOld := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: "kognition-mch-controller-malformed", Labels: map[string]string{HealthLabel: "controller"}, CreationTimestamp: metav1.NewTime(epoch.Add(-3 * time.Hour))}, Data: map[string]string{DataKey: "{bad"}}
-	malformedNew := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: "kognition-mch-controller-new", Labels: map[string]string{HealthLabel: "controller"}, CreationTimestamp: metav1.NewTime(epoch)}, Data: map[string]string{DataKey: "{bad"}}
+	malformedOld := healthConfigMap(testNamespace, "malformed", "controller", epoch.Add(-3*time.Hour))
+	malformedOld.Data[DataKey] = "{bad"
+	malformedNew := healthConfigMap(testNamespace, "new", "controller", epoch)
+	malformedNew.Data[DataKey] = "{bad"
 	fresh := healthConfigMap(testNamespace, "kognition-mch-model-gateway-fresh", "model-gateway", epoch.Add(-30*time.Minute), record{Target: "t", Calls: 1})
 	unrelated := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: "kognition-cost-unrelated", CreationTimestamp: metav1.NewTime(epoch.Add(-9 * time.Hour))}}
 
@@ -467,6 +473,10 @@ func TestGarbageCollectionRemovesOnlyAbandonedReporters(t *testing.T) {
 		if err := s.ReplaceModelCallHealth(ctx, "r", []store.ModelCallHealth{{Target: "t", Calls: 1}}); err != nil {
 			t.Fatal(err)
 		}
+		if lists.Load() != 0 {
+			t.Fatal("publishing must not trigger collection")
+		}
+		s.sweep(ctx)
 		names := map[string]bool{}
 		for _, configMap := range listAll(t, kubernetesClient) {
 			names[configMap.Name] = true
@@ -488,8 +498,9 @@ func TestGarbageCollectionRemovesOnlyAbandonedReporters(t *testing.T) {
 			t.Fatalf("a second publish within the interval must not collect again (lists %d -> %d, err %v)", before, lists.Load(), err)
 		}
 		clk.advance(garbageCollectionInterval)
-		if err := s.ReplaceModelCallHealth(ctx, "r", nil); err != nil || lists.Load() == before {
-			t.Fatalf("collection must run again once the interval passed (lists %d, err %v)", lists.Load(), err)
+		s.sweep(ctx)
+		if lists.Load() == before {
+			t.Fatalf("an independent sweep must collect again (lists %d)", lists.Load())
 		}
 	})
 
@@ -497,6 +508,9 @@ func TestGarbageCollectionRemovesOnlyAbandonedReporters(t *testing.T) {
 		kubernetesClient := newFakeClient(t, interceptor.Funcs{}, stale, malformedOld)
 		s, _ := newTestStore(t, kubernetesClient, "model-gateway")
 		if err := s.ReplaceModelCallHealth(context.Background(), "r", nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Start(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		if got := len(listAll(t, kubernetesClient)); got != 3 {
@@ -513,6 +527,7 @@ func TestGarbageCollectionRemovesOnlyAbandonedReporters(t *testing.T) {
 		if err := s.ReplaceModelCallHealth(context.Background(), "r", nil); err != nil {
 			t.Fatalf("Replace() error = %v, want success despite the failed collection", err)
 		}
+		s.sweep(context.Background())
 		if logs.Len() != 1 {
 			t.Fatalf("logged %d warnings, want 1", logs.Len())
 		}
@@ -528,8 +543,225 @@ func TestGarbageCollectionRemovesOnlyAbandonedReporters(t *testing.T) {
 		if err := s.ReplaceModelCallHealth(context.Background(), "r", nil); err != nil {
 			t.Fatal(err)
 		}
+		s.sweep(context.Background())
 		if logs.Len() != 1 {
 			t.Fatalf("logged %d warnings, want 1 for the forbidden delete and none for the vanished object", logs.Len())
 		}
 	})
+}
+
+func TestHealthConfigMapIdentityFiltersReadersAndCollection(t *testing.T) {
+	mutations := map[string]func(*corev1.ConfigMap){
+		"unrelated labeled name": func(cm *corev1.ConfigMap) { cm.Name = "unrelated" },
+		"wrong component":        func(cm *corev1.ConfigMap) { cm.Labels[HealthLabel] = "model-gateway" },
+		"invalid component":      func(cm *corev1.ConfigMap) { cm.Labels[HealthLabel] = "Controller" },
+		"oversized component": func(cm *corev1.ConfigMap) {
+			cm.Labels[HealthLabel] = strings.Repeat("a", 33)
+			cm.Name = objectName(cm.Labels[HealthLabel], "r")
+		},
+		"invalid hash": func(cm *corev1.ConfigMap) { cm.Name = NamePrefix + "controller-" + strings.Repeat("g", 32) },
+		"short hash":   func(cm *corev1.ConfigMap) { cm.Name = NamePrefix + "controller-abcd" },
+		"extra label":  func(cm *corev1.ConfigMap) { cm.Labels["foreign"] = "true" },
+		"extra data":   func(cm *corev1.ConfigMap) { cm.Data["foreign"] = "true" },
+		"binary data":  func(cm *corev1.ConfigMap) { cm.BinaryData = map[string][]byte{"foreign": {1}} },
+		"owner":        func(cm *corev1.ConfigMap) { cm.OwnerReferences = []metav1.OwnerReference{{Name: "foreign"}} },
+		"finalizer":    func(cm *corev1.ConfigMap) { cm.Finalizers = []string{"foreign"} },
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			foreign := healthConfigMap(testNamespace, "r", "controller", epoch.Add(-3*time.Hour), record{Target: "t", Calls: 1})
+			mutate(foreign)
+			kubeClient := newFakeClient(t, interceptor.Funcs{}, foreign)
+			s, _ := newTestStore(t, kubeClient, "controller", WithGarbageCollection())
+			if records, err := s.ListModelCallHealth(context.Background(), 4*time.Hour); err != nil || len(records) != 0 {
+				t.Fatalf("foreign evidence accepted: %+v, %v", records, err)
+			}
+			if err := s.collect(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(listAll(t, kubeClient)) != 1 {
+				t.Fatal("an unrelated labeled ConfigMap must survive collection")
+			}
+		})
+	}
+}
+
+func TestListRejectsMismatchedReportersAndDuplicateTargets(t *testing.T) {
+	for name, published := range map[string]payload{
+		"empty reporter": {UpdatedAt: epoch, Records: []record{{Target: "t", Calls: 1}}},
+		"wrong reporter": {Reporter: "other", UpdatedAt: epoch, Records: []record{{Target: "t", Calls: 1}}},
+		"duplicate targets": {Reporter: "r", UpdatedAt: epoch, Records: []record{
+			{Target: "t", Calls: 1, Faults: 1, ConsecutiveFaults: 1},
+			{Target: "t", Calls: 1, Faults: 1, ConsecutiveFaults: 1},
+			{Target: "t", Calls: 1, Faults: 1, ConsecutiveFaults: 1},
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			configMap := healthConfigMap(testNamespace, "r", "controller", epoch)
+			encoded, err := json.Marshal(published)
+			if err != nil {
+				t.Fatal(err)
+			}
+			configMap.Data[DataKey] = string(encoded)
+			good := healthConfigMap(testNamespace, "good", "model-gateway", epoch, record{Target: "good", Calls: 1})
+			s, _ := newTestStore(t, newFakeClient(t, interceptor.Funcs{}, configMap, good), "controller")
+			records, err := s.ListModelCallHealth(context.Background(), time.Minute)
+			if err != nil || len(records) != 1 || records[0].Target != "good" {
+				t.Fatalf("List() = %+v, %v, want only the unaffected reporter", records, err)
+			}
+		})
+	}
+}
+
+func TestCollectorRunsAtStartupAndPeriodicallyWithoutPublications(t *testing.T) {
+	var lists atomic.Int32
+	swept := make(chan struct{}, 10)
+	funcs := interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+		err := c.List(ctx, list, opts...)
+		lists.Add(1)
+		select {
+		case swept <- struct{}{}:
+		default:
+		}
+		return err
+	}}
+	stale := healthConfigMap(testNamespace, "stale", "model-gateway", epoch.Add(-2*time.Hour))
+	kubeClient := newFakeClient(t, funcs, stale)
+	s, _ := newTestStore(t, kubeClient, "controller", WithGarbageCollection())
+	s.collectionInterval = 10 * time.Millisecond
+	if !s.NeedLeaderElection() {
+		t.Fatal("collection must require leader election")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.Start(ctx) }()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-swept:
+		case <-time.After(5 * time.Second):
+			t.Fatal("idle collector did not sweep at startup and on the next tick")
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("collector did not stop on cancellation")
+	}
+	if objects := listAll(t, kubeClient); len(objects) != 0 {
+		t.Fatalf("idle collector left %d abandoned reporters", len(objects))
+	}
+}
+
+func TestCollectionProgressesBeyondTheReaderPageLimit(t *testing.T) {
+	count := maxListPages*listPageSize + 5
+	objects := make([]client.Object, 0, count+1)
+	for i := 0; i < count; i++ {
+		objects = append(objects, healthConfigMap(testNamespace, fmt.Sprintf("r-%d", i), "model-gateway", epoch.Add(-2*time.Hour)))
+	}
+	fresh := healthConfigMap(testNamespace, "fresh", "model-gateway", epoch, record{Target: "t", Calls: 1})
+	objects = append(objects, fresh)
+	funcs := interceptor.Funcs{List: func(_ context.Context, _ client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+		options := &client.ListOptions{}
+		options.ApplyOptions(opts)
+		start := 0
+		if options.Continue != "" {
+			if _, err := fmt.Sscanf(options.Continue, "%d", &start); err != nil {
+				return err
+			}
+		}
+		end := min(start+listPageSize, len(objects))
+		page := list.(*corev1.ConfigMapList)
+		for _, obj := range objects[start:end] {
+			page.Items = append(page.Items, *obj.(*corev1.ConfigMap).DeepCopy())
+		}
+		if end < len(objects) {
+			page.Continue = fmt.Sprintf("%d", end)
+		}
+		return nil
+	}}
+	kubeClient := newFakeClient(t, funcs, objects...)
+	s, _ := newTestStore(t, kubeClient, "controller", WithGarbageCollection())
+	if _, err := s.ListModelCallHealth(context.Background(), time.Minute); err == nil {
+		t.Fatal("reader must still enforce its page bound")
+	}
+	if err := s.collect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, obj := range objects[:count] {
+		var remaining corev1.ConfigMap
+		if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(obj), &remaining); !apierrors.IsNotFound(err) {
+			t.Fatalf("abandoned reporter %s survived: %v", obj.GetName(), err)
+		}
+	}
+	var remaining corev1.ConfigMap
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(fresh), &remaining); err != nil {
+		t.Fatalf("fresh reporter must survive: %v", err)
+	}
+}
+
+func TestCollectionSkipsRefreshedAndReplacedObjects(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		t.Run(fmt.Sprintf("replace=%t", replace), func(t *testing.T) {
+			stale := healthConfigMap(testNamespace, "r", "model-gateway", epoch.Add(-2*time.Hour))
+			var raced bool
+			funcs := interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				options := &client.DeleteOptions{}
+				options.ApplyOptions(opts)
+				if options.Preconditions == nil || options.Preconditions.UID == nil || options.Preconditions.ResourceVersion == nil ||
+					*options.Preconditions.UID != obj.GetUID() || *options.Preconditions.ResourceVersion != obj.GetResourceVersion() {
+					t.Fatal("delete must carry the listed UID and resource version")
+				}
+				var current corev1.ConfigMap
+				if err := c.Get(ctx, client.ObjectKeyFromObject(obj), &current); err != nil {
+					return err
+				}
+				if !raced {
+					raced = true
+					fresh := healthConfigMap(testNamespace, "r", "model-gateway", epoch)
+					if replace {
+						if err := c.Delete(ctx, &current); err != nil {
+							return err
+						}
+						fresh.UID = "replacement"
+						if err := c.Create(ctx, fresh); err != nil {
+							return err
+						}
+					} else {
+						current.Data = fresh.Data
+						if err := c.Update(ctx, &current); err != nil {
+							return err
+						}
+					}
+					if err := c.Get(ctx, client.ObjectKeyFromObject(obj), &current); err != nil {
+						return err
+					}
+				}
+				if *options.Preconditions.UID != current.UID || *options.Preconditions.ResourceVersion != current.ResourceVersion {
+					return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, obj.GetName(), errors.New("changed"))
+				}
+				return c.Delete(ctx, obj, opts...)
+			}}
+			kubeClient := newFakeClient(t, funcs, stale)
+			s, clk := newTestStore(t, kubeClient, "controller", WithGarbageCollection())
+			if err := s.collect(context.Background()); err != nil {
+				t.Fatalf("a raced delete must be skipped, not fail the sweep: %v", err)
+			}
+			var remaining corev1.ConfigMap
+			if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(stale), &remaining); err != nil {
+				t.Fatalf("fresh evidence was removed: %v", err)
+			}
+			clk.advance(2 * time.Hour)
+			if err := s.collect(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(stale), &remaining); !apierrors.IsNotFound(err) {
+				t.Fatalf("a later sweep must reconsider abandoned evidence: %v", err)
+			}
+		})
+	}
 }

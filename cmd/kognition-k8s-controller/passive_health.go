@@ -12,6 +12,7 @@ import (
 
 	intctrl "github.com/kognition-ai/kognition/internal/controller"
 	"github.com/kognition-ai/kognition/internal/cpi"
+	k8scallhealth "github.com/kognition-ai/kognition/internal/k8s/callhealth"
 	k8sctrl "github.com/kognition-ai/kognition/internal/k8s/controller"
 	"github.com/kognition-ai/kognition/internal/modelhealth"
 	"github.com/kognition-ai/kognition/internal/store"
@@ -43,8 +44,8 @@ func (p *passiveModelHealth) recorder(base cpi.CallRecorder) cpi.CallRecorder {
 }
 
 // register configures the Model reconciler among reconcilers and adds the
-// reporter and the watcher to the manager. Like the controllers, they run only on
-// the elected leader, which is also the only replica that makes model calls.
+// reporter, watcher and ConfigMap collector to the manager. Like the controllers,
+// they run only on the elected leader.
 func (p *passiveModelHealth) register(mgr ctrl.Manager, st store.Store, reconcilers []managerReconciler, logger *zap.Logger) error {
 	if p == nil {
 		return nil
@@ -64,6 +65,11 @@ func (p *passiveModelHealth) register(mgr ctrl.Manager, st store.Store, reconcil
 	}
 	if err := mgr.Add(intctrl.NewModelHealthWatcher(st, p.sink, modelAdapter.Enqueue, logger)); err != nil {
 		return fmt.Errorf("register model health watcher: %w", err)
+	}
+	if collector, ok := p.sink.(*k8scallhealth.ConfigMapStore); ok {
+		if err := mgr.Add(collector); err != nil {
+			return fmt.Errorf("register model call health collector: %w", err)
+		}
 	}
 	return nil
 }

@@ -122,14 +122,18 @@ func run(logger *zap.Logger) error {
 	httpServer := &http.Server{Addr: envOrDefault("LISTEN_ADDR", ":8093"), Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 15 * time.Second}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	return serveModelGateway(ctx, httpServer, healthReporter, runtimeauth.ServeGatewayHTTP, logger)
+}
+
+func serveModelGateway(ctx context.Context, httpServer *http.Server, healthReporter *modelhealth.Reporter, serve func(context.Context, *http.Server) error, logger *zap.Logger) error {
 	if healthReporter != nil {
-		// Stops, and publishes one last time, before the backend is closed.
-		defer healthReporter.RunInBackground(ctx)()
+		// Keep publishing through request draining, then flush before closing the backend.
+		defer healthReporter.RunInBackground(context.WithoutCancel(ctx))()
 	}
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info("Model Gateway starting", zap.String("addr", httpServer.Addr))
-		errCh <- runtimeauth.ServeGatewayHTTP(ctx, httpServer)
+		errCh <- serve(ctx, httpServer)
 	}()
 	select {
 	case <-ctx.Done():
