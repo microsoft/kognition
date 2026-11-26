@@ -134,8 +134,7 @@ func (d *Driver) Complete(ctx context.Context, req *cpi.CompletionRequest) (*cpi
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("aws-bedrock: HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, cpi.NewProviderError("aws-bedrock", "", resp)
 	}
 
 	var converseResp converseResponse

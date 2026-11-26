@@ -227,8 +227,7 @@ func (d *Driver) Complete(ctx context.Context, req *cpi.CompletionRequest) (*cpi
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("foundry: HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, cpi.NewProviderError("foundry", "", resp)
 	}
 
 	var chatResp chatCompletionResponse
@@ -290,8 +289,7 @@ func (d *Driver) Embed(ctx context.Context, req *cpi.EmbedRequest) (*cpi.EmbedRe
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("foundry: embed HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, cpi.NewProviderError("foundry", "embed", resp)
 	}
 
 	var embedResp embeddingResponse

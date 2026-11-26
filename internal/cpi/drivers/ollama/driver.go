@@ -131,8 +131,7 @@ func (d *Driver) Complete(ctx context.Context, req *cpi.CompletionRequest) (*cpi
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("ollama: HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, cpi.NewProviderError("ollama", "", resp)
 	}
 
 	var chatResp chatResponse
@@ -205,9 +204,9 @@ func (d *Driver) Embed(ctx context.Context, req *cpi.EmbedRequest) (*cpi.EmbedRe
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			providerErr := cpi.NewProviderError("ollama", "embed", resp)
 			_ = resp.Body.Close()
-			return nil, fmt.Errorf("ollama: embed HTTP %d: %s", resp.StatusCode, string(respBody))
+			return nil, providerErr
 		}
 
 		var embedResp struct {
