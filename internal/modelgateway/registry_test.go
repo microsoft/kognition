@@ -167,6 +167,8 @@ func TestGatewayReportsDirectProviderCallsToTheConfiguredRecorder(t *testing.T) 
 		fault  bool
 	}{
 		{name: "success", status: http.StatusOK, body: usage, code: http.StatusOK},
+		{name: "missing usage", status: http.StatusOK, body: `{}`, code: http.StatusBadGateway, reason: cpi.ReasonOther},
+		{name: "malformed response", status: http.StatusOK, body: `not json`, code: http.StatusBadGateway, reason: cpi.ReasonOther},
 		{name: "server error", status: http.StatusInternalServerError, code: http.StatusBadGateway, reason: cpi.ReasonEndpointError, fault: true},
 		{name: "rate limited", status: http.StatusTooManyRequests, code: http.StatusBadGateway, reason: cpi.ReasonRateLimited, fault: true},
 		{name: "invalid request", status: http.StatusBadRequest, code: http.StatusBadGateway, reason: cpi.ReasonInvalidRequest},

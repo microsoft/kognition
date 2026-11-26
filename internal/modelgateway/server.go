@@ -437,16 +437,18 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, mode
 		writeError(w, http.StatusBadGateway, "model provider rejected the request")
 		return cpi.Usage{}, nil, "", fmt.Errorf("model provider returned %s", response.Status)
 	}
-	s.recordCall(auth.Provider, model.Spec.ModelID, start, nil)
 	contentType := response.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/json"
 	}
 	usage, reported := completionUsage(responseBody)
 	if !reported {
-		writeError(w, http.StatusBadGateway, "model provider response omitted token usage")
-		return cpi.Usage{}, nil, "", errors.New("model provider response omitted token usage")
+		err := errors.New("model provider response omitted token usage")
+		s.recordCall(auth.Provider, model.Spec.ModelID, start, err)
+		writeError(w, http.StatusBadGateway, err.Error())
+		return cpi.Usage{}, nil, "", err
 	}
+	s.recordCall(auth.Provider, model.Spec.ModelID, start, nil)
 	return usage, responseBody, contentType, nil
 }
 
