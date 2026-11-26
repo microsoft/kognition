@@ -120,7 +120,7 @@ func TestConfigMapStoreRoundTripsRecordsFromEveryReporter(t *testing.T) {
 
 	faultAt, successAt := epoch.Add(-time.Second), epoch.Add(-2*time.Second)
 	if err := controller.ReplaceModelCallHealth(ctx, "controller-pod", []store.ModelCallHealth{
-		{Target: "a", Calls: 5, Faults: 3, ConsecutiveFaults: 3, LastFaultReason: "RateLimited", LastFaultAt: faultAt, LastSuccessAt: successAt},
+		{Target: "a", Calls: 5, Faults: 3, ConsecutiveFaults: 3, StreakStartedAt: faultAt.Add(-time.Second), LastFaultReason: "RateLimited", LastFaultAt: faultAt, LastSuccessAt: successAt},
 	}); err != nil {
 		t.Fatalf("controller Replace() error: %v", err)
 	}
@@ -143,9 +143,12 @@ func TestConfigMapStoreRoundTripsRecordsFromEveryReporter(t *testing.T) {
 	if faulty.Faults != 3 || faulty.ConsecutiveFaults != 3 || faulty.LastFaultReason != "RateLimited" || !faulty.LastFaultAt.Equal(faultAt) || !faulty.LastSuccessAt.Equal(successAt) {
 		t.Errorf("controller record = %+v, want the published values", faulty)
 	}
+	if want := faultAt.Add(-time.Second); !faulty.StreakStartedAt.Equal(want) {
+		t.Errorf("controller record streak started at %v, want %v: replicas publish it so readers can count only uninterrupted runs", faulty.StreakStartedAt, want)
+	}
 	healthy := byKey["a/2"]
-	if healthy.ConsecutiveSuccesses != 2 || !healthy.LastFaultAt.IsZero() || healthy.LastFaultReason != "" || !healthy.LastSuccessAt.Equal(epoch) {
-		t.Errorf("gateway record = %+v, want a success-only record with no fault time", healthy)
+	if healthy.ConsecutiveSuccesses != 2 || !healthy.LastFaultAt.IsZero() || healthy.LastFaultReason != "" || !healthy.LastSuccessAt.Equal(epoch) || !healthy.StreakStartedAt.IsZero() {
+		t.Errorf("gateway record = %+v, want a success-only record with no fault time and an unknown streak start", healthy)
 	}
 }
 

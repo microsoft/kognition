@@ -70,6 +70,7 @@ type record struct {
 	Faults               int32      `json:"faults"`
 	ConsecutiveFaults    int32      `json:"consecutiveFaults,omitempty"`
 	ConsecutiveSuccesses int32      `json:"consecutiveSuccesses,omitempty"`
+	StreakStartedAt      *time.Time `json:"streakStartedAt,omitempty"`
 	LastFaultReason      string     `json:"lastFaultReason,omitempty"`
 	LastFaultAt          *time.Time `json:"lastFaultAt,omitempty"`
 	LastSuccessAt        *time.Time `json:"lastSuccessAt,omitempty"`
@@ -386,6 +387,10 @@ func encodeRecord(entry store.ModelCallHealth) record {
 		at := entry.LastSuccessAt.UTC()
 		encoded.LastSuccessAt = &at
 	}
+	if !entry.StreakStartedAt.IsZero() {
+		at := entry.StreakStartedAt.UTC()
+		encoded.StreakStartedAt = &at
+	}
 	return encoded
 }
 
@@ -400,6 +405,9 @@ func decodeRecord(entry record) store.ModelCallHealth {
 	}
 	if entry.LastSuccessAt != nil {
 		decoded.LastSuccessAt = *entry.LastSuccessAt
+	}
+	if entry.StreakStartedAt != nil {
+		decoded.StreakStartedAt = *entry.StreakStartedAt
 	}
 	return decoded
 }
