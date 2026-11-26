@@ -1193,7 +1193,7 @@ func (s *Server) handleWorkflowRunApproval(w http.ResponseWriter, r *http.Reques
 		} else {
 			required, lookupErr := s.lookupRequiredApprovers(r.Context(), obj, req.Step)
 			if lookupErr != nil {
-				s.logger.Error("lookup required approvers failed", zap.Error(lookupErr), requestid.ZapField(r.Context()))
+				s.logger.Error("lookup required approvers failed", zap.String("namespace", namespace), zap.String("workflowrun", name), requestid.ZapField(r.Context()))
 				writeError(w, http.StatusInternalServerError, "internal error")
 				return
 			}
@@ -1246,7 +1246,7 @@ func (s *Server) handleWorkflowRunApproval(w http.ResponseWriter, r *http.Reques
 			if errors.Is(err, store.ErrConflict) {
 				continue
 			}
-			s.logger.Error("update workflowrun for approval failed", zap.Error(err), requestid.ZapField(r.Context()))
+			s.logger.Error("update workflowrun for approval failed", zap.String("namespace", namespace), zap.String("workflowrun", name), requestid.ZapField(r.Context()))
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}

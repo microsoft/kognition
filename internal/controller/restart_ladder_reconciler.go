@@ -174,7 +174,7 @@ func (r *RestartLadderReconciler) Reconcile(ctx context.Context, req Request) (R
 	)
 
 	if err := r.executeLadderAction(ctx, action, &instance); err != nil {
-		log.Error("ladder action failed", zap.String("action", string(action)), zap.Error(err))
+		log.Error("ladder action failed", zap.String("action", string(action)))
 		// Still count the attempt.
 	}
 

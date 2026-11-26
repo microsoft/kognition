@@ -4102,6 +4102,61 @@ func TestWorkflowRunApproval_IncompleteApprovalConfigurationUsesSingleApproval(t
 	}
 }
 
+func TestWorkflowRunApproval_FailureLogsOmitRawErrors(t *testing.T) {
+	const secret = "synthetic-backend-credential-do-not-log"
+	failure := fmt.Errorf("backend operation failed: %w", errors.Join(errors.New(secret), errors.New("another failure")))
+	for _, stage := range []string{"lookup", "update"} {
+		t.Run(stage, func(t *testing.T) {
+			memory := newMemStore()
+			const runName = "run-log-error"
+			seedWorkflowRunForApproval(t, memory, "default", runName, "wf-error")
+			core, logs := observer.New(zap.ErrorLevel)
+			var storage APIServerStore
+			message := "lookup required approvers failed"
+			if stage == "lookup" {
+				storage = &workflowGetErrorStore{memStore: memory, err: failure}
+			} else {
+				storage = &errStore{memStore: memory, updateErr: failure}
+				message = "update workflowrun for approval failed"
+			}
+			server := New(Config{Addr: ":0"}, storage, zap.New(core))
+			response := doReq(t, server, http.MethodPost,
+				"/apis/kognition.dev/v1alpha1/namespaces/default/workflowruns/"+runName+"/approval",
+				map[string]any{"step": "execute", "decision": "approve"})
+			if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), secret) {
+				t.Fatalf("approval failure response changed: %d %s", response.Code, response.Body.String())
+			}
+			raw, err := memory.Get(context.Background(), "WorkflowRun", "default", runName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var run map[string]any
+			if err := json.Unmarshal(raw, &run); err != nil {
+				t.Fatal(err)
+			}
+			if annotations, ok := run["metadata"].(map[string]any)["annotations"].(map[string]any); ok && annotations[workflowApprovedStepsAnnotation] != nil {
+				t.Fatal("failed approval persisted an approved step")
+			}
+			entries := logs.FilterMessage(message).All()
+			if len(entries) != 1 {
+				t.Fatalf("failure log count = %d, want 1", len(entries))
+			}
+			fields := entries[0].ContextMap()
+			if fields["namespace"] != "default" || fields["workflowrun"] != runName {
+				t.Fatalf("missing correlation fields: %v", fields)
+			}
+			if _, exists := fields["error"]; exists {
+				t.Fatal("raw approval error field was logged")
+			}
+			for _, entry := range logs.All() {
+				if strings.Contains(entry.Message, secret) || strings.Contains(fmt.Sprint(entry.ContextMap()), secret) {
+					t.Fatalf("sensitive content reached log %q", entry.Message)
+				}
+			}
+		})
+	}
+}
+
 func TestWorkflowRunApproval_FailsClosedOnWorkflowReadError(t *testing.T) {
 	memory := newMemStore()
 	seedWorkflowRunForApproval(t, memory, "default", "run-workflow-error", "wf-error")

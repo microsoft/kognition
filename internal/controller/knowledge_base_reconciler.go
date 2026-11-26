@@ -849,8 +849,7 @@ func (r *KnowledgeBaseReconciler) updateAgentKBConditions(ctx context.Context, k
 
 		if err := r.updateAgentWithRetry(ctx, &agent); err != nil {
 			log.Warn("failed to update agent KB condition",
-				zap.String("agent", agent.ObjectMeta.Name),
-				zap.Error(err))
+				zap.String("agent", agent.ObjectMeta.Name))
 		}
 	}
 	return nil

@@ -35,6 +35,15 @@ logging raw provisioning, observation or status-update errors. Remote diagnostic
 can contain credentials even when truncated; do not add their free-form messages
 back to these logs. HTTP error behavior and reconciliation outcomes are unchanged.
 
+Workflow approval lookup/update failures, controller retry warnings, index-run
+reflection update failures, expired-lease takeover failures, Agent KB/Tool
+condition-update failures and restart-ladder action failures also omit raw error
+content. Their messages identify the failure stage and retain resource, retry,
+lease or action metadata where applicable. Workflow tool-invocation warnings
+retain namespace, principal and Tool identifiers while returning the original
+error to the caller. Retries, quorum rules, leadership decisions and readiness
+updates retain their existing behavior.
+
 ### Guarded Kubernetes Installation
 
 For a new release, the [fresh installer](getting-started/kubernetes.md) verifies

@@ -377,7 +377,7 @@ func (r *KnowledgeBaseIndexRunReconciler) reflectRunOntoKB(ctx context.Context, 
 		return false
 	}
 	if err := r.store.Update(ctx, knowledgeBaseKind, kb.ObjectMeta.Namespace, kb.ObjectMeta.Name, b, kb.ObjectMeta.ResourceVersion); err != nil {
-		log.Warn("reflect run onto KB: update failed; retrying", zap.Error(err))
+		log.Warn("reflect run onto KB: update failed; retrying", zap.String("kb", kb.ObjectMeta.Name))
 		return false
 	}
 	log.Info("reflected successful index run onto KnowledgeBase",

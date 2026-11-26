@@ -730,8 +730,7 @@ func (r *ToolReconciler) updateAgentToolConditions(ctx context.Context, tool *v1
 
 		if err := r.updateAgentWithRetry(ctx, &agent); err != nil {
 			log.Warn("failed to update agent tool condition",
-				zap.String("agent", agent.ObjectMeta.Name),
-				zap.Error(err))
+				zap.String("agent", agent.ObjectMeta.Name))
 		}
 	}
 	return nil
