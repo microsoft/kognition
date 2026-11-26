@@ -187,8 +187,8 @@ func TestProbe_ClassifiesHTTPStatus(t *testing.T) {
 	for _, test := range tests {
 		t.Run(strconv.Itoa(test.status), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/v1/messages" || r.Method != http.MethodPost {
-					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				if r.Method != http.MethodPost {
+					t.Errorf("unexpected method %s", r.Method)
 				}
 				w.WriteHeader(test.status)
 			}))
@@ -225,6 +225,135 @@ func TestProbe_RateLimitedIncludesRetryAfter(t *testing.T) {
 	}
 	if result.Available || result.Reason != "RateLimited" || !strings.Contains(result.Message, "Retry-After: 30") {
 		t.Fatalf("Probe() = %+v, want unavailable RateLimited with Retry-After hint", result)
+	}
+}
+
+func TestProbe_UsesCountTokensWithoutMessagesRequest(t *testing.T) {
+	var paths []string
+	var probeBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if v := r.Header.Get("anthropic-version"); v != apiVersion {
+			t.Errorf("anthropic-version = %q, want %q", v, apiVersion)
+		}
+		if key := r.Header.Get("x-api-key"); key != "test-key" {
+			t.Errorf("x-api-key = %q, want test-key", key)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&probeBody)
+		_, _ = w.Write([]byte(`{"input_tokens":8}`))
+	}))
+	defer server.Close()
+
+	result, err := New(server.Client()).Probe(context.Background(), &v1alpha1.ModelSpec{
+		ModelID:  "claude-3-sonnet",
+		Endpoint: server.URL,
+	}, &cpi.Credentials{Type: "api-key", Data: map[string]string{"apiKey": "test-key"}})
+	if err != nil {
+		t.Fatalf("Probe() error: %v", err)
+	}
+	if !result.Available || result.Reason != "Healthy" {
+		t.Fatalf("Probe() = %+v, want healthy", result)
+	}
+	if len(paths) != 1 || paths[0] != countTokensPath {
+		t.Fatalf("requests = %v, want only %s", paths, countTokensPath)
+	}
+	if probeBody["model"] != "claude-3-sonnet" {
+		t.Errorf("model = %v, want claude-3-sonnet", probeBody["model"])
+	}
+	if _, ok := probeBody["max_tokens"]; ok {
+		t.Errorf("count_tokens probe must not send max_tokens: %v", probeBody)
+	}
+}
+
+func TestProbe_FallsBackToMessagesWhenCountTokensUnsupported(t *testing.T) {
+	for _, unsupported := range []int{http.StatusNotFound, http.StatusMethodNotAllowed} {
+		t.Run(strconv.Itoa(unsupported), func(t *testing.T) {
+			var paths []string
+			var maxTokens float64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.URL.Path)
+				if r.URL.Path == countTokensPath {
+					w.WriteHeader(unsupported)
+					return
+				}
+				var body map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				maxTokens, _ = body["max_tokens"].(float64)
+				_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"hi"}]}`))
+			}))
+			defer server.Close()
+
+			result, err := New(server.Client()).Probe(context.Background(), &v1alpha1.ModelSpec{
+				ModelID:  "claude-3-sonnet",
+				Endpoint: server.URL,
+			}, nil)
+			if err != nil {
+				t.Fatalf("Probe() error: %v", err)
+			}
+			if !result.Available || result.Reason != "Healthy" {
+				t.Fatalf("Probe() = %+v, want healthy", result)
+			}
+			if len(paths) != 2 || paths[0] != countTokensPath || paths[1] != messagesPath || maxTokens != 1 {
+				t.Fatalf("requests = %v, max_tokens = %v; want count_tokens then messages with max_tokens=1", paths, maxTokens)
+			}
+		})
+	}
+}
+
+func TestProbe_UnknownModelIsUnhealthyAfterFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"not_found_error","message":"model: unknown"}}`))
+	}))
+	defer server.Close()
+
+	result, err := New(server.Client()).Probe(context.Background(), &v1alpha1.ModelSpec{
+		ModelID:  "unknown",
+		Endpoint: server.URL,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Probe() error: %v", err)
+	}
+	if result.Available || result.Reason != "EndpointError" {
+		t.Fatalf("Probe() = %+v, want unavailable EndpointError", result)
+	}
+}
+
+func TestProbe_ClassifiesBadRequestAndBillingResponses(t *testing.T) {
+	tests := []struct {
+		name          string
+		status        int
+		body          string
+		wantAvailable bool
+		wantReason    string
+	}{
+		{"validation error", http.StatusBadRequest, `{"type":"error","error":{"type":"invalid_request_error","message":"messages: at least one message is required"}}`, true, "Healthy"},
+		{"unparseable body", http.StatusBadRequest, `<html>bad request</html>`, true, "Healthy"},
+		{"empty body", http.StatusBadRequest, ``, true, "Healthy"},
+		{"credit balance", http.StatusBadRequest, `{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}`, false, "QuotaOrBillingError"},
+		{"workspace usage limit", http.StatusBadRequest, `{"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified workspace API usage limits."}}`, false, "QuotaOrBillingError"},
+		{"billing error status", http.StatusPaymentRequired, `{"type":"error","error":{"type":"billing_error","message":"payment failed"}}`, false, "QuotaOrBillingError"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+
+			result, err := New(server.Client()).Probe(context.Background(), &v1alpha1.ModelSpec{
+				ModelID:  "claude-3-sonnet",
+				Endpoint: server.URL,
+			}, nil)
+			if err != nil {
+				t.Fatalf("Probe() error: %v", err)
+			}
+			if result.Available != test.wantAvailable || result.Reason != test.wantReason {
+				t.Fatalf("Probe() = %+v; want available %t, reason %q", result, test.wantAvailable, test.wantReason)
+			}
+		})
 	}
 }
 
