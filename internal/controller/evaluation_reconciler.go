@@ -81,7 +81,7 @@ func (r *EvaluationReconciler) Reconcile(ctx context.Context, req Request) (Resu
 		generation = 1
 	}
 	runName := evaluationRunName(eval.ObjectMeta.Name, generation)
-	run, err := r.getEvaluationRun(ctx, eval.ObjectMeta.Namespace, runName)
+	run, err := r.getCurrentEvaluationRun(ctx, &eval, runName)
 	if errors.Is(err, store.ErrNotFound) {
 		if err := r.createEvaluationRun(ctx, &eval, runName); err != nil {
 			return Result{}, fmt.Errorf("create evaluationRun: %w", err)
@@ -133,13 +133,7 @@ func (r *EvaluationReconciler) createEvaluationRun(ctx context.Context, eval *v1
 				UID:        eval.ObjectMeta.UID,
 			}},
 		},
-		Spec: v1alpha1.EvaluationRunSpec{
-			EvaluationRef:    v1alpha1.LocalObjectReference{Name: eval.ObjectMeta.Name},
-			TargetRef:        cloneEvaluationTargetRef(eval.Spec.TargetRef),
-			DatasetRef:       eval.Spec.DatasetRef,
-			Graders:          cloneEvaluationGraders(eval.Spec.Graders),
-			MetricThresholds: cloneEvaluationMetricThresholds(eval.Spec.MetricThresholds),
-		},
+		Spec:   evaluationRunSpecSnapshot(eval, eval.Spec.TargetRef),
 		Status: v1alpha1.EvaluationRunStatus{Phase: v1alpha1.PhasePending},
 	}
 	data, err := json.Marshal(run)
@@ -152,8 +146,26 @@ func (r *EvaluationReconciler) createEvaluationRun(ctx context.Context, eval *v1
 	return nil
 }
 
-func (r *EvaluationReconciler) getEvaluationRun(ctx context.Context, namespace, name string) (*v1alpha1.EvaluationRun, error) {
-	raw, err := r.store.Get(ctx, evaluationRunKind, namespace, name)
+func (r *EvaluationReconciler) getCurrentEvaluationRun(ctx context.Context, eval *v1alpha1.Evaluation, name string) (*v1alpha1.EvaluationRun, error) {
+	run, err := readEvaluationRun(ctx, r.store, eval.Namespace, name)
+	if !errors.Is(err, store.ErrNotFound) || len(fmt.Sprintf("%s-g%d", eval.Name, max(eval.Generation, 1))) <= 63 ||
+		eval.Status.ObservedGeneration != eval.Generation || eval.Status.LastRunRef == nil ||
+		!alternateBoundedResourceName(eval.Status.LastRunRef.Name, name) {
+		return run, err
+	}
+	run, err = readEvaluationRun(ctx, r.store, eval.Namespace, eval.Status.LastRunRef.Name)
+	if err != nil {
+		return nil, err
+	}
+	if run.Name != eval.Status.LastRunRef.Name ||
+		!evaluationRunMatchesSnapshot(run, evaluationKind, eval.ObjectMeta, evaluationRunSpecSnapshot(eval, eval.Spec.TargetRef)) {
+		return nil, store.ErrNotFound
+	}
+	return run, nil
+}
+
+func readEvaluationRun(ctx context.Context, s store.Store, namespace, name string) (*v1alpha1.EvaluationRun, error) {
+	raw, err := s.Get(ctx, evaluationRunKind, namespace, name)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +174,21 @@ func (r *EvaluationReconciler) getEvaluationRun(ctx context.Context, namespace, 
 		return nil, fmt.Errorf("unmarshal evaluationRun: %w", err)
 	}
 	return &run, nil
+}
+
+func evaluationRunSpecSnapshot(eval *v1alpha1.Evaluation, target v1alpha1.EvaluationTargetRef) v1alpha1.EvaluationRunSpec {
+	return v1alpha1.EvaluationRunSpec{
+		EvaluationRef:    v1alpha1.LocalObjectReference{Name: eval.Name},
+		TargetRef:        cloneEvaluationTargetRef(target),
+		DatasetRef:       eval.Spec.DatasetRef,
+		Graders:          cloneEvaluationGraders(eval.Spec.Graders),
+		MetricThresholds: cloneEvaluationMetricThresholds(eval.Spec.MetricThresholds),
+	}
+}
+
+func evaluationRunMatchesSnapshot(run *v1alpha1.EvaluationRun, ownerKind string, owner v1alpha1.ObjectMeta, spec v1alpha1.EvaluationRunSpec) bool {
+	return owner.UID != "" && run.Namespace == owner.Namespace &&
+		ownedBy(run.OwnerReferences, ownerKind, owner.Name, owner.UID) && reflect.DeepEqual(run.Spec, spec)
 }
 
 func (r *EvaluationReconciler) updateEvaluationStatus(ctx context.Context, eval *v1alpha1.Evaluation, original v1alpha1.EvaluationStatus) error {
@@ -750,6 +777,15 @@ func (r *EvaluationRunReconciler) reflectParentEvaluationStatus(ctx context.Cont
 	if err := json.Unmarshal(raw, &eval); err != nil {
 		return fmt.Errorf("unmarshal evaluation: %w", err)
 	}
+	if ownedBy(run.OwnerReferences, evaluationKind, eval.Name, eval.UID) &&
+		run.Name != evaluationRunName(eval.Name, max(eval.Generation, 1)) {
+		// A legacy or older-generation run cannot claim a newly requested generation.
+		if eval.Status.ObservedGeneration != eval.Generation || eval.Status.LastRunRef == nil ||
+			eval.Status.LastRunRef.Name != run.Name ||
+			!evaluationRunMatchesSnapshot(run, evaluationKind, eval.ObjectMeta, evaluationRunSpecSnapshot(&eval, eval.Spec.TargetRef)) {
+			return nil
+		}
+	}
 	original := eval.Status
 	reflectEvaluationRunStatus(&eval, run)
 	if reflect.DeepEqual(eval.Status, original) {
@@ -1337,6 +1373,16 @@ func boundedResourceName(name string) string {
 	sum := sha256.Sum256([]byte(name))
 	suffix := "-" + hex.EncodeToString(sum[:])[:8]
 	return strings.TrimRight(name[:63-len(suffix)], "-") + suffix
+}
+
+func alternateBoundedResourceName(name, current string) bool {
+	if name == current || len(name) != len(current) || len(current) < 9 ||
+		name[:len(name)-8] != current[:len(current)-8] {
+		return false
+	}
+	suffix := name[len(name)-8:]
+	_, err := hex.DecodeString(suffix)
+	return err == nil && suffix == strings.ToLower(suffix)
 }
 
 func ownedBy(refs []v1alpha1.OwnerReference, kind, name, uid string) bool {

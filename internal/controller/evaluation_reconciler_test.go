@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -894,6 +895,272 @@ func TestEvaluationDatasetDigestUsesSHA256(t *testing.T) {
 	changed, err := evaluationDatasetDigest(spec)
 	if err != nil || changed == digest {
 		t.Fatalf("changed digest = %q, error = %v, want a different SHA-256 digest", changed, err)
+	}
+}
+
+func legacyEvaluationUpgradeFixture() (v1alpha1.Evaluation, v1alpha1.EvaluationRun) {
+	// Fixed pre-upgrade SHA-1 name for a 63-character Evaluation at generation 7.
+	legacyName := strings.Repeat("e", 54) + "-fb8d7e0c"
+	completed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	minScore, score := 0.9, 0.95
+	evaluation := v1alpha1.Evaluation{
+		ObjectMeta: v1alpha1.ObjectMeta{Name: strings.Repeat("e", 63), Namespace: "default", UID: "evaluation-owner", Generation: 7},
+		Spec: v1alpha1.EvaluationSpec{
+			TargetRef:        v1alpha1.EvaluationTargetRef{Kind: "Agent", Name: "assistant"},
+			DatasetRef:       v1alpha1.EvaluationDatasetRef{Name: "dataset", Version: "v1"},
+			Graders:          []v1alpha1.EvaluationGrader{{Name: "success", Type: "builtin"}},
+			MetricThresholds: []v1alpha1.EvaluationMetricThreshold{{Metric: "task_success", Min: &minScore, Required: true}},
+		},
+		Status: v1alpha1.EvaluationStatus{ObservedGeneration: 7, LastRunRef: &v1alpha1.LocalObjectReference{Name: legacyName}},
+	}
+	run := v1alpha1.EvaluationRun{
+		ObjectMeta: v1alpha1.ObjectMeta{
+			Name: legacyName, Namespace: "default", UID: "historical-run",
+			OwnerReferences: []v1alpha1.OwnerReference{{Kind: evaluationKind, Name: evaluation.Name, UID: evaluation.UID}},
+		},
+		Spec: v1alpha1.EvaluationRunSpec{
+			EvaluationRef:    v1alpha1.LocalObjectReference{Name: evaluation.Name},
+			TargetRef:        cloneEvaluationTargetRef(evaluation.Spec.TargetRef),
+			DatasetRef:       evaluation.Spec.DatasetRef,
+			Graders:          cloneEvaluationGraders(evaluation.Spec.Graders),
+			MetricThresholds: cloneEvaluationMetricThresholds(evaluation.Spec.MetricThresholds),
+		},
+		Status: v1alpha1.EvaluationRunStatus{
+			Phase: v1alpha1.PhaseReady, DatasetDigest: strings.Repeat("a", 40), CompletedAt: &completed, Score: &score, Passed: true,
+		},
+	}
+	return evaluation, run
+}
+
+func TestEvaluationReconcilerReusesLegacyLongNamedRun(t *testing.T) {
+	for _, phase := range []v1alpha1.Phase{v1alpha1.PhaseReady, v1alpha1.PhaseFailed, v1alpha1.PhasePending, v1alpha1.PhaseRunning} {
+		t.Run(string(phase), func(t *testing.T) {
+			ctx := context.Background()
+			memory := newMemStore()
+			evaluation, run := legacyEvaluationUpgradeFixture()
+			run.Status.Phase = phase
+			storeEvaluation(t, memory, evaluation)
+			storeEvaluationRun(t, memory, run)
+			r := NewEvaluationReconciler(memory, zaptest.NewLogger(t))
+			for range 2 {
+				if _, err := r.Reconcile(ctx, Request{Namespace: evaluation.Namespace, Name: evaluation.Name}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			parent := getEvaluation(t, memory, evaluation.Namespace, evaluation.Name)
+			if parent.Status.LastRunRef == nil || parent.Status.LastRunRef.Name != run.Name || parent.Status.ObservedGeneration != 7 {
+				t.Fatalf("legacy run association lost: %#v", parent.Status)
+			}
+			runs, err := memory.List(ctx, evaluationRunKind, storepkg.ListOptions{Namespace: evaluation.Namespace})
+			if err != nil || len(runs) != 1 {
+				t.Fatalf("unexpected duplicate runs: %d, error = %v", len(runs), err)
+			}
+			got := getEvaluationRun(t, memory, evaluation.Namespace, run.Name)
+			if !reflect.DeepEqual(got.Spec, run.Spec) || !reflect.DeepEqual(got.Status, run.Status) {
+				t.Fatalf("historical run changed: %#v", got)
+			}
+			if phase == v1alpha1.PhaseReady || phase == v1alpha1.PhaseFailed {
+				if parent.Status.Phase != phase || len(parent.Status.RunHistory) != 1 || parent.Status.RunHistory[0].Name != run.Name {
+					t.Fatalf("terminal result was not retained: %#v", parent.Status)
+				}
+			} else {
+				if _, err := NewEvaluationRunReconciler(memory, zaptest.NewLogger(t)).Reconcile(ctx, Request{Namespace: run.Namespace, Name: run.Name}); err != nil {
+					t.Fatal(err)
+				}
+				failed := getEvaluationRun(t, memory, run.Namespace, run.Name)
+				if failed.Status.Phase != v1alpha1.PhaseFailed || !strings.Contains(failed.Status.Message, "create a new EvaluationRun") {
+					t.Fatalf("legacy digest did not fail closed: %#v", failed.Status)
+				}
+			}
+			jobs, err := memory.List(ctx, agentJobKind, storepkg.ListOptions{Namespace: evaluation.Namespace})
+			if err != nil || len(jobs) != 0 {
+				t.Fatalf("unexpected model jobs: %d, error = %v", len(jobs), err)
+			}
+		})
+	}
+}
+
+func TestEvaluationReconcilerRejectsUnverifiedLegacyRun(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*v1alpha1.Evaluation, *v1alpha1.EvaluationRun)
+	}{
+		{"new generation with unchanged spec", func(e *v1alpha1.Evaluation, _ *v1alpha1.EvaluationRun) { e.Generation++ }},
+		{"unobserved generation", func(e *v1alpha1.Evaluation, _ *v1alpha1.EvaluationRun) { e.Status.ObservedGeneration = 0 }},
+		{"missing reference", func(e *v1alpha1.Evaluation, _ *v1alpha1.EvaluationRun) { e.Status.LastRunRef = nil }},
+		{"missing owner UID", func(e *v1alpha1.Evaluation, _ *v1alpha1.EvaluationRun) { e.UID = "" }},
+		{"different owner UID", func(_ *v1alpha1.Evaluation, r *v1alpha1.EvaluationRun) { r.OwnerReferences[0].UID = "previous-owner" }},
+		{"different owner kind", func(_ *v1alpha1.Evaluation, r *v1alpha1.EvaluationRun) { r.OwnerReferences[0].Kind = solutionKind }},
+		{"different owner name", func(_ *v1alpha1.Evaluation, r *v1alpha1.EvaluationRun) { r.OwnerReferences[0].Name = "other" }},
+		{"different evaluation", func(_ *v1alpha1.Evaluation, r *v1alpha1.EvaluationRun) { r.Spec.EvaluationRef.Name = "other" }},
+		{"different target", func(_ *v1alpha1.Evaluation, r *v1alpha1.EvaluationRun) { r.Spec.TargetRef.Name = "other" }},
+		{"different dataset", func(_ *v1alpha1.Evaluation, r *v1alpha1.EvaluationRun) { r.Spec.DatasetRef.Version = "v2" }},
+		{"different grader", func(_ *v1alpha1.Evaluation, r *v1alpha1.EvaluationRun) { r.Spec.Graders[0].Name = "other" }},
+		{"different threshold", func(_ *v1alpha1.Evaluation, r *v1alpha1.EvaluationRun) { *r.Spec.MetricThresholds[0].Min = 0.99 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			memory := newMemStore()
+			evaluation, run := legacyEvaluationUpgradeFixture()
+			test.change(&evaluation, &run)
+			storeEvaluation(t, memory, evaluation)
+			storeEvaluationRun(t, memory, run)
+			if _, err := NewEvaluationReconciler(memory, zaptest.NewLogger(t)).Reconcile(ctx, Request{Namespace: evaluation.Namespace, Name: evaluation.Name}); err != nil {
+				t.Fatal(err)
+			}
+			parent := getEvaluation(t, memory, evaluation.Namespace, evaluation.Name)
+			want := evaluationRunName(evaluation.Name, evaluation.Generation)
+			if parent.Status.LastRunRef == nil || parent.Status.LastRunRef.Name != want {
+				t.Fatalf("unverified run reused: %#v", parent.Status)
+			}
+			runs, err := memory.List(ctx, evaluationRunKind, storepkg.ListOptions{Namespace: evaluation.Namespace})
+			if err != nil || len(runs) != 2 {
+				t.Fatalf("new run missing: %d runs, error = %v", len(runs), err)
+			}
+		})
+	}
+}
+
+func TestEvaluationRunReconcilerDoesNotAdvanceGenerationForHistoricalOwnedRun(t *testing.T) {
+	ctx := context.Background()
+	memory := newMemStore()
+	evaluation, run := legacyEvaluationUpgradeFixture()
+	evaluation.Generation++
+	run.Status.Phase = v1alpha1.PhaseRunning
+	storeEvaluation(t, memory, evaluation)
+	storeEvaluationRun(t, memory, run)
+	if _, err := NewEvaluationRunReconciler(memory, zaptest.NewLogger(t)).Reconcile(ctx, Request{Namespace: run.Namespace, Name: run.Name}); err != nil {
+		t.Fatal(err)
+	}
+	parent := getEvaluation(t, memory, evaluation.Namespace, evaluation.Name)
+	if parent.Status.ObservedGeneration != 7 {
+		t.Fatalf("historical run claimed the new generation: %#v", parent.Status)
+	}
+	if _, err := NewEvaluationReconciler(memory, zaptest.NewLogger(t)).Reconcile(ctx, Request{Namespace: evaluation.Namespace, Name: evaluation.Name}); err != nil {
+		t.Fatal(err)
+	}
+	parent = getEvaluation(t, memory, evaluation.Namespace, evaluation.Name)
+	if parent.Status.LastRunRef == nil || parent.Status.LastRunRef.Name != evaluationRunName(evaluation.Name, 8) {
+		t.Fatalf("explicit new generation did not start: %#v", parent.Status)
+	}
+}
+
+type evaluationUpgradeFaultStore struct {
+	*memStore
+	getName   string
+	getErr    error
+	getData   []byte
+	listErr   error
+	listItems [][]byte
+}
+
+func (s *evaluationUpgradeFaultStore) Get(ctx context.Context, kind, namespace, name string) ([]byte, error) {
+	if kind == evaluationRunKind && name == s.getName {
+		if s.getErr != nil {
+			return nil, s.getErr
+		}
+		if s.getData != nil {
+			return s.getData, nil
+		}
+	}
+	return s.memStore.Get(ctx, kind, namespace, name)
+}
+
+func (s *evaluationUpgradeFaultStore) List(ctx context.Context, kind string, opts storepkg.ListOptions) ([][]byte, error) {
+	if kind == evaluationRunKind {
+		if s.listErr != nil {
+			return nil, s.listErr
+		}
+		if s.listItems != nil {
+			return s.listItems, nil
+		}
+	}
+	return s.memStore.List(ctx, kind, opts)
+}
+
+func TestEvaluationReconcilerLegacyLookupErrorsDoNotCreateRuns(t *testing.T) {
+	unavailable := errors.New("storage unavailable")
+	for _, test := range []struct {
+		name      string
+		canonical bool
+		getErr    error
+		getData   []byte
+		create    bool
+	}{
+		{"canonical unavailable", true, unavailable, nil, false},
+		{"legacy unavailable", false, unavailable, nil, false},
+		{"legacy malformed", false, nil, []byte("{"), false},
+		{"legacy removed", false, fmt.Errorf("wrapped: %w", storepkg.ErrNotFound), nil, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			memory := newMemStore()
+			evaluation, run := legacyEvaluationUpgradeFixture()
+			storeEvaluation(t, memory, evaluation)
+			storeEvaluationRun(t, memory, run)
+			name := run.Name
+			if test.canonical {
+				name = evaluationRunName(evaluation.Name, evaluation.Generation)
+			}
+			faults := &evaluationUpgradeFaultStore{memStore: memory, getName: name, getErr: test.getErr, getData: test.getData}
+			_, err := NewEvaluationReconciler(faults, zaptest.NewLogger(t)).Reconcile(ctx, Request{Namespace: evaluation.Namespace, Name: evaluation.Name})
+			if test.create {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || (errors.Is(test.getErr, unavailable) && !errors.Is(err, unavailable)) {
+				t.Fatalf("lookup error not propagated: %v", err)
+			}
+			runs, listErr := memory.List(ctx, evaluationRunKind, storepkg.ListOptions{Namespace: evaluation.Namespace})
+			want := 1
+			if test.create {
+				want++
+			}
+			if listErr != nil || len(runs) != want {
+				t.Fatalf("runs = %d, error = %v, want %d", len(runs), listErr, want)
+			}
+		})
+	}
+}
+
+func TestEvaluationReconcilerPrefersCurrentNamedRun(t *testing.T) {
+	ctx := context.Background()
+	memory := newMemStore()
+	evaluation, legacy := legacyEvaluationUpgradeFixture()
+	current := legacy
+	current.Name = evaluationRunName(evaluation.Name, evaluation.Generation)
+	current.Status.Phase = v1alpha1.PhaseFailed
+	storeEvaluation(t, memory, evaluation)
+	storeEvaluationRun(t, memory, legacy)
+	storeEvaluationRun(t, memory, current)
+	if _, err := NewEvaluationReconciler(memory, zaptest.NewLogger(t)).Reconcile(ctx, Request{Namespace: evaluation.Namespace, Name: evaluation.Name}); err != nil {
+		t.Fatal(err)
+	}
+	parent := getEvaluation(t, memory, evaluation.Namespace, evaluation.Name)
+	if parent.Status.LastRunRef == nil || parent.Status.LastRunRef.Name != current.Name || parent.Status.Phase != v1alpha1.PhaseFailed {
+		t.Fatalf("canonical result overridden by legacy success: %#v", parent.Status)
+	}
+}
+
+func TestAlternateBoundedResourceName(t *testing.T) {
+	current := strings.Repeat("a", 54) + "-12345678"
+	for _, test := range []struct {
+		name string
+		want bool
+	}{
+		{strings.Repeat("a", 54) + "-deadbeef", true},
+		{current, false},
+		{strings.Repeat("b", 54) + "-deadbeef", false},
+		{strings.Repeat("a", 54) + "-DEADBEEF", false},
+		{strings.Repeat("a", 54) + "-not-hex!", false},
+		{"short", false},
+	} {
+		if got := alternateBoundedResourceName(test.name, current); got != test.want {
+			t.Errorf("alternateBoundedResourceName(%q) = %v, want %v", test.name, got, test.want)
+		}
+	}
+	if alternateBoundedResourceName("short", "other") {
+		t.Fatal("short unbounded names accepted")
 	}
 }
 

@@ -217,6 +217,14 @@ reviewed dataset; do not overwrite the old run's digest to bypass the check.
 Completed historical runs are left unchanged. Generated names longer than 63
 characters now use a truncated SHA-256 suffix, so long EvaluationRun, target job,
 judge job and Solution promotion run names differ from pre-upgrade names.
+Reconciliation retains a referenced long-named EvaluationRun for the same observed
+Evaluation generation when its owner UID and immutable execution snapshot match.
+Solution promotion gates similarly reuse an owned run for the same revision and
+matching evaluation snapshot. Existing terminal results remain authoritative;
+reconciliation does not create replacement runs just because the name suffix
+changed. Ambiguous promotion-run matches fail explicitly rather than selecting an
+arbitrary result. A new Evaluation generation, Solution revision, or changed
+execution snapshot still creates a new run.
 Drain in-flight evaluations before upgrading where possible, and inspect retained
 jobs and promotion runs before rerunning to avoid unintended duplicate model calls.
 

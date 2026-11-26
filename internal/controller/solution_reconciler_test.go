@@ -325,6 +325,204 @@ func TestSolutionReconciler_PromotionGateBlocksAndThenActivatesCandidateRevision
 	}
 }
 
+func legacyPromotionUpgradeFixture() (v1alpha1.Solution, v1alpha1.Evaluation, v1alpha1.EvaluationRun) {
+	evaluation, run := legacyEvaluationUpgradeFixture()
+	evaluation.Name = "quality"
+	solution := v1alpha1.Solution{
+		ObjectMeta: v1alpha1.ObjectMeta{Name: strings.Repeat("s", 63), Namespace: "default", UID: "solution-owner"},
+		Spec: v1alpha1.SolutionSpec{
+			PromotionGates: []v1alpha1.SolutionPromotionGate{{EvaluationRef: v1alpha1.LocalObjectReference{Name: evaluation.Name}}},
+		},
+	}
+	revision := int64(7)
+	// Fixed pre-upgrade name for this Solution, revision, and Evaluation spec.
+	run.Name = strings.Repeat("s", 54) + "-f6fe2003"
+	run.OwnerReferences = []v1alpha1.OwnerReference{{Kind: solutionKind, Name: solution.Name, UID: solution.UID}}
+	run.Labels = map[string]string{"kognition.dev/solution": solution.Name, "kognition.dev/evaluation": evaluation.Name}
+	run.Spec.EvaluationRef.Name = evaluation.Name
+	run.Spec.TargetRef = v1alpha1.EvaluationTargetRef{Kind: solutionKind, Name: solution.Name, Revision: &revision}
+	evaluation.Status.LastRunRef = &v1alpha1.LocalObjectReference{Name: run.Name}
+	return solution, evaluation, run
+}
+
+func TestSolutionReconcilerReusesLegacyLongNamedPromotionRun(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		phase    v1alpha1.Phase
+		passed   bool
+		degraded bool
+		reason   string
+	}{
+		{"passed", v1alpha1.PhaseReady, true, false, ""},
+		{"failed", v1alpha1.PhaseFailed, false, true, "PromotionBlocked"},
+		{"threshold failed", v1alpha1.PhaseReady, false, false, "PromotionBlocked"},
+		{"degraded", v1alpha1.PhaseReady, true, true, "PromotionGatesPending"},
+		{"pending", v1alpha1.PhasePending, false, false, "PromotionGatesPending"},
+		{"running", v1alpha1.PhaseRunning, false, false, "PromotionGatesPending"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			memory := newMemStore()
+			solution, evaluation, run := legacyPromotionUpgradeFixture()
+			run.Status.Phase, run.Status.Passed, run.Status.Degraded = test.phase, test.passed, test.degraded
+			storeEvaluation(t, memory, evaluation)
+			storeEvaluationRun(t, memory, run)
+			r := NewSolutionReconciler(memory, zaptest.NewLogger(t))
+			for range 2 {
+				passed, reason, message, err := r.reconcilePromotionGates(ctx, &solution, 7)
+				if err != nil || passed != (test.reason == "") || reason != test.reason {
+					t.Fatalf("gate = %v, %q, %q, %v", passed, reason, message, err)
+				}
+				if reason != "" && !strings.Contains(message, run.Name) {
+					t.Fatalf("gate no longer references the legacy run: %q", message)
+				}
+			}
+			runs, err := memory.List(ctx, evaluationRunKind, store.ListOptions{Namespace: solution.Namespace})
+			if err != nil || len(runs) != 1 {
+				t.Fatalf("unexpected duplicate runs: %d, error = %v", len(runs), err)
+			}
+			got := getEvaluationRun(t, memory, solution.Namespace, run.Name)
+			if !reflect.DeepEqual(got.Spec, run.Spec) || !reflect.DeepEqual(got.Status, run.Status) {
+				t.Fatalf("historical promotion run changed: %#v", got)
+			}
+			jobs, err := memory.List(ctx, agentJobKind, store.ListOptions{Namespace: solution.Namespace})
+			if err != nil || len(jobs) != 0 {
+				t.Fatalf("unexpected model jobs: %d, error = %v", len(jobs), err)
+			}
+		})
+	}
+}
+
+func TestSolutionReconcilerRejectsUnverifiedLegacyPromotionRun(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*v1alpha1.Solution, *v1alpha1.EvaluationRun)
+	}{
+		{"different revision", func(_ *v1alpha1.Solution, r *v1alpha1.EvaluationRun) { *r.Spec.TargetRef.Revision = 6 }},
+		{"missing revision", func(_ *v1alpha1.Solution, r *v1alpha1.EvaluationRun) { r.Spec.TargetRef.Revision = nil }},
+		{"missing owner UID", func(s *v1alpha1.Solution, _ *v1alpha1.EvaluationRun) { s.UID = "" }},
+		{"different owner UID", func(_ *v1alpha1.Solution, r *v1alpha1.EvaluationRun) { r.OwnerReferences[0].UID = "previous-owner" }},
+		{"different owner kind", func(_ *v1alpha1.Solution, r *v1alpha1.EvaluationRun) { r.OwnerReferences[0].Kind = evaluationKind }},
+		{"different owner name", func(_ *v1alpha1.Solution, r *v1alpha1.EvaluationRun) { r.OwnerReferences[0].Name = "other" }},
+		{"different evaluation", func(_ *v1alpha1.Solution, r *v1alpha1.EvaluationRun) { r.Spec.EvaluationRef.Name = "other" }},
+		{"different target", func(_ *v1alpha1.Solution, r *v1alpha1.EvaluationRun) { r.Spec.TargetRef.Name = "other" }},
+		{"different namespace", func(_ *v1alpha1.Solution, r *v1alpha1.EvaluationRun) { r.Spec.TargetRef.Namespace = "other" }},
+		{"different dataset", func(_ *v1alpha1.Solution, r *v1alpha1.EvaluationRun) { r.Spec.DatasetRef.Version = "v2" }},
+		{"different grader", func(_ *v1alpha1.Solution, r *v1alpha1.EvaluationRun) { r.Spec.Graders[0].Name = "other" }},
+		{"different threshold", func(_ *v1alpha1.Solution, r *v1alpha1.EvaluationRun) { *r.Spec.MetricThresholds[0].Min = 0.99 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			memory := newMemStore()
+			solution, evaluation, run := legacyPromotionUpgradeFixture()
+			test.change(&solution, &run)
+			storeEvaluation(t, memory, evaluation)
+			storeEvaluationRun(t, memory, run)
+			passed, reason, _, err := NewSolutionReconciler(memory, zaptest.NewLogger(t)).reconcilePromotionGates(ctx, &solution, 7)
+			if err != nil || passed || reason != "PromotionGatesPending" {
+				t.Fatalf("unverified run reused: gate = %v, %q, %v", passed, reason, err)
+			}
+			runName, err := solutionPromotionRunName(solution.Name, 7, &evaluation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := memory.Get(ctx, evaluationRunKind, solution.Namespace, runName); err != nil {
+				t.Fatalf("new promotion run missing: %v", err)
+			}
+		})
+	}
+}
+
+func TestSolutionReconcilerLegacyPromotionLookupErrorsDoNotCreateRuns(t *testing.T) {
+	unavailable := errors.New("storage unavailable")
+	for _, test := range []struct {
+		name      string
+		listErr   error
+		malformed bool
+		ambiguous bool
+	}{
+		{"unavailable", unavailable, false, false},
+		{"malformed", nil, true, false},
+		{"ambiguous", nil, false, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			memory := newMemStore()
+			solution, evaluation, run := legacyPromotionUpgradeFixture()
+			storeEvaluation(t, memory, evaluation)
+			storeEvaluationRun(t, memory, run)
+			faults := &evaluationUpgradeFaultStore{memStore: memory, listErr: test.listErr}
+			if test.malformed {
+				faults.listItems = [][]byte{[]byte("{")}
+			}
+			if test.ambiguous {
+				first, err := json.Marshal(run)
+				if err != nil {
+					t.Fatal(err)
+				}
+				run.Name = strings.Repeat("s", 54) + "-deadbeef"
+				second, err := json.Marshal(run)
+				if err != nil {
+					t.Fatal(err)
+				}
+				faults.listItems = [][]byte{first, second}
+			}
+			_, _, _, err := NewSolutionReconciler(faults, zaptest.NewLogger(t)).reconcilePromotionGates(ctx, &solution, 7)
+			if err == nil || (test.listErr != nil && !errors.Is(err, unavailable)) {
+				t.Fatalf("lookup error not propagated: %v", err)
+			}
+			runs, listErr := memory.List(ctx, evaluationRunKind, store.ListOptions{Namespace: solution.Namespace})
+			if listErr != nil || len(runs) != 1 {
+				t.Fatalf("lookup failure created a run: %d, error = %v", len(runs), listErr)
+			}
+		})
+	}
+}
+
+func TestSolutionReconcilerPrefersCurrentNamedPromotionRun(t *testing.T) {
+	ctx := context.Background()
+	memory := newMemStore()
+	solution, evaluation, legacy := legacyPromotionUpgradeFixture()
+	current := legacy
+	var err error
+	current.Name, err = solutionPromotionRunName(solution.Name, 7, &evaluation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Status.Phase = v1alpha1.PhaseFailed
+	storeEvaluation(t, memory, evaluation)
+	storeEvaluationRun(t, memory, legacy)
+	storeEvaluationRun(t, memory, current)
+	passed, reason, message, err := NewSolutionReconciler(memory, zaptest.NewLogger(t)).reconcilePromotionGates(ctx, &solution, 7)
+	if err != nil || passed || reason != "PromotionBlocked" || !strings.Contains(message, current.Name) {
+		t.Fatalf("canonical failure overridden by legacy success: %v, %q, %q, %v", passed, reason, message, err)
+	}
+}
+
+func TestSolutionReconcilerDoesNotReuseAlternateUnboundedPromotionName(t *testing.T) {
+	ctx := context.Background()
+	memory := newMemStore()
+	solution, evaluation, run := legacyPromotionUpgradeFixture()
+	solution.Name = strings.Repeat("s", 43)
+	run.OwnerReferences[0].Name = solution.Name
+	run.Labels["kognition.dev/solution"] = solution.Name
+	run.Spec.TargetRef.Name = solution.Name
+	name, err := solutionPromotionRunName(solution.Name, 7, &evaluation)
+	if err != nil || len(name) != 63 {
+		t.Fatalf("boundary name = %q, error = %v, want exactly 63 characters", name, err)
+	}
+	run.Name = name[:len(name)-8] + "deadbeef"
+	storeEvaluation(t, memory, evaluation)
+	storeEvaluationRun(t, memory, run)
+	passed, reason, _, err := NewSolutionReconciler(memory, zaptest.NewLogger(t)).reconcilePromotionGates(ctx, &solution, 7)
+	if err != nil || passed || reason != "PromotionGatesPending" {
+		t.Fatalf("non-legacy alternate run reused: %v, %q, %v", passed, reason, err)
+	}
+	if _, err := memory.Get(ctx, evaluationRunKind, solution.Namespace, name); err != nil {
+		t.Fatalf("current promotion run missing: %v", err)
+	}
+}
+
 func TestSolutionReconciler_ExecutesRoutedTarget(t *testing.T) {
 	for _, test := range []struct {
 		name       string
