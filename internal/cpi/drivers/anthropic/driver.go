@@ -86,7 +86,7 @@ func (d *Driver) Complete(ctx context.Context, req *cpi.CompletionRequest) (*cpi
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, cpi.NewProviderError("anthropic", "", resp)
+		return nil, cpi.NewRefinedProviderError("anthropic", "", resp, refineFailureReason)
 	}
 
 	var msgResp messagesResponse
