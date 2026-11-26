@@ -74,8 +74,8 @@ func TestPassiveModelHealthRecordsOutcomesAndRegistersItsRunnables(t *testing.T)
 	}
 	base := &recordedCalls{}
 	passive.recorder(base).RecordCall(cpi.CallOutcome{Provider: "anthropic", Operation: cpi.OperationComplete, Model: "claude"})
-	if len(base.outcomes) != 1 || len(passive.tracker.Snapshot()) != 1 {
-		t.Fatalf("outcomes reached the base recorder %d times and the tracker %d times, want once each", len(base.outcomes), len(passive.tracker.Snapshot()))
+	if len(base.outcomes) != 1 || len(passive.tracker.Snapshot()) != 2 {
+		t.Fatalf("outcomes reached the base recorder %d times and the tracker holds %d streams, want one outcome and the destination and credential streams of its success", len(base.outcomes), len(passive.tracker.Snapshot()))
 	}
 	if passive.recorder(nil) != cpi.CallRecorder(passive.tracker) {
 		t.Fatal("without a base recorder the tracker must be the recorder")
