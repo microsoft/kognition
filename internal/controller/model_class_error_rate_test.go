@@ -149,6 +149,57 @@ func TestModelClassReconciler_ErrorRateBoundaries(t *testing.T) {
 			if degraded := f.reconcile().Status.Phase == v1alpha1.PhaseDegraded; degraded != tc.wantDegraded {
 				t.Fatalf("degraded = %t, want %t", degraded, tc.wantDegraded)
 			}
+
+		})
+	}
+}
+
+func TestModelClassReconciler_ErrorRateUsesCappedReporterSamples(t *testing.T) {
+	f := newRateFixture(t, newRateClass(50, "error-rate-threshold"), rateModel("a", "default", rateClassName, "m1"))
+	busy, failing := modelhealth.NewTracker(), modelhealth.NewTracker()
+	outcome := cpi.CallOutcome{Provider: "openai", Model: "m1", Endpoint: "https://api.example/v1", Operation: cpi.OperationComplete}
+	for range 320 {
+		busy.RecordCall(outcome)
+	}
+	outcome.Reason, outcome.ProviderFault = cpi.ReasonTimeout, true
+	for range 32 {
+		failing.RecordCall(outcome)
+	}
+	successes, faults := busy.Snapshot(), failing.Snapshot()
+	now := time.Now()
+	for i := range successes {
+		successes[i].LastSuccessAt = now.Add(-time.Second)
+		successes[i].StreakStartedAt = now.Add(-2 * time.Second)
+	}
+	for i := range faults {
+		faults[i].LastFaultAt, faults[i].StreakStartedAt = now, now
+	}
+	f.store.set(append(successes, faults...), nil)
+	got := f.reconcile()
+	condition := readyConditionOf(got)
+	if got.Status.Phase != v1alpha1.PhaseDegraded || condition == nil ||
+		condition.Reason != errorRateReason || !strings.Contains(condition.Message, "32 of 64 recent model calls failed (50%, threshold 50%)") {
+		t.Fatalf("class=%+v Ready=%+v, want the retained sample rate, not 32 of 352 calls", got.Status, condition)
+	}
+}
+
+func TestModelClassReconciler_ErrorRateExcludesCredentialFailures(t *testing.T) {
+	for _, reason := range []string{cpi.ReasonAuthenticationFailed, cpi.ReasonQuotaOrBilling} {
+		t.Run(reason, func(t *testing.T) {
+			f := newRateFixture(t, newRateClass(0, "error-rate-threshold"), rateModel("a", "default", rateClassName, "m1"))
+			tracker := modelhealth.NewTracker()
+			outcome := cpi.CallOutcome{Provider: "openai", Model: "m1", Endpoint: "https://api.example/v1", Credential: "account-a", Operation: cpi.OperationComplete}
+			for range 5 {
+				tracker.RecordCall(outcome)
+			}
+			outcome.Reason, outcome.ProviderFault = reason, true
+			for range 5 {
+				tracker.RecordCall(outcome)
+			}
+			f.store.set(tracker.Snapshot(), nil)
+			if got := f.reconcile(); got.Status.Phase != v1alpha1.PhaseReady {
+				t.Fatalf("class = %+v, want credential faults excluded even at a zero class threshold", got.Status)
+			}
 		})
 	}
 }

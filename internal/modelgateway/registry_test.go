@@ -115,8 +115,33 @@ func TestGatewayWithoutRecorderLeavesTheRegistryUnobserved(t *testing.T) {
 	if _, err := New(storage, issuer, authorizer, nil, zap.NewNop(), WithCPIRegistry(registry)); err != nil {
 		t.Fatal(err)
 	}
+
 	if got := mustDriver(t, registry, adapter.Name()); got != cpi.Driver(adapter) {
 		t.Fatal("a gateway without a recorder must not wrap the registry's drivers")
+	}
+}
+
+func TestGatewayDoesNotBlockAPassivelyDegradedModel(t *testing.T) {
+	_, storage, authorizer, issuer, binding, _ := fixture(t)
+	registry := cpi.NewRegistry()
+	adapter := &registeredInvocationAdapter{}
+	registry.MustRegister(adapter)
+	server, err := New(storage, issuer, authorizer, nil, zap.NewNop(), WithCPIRegistry(registry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := registeredAdapterCapability(t, storage, issuer, binding, adapter)
+	var model api.Model
+	if err := json.Unmarshal(storage.data["Model/team-a/mock-model"], &model); err != nil {
+		t.Fatal(err)
+	}
+	model.Status.Phase, model.Status.Available = api.PhaseFailed, false
+	model.Status.Conditions = []api.Condition{{Type: "Ready", Status: "False", Reason: "QuotaOrBillingError", Message: "passive health: recent model calls are failing with QuotaOrBillingError"}}
+	put(t, storage, "Model", "team-a", model.Name, model)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, completionRequest(token))
+	if response.Code != http.StatusOK || adapter.calls != 1 {
+		t.Fatalf("status=%d body=%s calls=%d, want authorized direct invocation despite passive status", response.Code, response.Body.String(), adapter.calls)
 	}
 }
 

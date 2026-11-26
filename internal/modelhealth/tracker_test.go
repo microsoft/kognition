@@ -245,6 +245,7 @@ func TestTrackerIsSafeForConcurrentUse(t *testing.T) {
 				} else {
 					tracker.RecordCall(success("m"))
 				}
+
 				if i%50 == 0 {
 					_ = tracker.Snapshot()
 				}
@@ -260,6 +261,33 @@ func TestTrackerIsSafeForConcurrentUse(t *testing.T) {
 		if snapshot.Calls != maxEventsPerTarget {
 			t.Fatalf("stream = %+v, want the newest %d events", snapshot, maxEventsPerTarget)
 		}
+	}
+}
+
+func TestTrackerMergesRetainedSamplesRatherThanReplicaTrafficVolumes(t *testing.T) {
+	clock := newFakeClock()
+	busy, failing := newTestTracker(clock), newTestTracker(clock)
+	for range 320 {
+		busy.RecordCall(success("shared"))
+		clock.Advance(time.Millisecond)
+	}
+	for range 32 {
+		failing.RecordCall(fault("shared", cpi.ReasonTimeout))
+		clock.Advance(time.Millisecond)
+	}
+	aggregate := Merge([]store.ModelCallHealth{
+		stream(t, busy, destinationKey("shared")),
+		stream(t, failing, destinationKey("shared")),
+	})
+	if aggregate.Calls != 64 || aggregate.Faults != 32 || aggregate.ConsecutiveFaults != 32 {
+		t.Fatalf("aggregate = %+v, want 32 retained successes and 32 subsequent faults", aggregate)
+	}
+	if verdict := Evaluate(aggregate, false); !verdict.Degraded {
+		t.Fatalf("verdict = %+v, want the retained sample to degrade despite the lower population rate", verdict)
+	}
+	clock.Advance(Window + time.Millisecond)
+	if len(busy.Snapshot()) != 0 || len(failing.Snapshot()) != 0 {
+		t.Fatal("retained outcomes must still expire by age")
 	}
 }
 
