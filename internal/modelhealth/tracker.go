@@ -28,7 +28,7 @@ type event struct {
 	reason string
 }
 
-// Tracker keeps a bounded, short window of recent call outcomes per target. It
+// Tracker keeps the newest 32 outcomes per target, no older than Window. It
 // implements cpi.CallRecorder and is safe for concurrent use. Only outcomes that
 // say something about the provider are kept: successes and provider failures.
 // Invalid requests, cancellations and local errors are ignored.

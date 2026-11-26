@@ -261,6 +261,7 @@ func TestModelAutoscalerReconciler_ConflictRetryPreservesConcurrentAgentChanges(
 	if err := base.Create(ctx, "Agent", "default", "writer", agentData); err != nil {
 		t.Fatal(err)
 	}
+
 	storeModelFixture(t, base, makeModel("default", "model-primary", "primary-class", v1alpha1.PhaseReady))
 	storeModelFixture(t, base, makeModel("default", "model-fallback", "fallback-class", v1alpha1.PhaseReady))
 	storeModelClass(t, base, makeModelClass("default", "primary-class", "fallback-class", v1alpha1.PhaseDegraded))
@@ -280,6 +281,39 @@ func TestModelAutoscalerReconciler_ConflictRetryPreservesConcurrentAgentChanges(
 	}
 	if got.Spec.Instructions.Inline != "concurrently updated instructions" {
 		t.Fatalf("agent instructions = %q, want concurrent edit preserved", got.Spec.Instructions.Inline)
+	}
+}
+
+func TestModelAutoscalerReconciler_FailedPreferredModelDoesNotTriggerClassFallback(t *testing.T) {
+	ctx := context.Background()
+	s := newMemStore()
+	r := NewModelAutoscalerReconciler(s, zaptest.NewLogger(t))
+	agent := makeAgent("default", "writer", 1)
+	agent.Spec.ModelRef = v1alpha1.LocalObjectReference{Name: "model-primary"}
+	agentData, err := json.Marshal(agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Create(ctx, "Agent", "default", "writer", agentData); err != nil {
+		t.Fatal(err)
+	}
+	preferred := makeModel("default", "model-primary", "primary-class", v1alpha1.PhaseFailed)
+	preferred.Status.Conditions = []v1alpha1.Condition{{Type: "Ready", Status: "False", Reason: "QuotaOrBillingError", Message: "passive health: recent model calls are failing with QuotaOrBillingError"}}
+	storeModelFixture(t, s, preferred)
+	storeModelFixture(t, s, makeModel("default", "model-fallback", "fallback-class", v1alpha1.PhaseReady))
+	storeModelClass(t, s, makeModelClass("default", "primary-class", "fallback-class", v1alpha1.PhaseReady))
+	storeModelClass(t, s, makeModelClass("default", "fallback-class", "", v1alpha1.PhaseReady))
+	storeModelAutoscalerFixture(t, s, makeModelAutoscaler("default", "writer-model-scale", "writer", "model-primary"))
+	for range 2 {
+		if _, err := r.Reconcile(ctx, Request{Namespace: "default", Name: "writer-model-scale", Kind: modelAutoscalerKind}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := getAutoscalerAgent(t, s, "default", "writer"); got.Spec.ModelRef.Name != "model-primary" {
+		t.Fatalf("modelRef = %q, want a healthy class to retain the preferred Model", got.Spec.ModelRef.Name)
+	}
+	if got := getModelAutoscalerFixture(t, s, "default", "writer-model-scale"); got.Status.CurrentModelRef != "model-primary" {
+		t.Fatalf("autoscaler status = %+v, want no class-triggered fallback", got.Status)
 	}
 }
 
