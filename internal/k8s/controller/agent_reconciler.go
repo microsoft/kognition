@@ -55,6 +55,7 @@ func NewAgentReconcilerAdapter(s store.Store, d *dispatcher.K8sDispatcher, logge
 // Reconcile implements reconcile.Reconciler for controller-runtime.
 func (a *AgentReconcilerAdapter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	ctx = requestid.NewContext(ctx, requestid.Generate())
+	log := a.logger.With(zap.String("namespace", req.Namespace), zap.String("agent", req.Name), requestid.ZapField(ctx))
 	internalReq := intctrl.Request{
 		Namespace: req.Namespace,
 		Name:      req.Name,
@@ -69,11 +70,11 @@ func (a *AgentReconcilerAdapter) Reconcile(ctx context.Context, req ctrl.Request
 	// Ensure owner annotations on cross-namespace Deployment/Service.
 	if a.dispatcher != nil {
 		if agent, loadErr := loadAgentForRuntimeRefresh(ctx, a.store, req.Namespace, req.Name); loadErr != nil {
-			a.logger.Warn("failed to load agent for runtime refresh", zap.Error(loadErr))
+			log.Warn("failed to load agent for runtime refresh")
 		} else if agent != nil {
 			runtimeErr := a.dispatcher.EnsureAgentRuntime(ctx, agent)
 			if runtimeErr != nil {
-				a.logger.Warn("failed to ensure agent runtime", zap.Error(runtimeErr))
+				log.Warn("failed to ensure agent runtime")
 			}
 			// Observe the Deployment even when provisioning failed so a rejected
 			// update or missing Deployment never leaves stale healthy counts.
@@ -82,11 +83,11 @@ func (a *AgentReconcilerAdapter) Reconcile(ctx context.Context, req ctrl.Request
 					if runtimeErr == nil {
 						return ctrl.Result{}, err
 					}
-					a.logger.Warn("failed to refresh agent runtime status", zap.Error(err))
+					log.Warn("failed to refresh agent runtime status")
 				}
 			}
 		} else if annErr := a.dispatcher.EnsureOwnerAnnotations(ctx, req.Name, req.Namespace); annErr != nil {
-			a.logger.Warn("failed to ensure owner annotations", zap.Error(annErr))
+			log.Warn("failed to ensure owner annotations")
 		}
 	}
 

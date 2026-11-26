@@ -26,6 +26,15 @@ authentication, RBAC, TLS, and audit apply. The controls in the "API
 authentication" and "TLS" sections below are specific to **standalone mode**.
 Network, pod-hardening, PDB, and provider-auth controls apply to both.
 
+### Failure-log confidentiality
+
+Tool Gateway invocation-failure logs retain namespace, Agent, Tool and invocation
+identifiers, but omit raw backend errors. Agent runtime-refresh warnings retain
+the failure stage in their message plus namespace, Agent and request UID, without
+logging raw provisioning, observation or status-update errors. Remote diagnostics
+can contain credentials even when truncated; do not add their free-form messages
+back to these logs. HTTP error behavior and reconciliation outcomes are unchanged.
+
 ### Guarded Kubernetes Installation
 
 For a new release, the [fresh installer](getting-started/kubernetes.md) verifies
