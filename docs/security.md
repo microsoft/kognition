@@ -44,6 +44,11 @@ retain namespace, principal and Tool identifiers while returning the original
 error to the caller. Retries, quorum rules, leadership decisions and readiness
 updates retain their existing behavior.
 
+WorkflowRun deletion warnings for unavailable workflow specs retain namespace,
+run name and request UID when present, but omit raw template lookup, snapshot and
+status-update errors. Best-effort cleanup, finalizer handling and errors returned
+to the caller are unchanged.
+
 Resource-update, finalizer-deletion update and MemoryRecord right-to-be-forgotten
 failure logs retain kind, namespace, resource name and request UID when present,
 but omit raw storage and cascade errors. Their existing HTTP error responses and

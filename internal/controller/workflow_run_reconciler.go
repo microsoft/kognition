@@ -650,7 +650,7 @@ func (r *WorkflowRunReconciler) handleDeletion(ctx context.Context, run *v1alpha
 	if r.collaborationRunner != nil && run.Status.Phase != v1alpha1.PhaseReady && run.Status.Phase != v1alpha1.PhaseFailed {
 		spec, err := r.resolveSpec(ctx, run, log)
 		if err != nil {
-			log.Warn("collaboration steps not stopped: workflow spec unavailable", zap.Error(err))
+			log.Warn("collaboration steps not stopped: workflow spec unavailable")
 		} else if err := stopWorkflowCollaborations(ctx, r.collaborationRunner, r.buildSyntheticWorkflow(run, spec), "WorkflowRun", "WorkflowRunDeleted"); err != nil {
 			return Result{}, err
 		}

@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/kognition-ai/kognition/api/v1alpha1"
+	"github.com/kognition-ai/kognition/internal/requestid"
 	"github.com/kognition-ai/kognition/internal/store"
 )
 
@@ -71,6 +72,99 @@ func TestControllerRetryLogsOmitRawErrors(t *testing.T) {
 	assertConfidentialFailureLog(t, logs, "item dropped after max retries", map[string]any{
 		"controller": "test-controller", "key": key, "retries": int64(1),
 	})
+}
+
+func TestWorkflowRunDeletionSpecFailureLogsOmitRawErrors(t *testing.T) {
+	const warning = "collaboration steps not stopped: workflow spec unavailable"
+	for _, tt := range []struct {
+		name            string
+		templatePresent bool
+		failGet         bool
+		failUpdate      bool
+		wantJobs        int
+	}{
+		{name: "template lookup", templatePresent: true, failGet: true},
+		{name: "template snapshot update", templatePresent: true, failUpdate: true, wantJobs: 1},
+		{name: "missing template status update", failUpdate: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := requestid.NewContext(context.Background(), "deletion-request")
+			memory := newMemStore()
+			run := makeWorkflowRun("default", "deleting-run", "workflow")
+			run.Status.Phase = v1alpha1.PhaseRunning
+			run.ObjectMeta.Finalizers = []string{WorkflowRunFinalizer}
+			now := time.Now().UTC()
+			run.ObjectMeta.DeletionTimestamp = &now
+			storeWorkflowRun(t, memory, run)
+			if tt.templatePresent {
+				storeWorkflow(t, memory, makeWorkflow("default", "workflow"))
+			}
+			job := v1alpha1.AgentJob{
+				ObjectMeta: v1alpha1.ObjectMeta{
+					Name: "owned-job", Namespace: "default",
+					OwnerReferences: []v1alpha1.OwnerReference{{
+						Kind: "WorkflowRun", Name: run.ObjectMeta.Name, UID: run.ObjectMeta.UID,
+					}},
+				},
+			}
+			data, err := json.Marshal(job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := memory.Create(ctx, "AgentJob", "default", job.ObjectMeta.Name, data); err != nil {
+				t.Fatal(err)
+			}
+
+			backendErr := fmt.Errorf("workflow backend: %w", errors.New(logSecretSentinel))
+			faults := &agentJobBoundaryFaultStore{memStore: memory}
+			if tt.failGet {
+				faults.getKind, faults.getErr = "Workflow", backendErr
+			}
+			if tt.failUpdate {
+				faults.updateKind, faults.updateErr = "WorkflowRun", backendErr
+			}
+			core, logs := observer.New(zap.DebugLevel)
+			reconciler := NewWorkflowRunReconciler(faults, zap.New(core))
+			runner := &fakeCollaborationRunner{}
+			reconciler.SetCollaborationRunner(runner)
+
+			result, err := reconciler.Reconcile(ctx, Request{Namespace: "default", Name: run.ObjectMeta.Name})
+			if result != (Result{}) {
+				t.Fatalf("deletion result = %+v, want no requeue", result)
+			}
+			if tt.failUpdate {
+				if !errors.Is(err, backendErr) {
+					t.Fatalf("deletion error = %v, want original update error", err)
+				}
+			} else if err != nil {
+				t.Fatalf("best-effort spec lookup blocked deletion: %v", err)
+			}
+			if len(runner.stops) != 0 || len(runner.advances) != 0 {
+				t.Fatal("unavailable spec reached the collaboration runner")
+			}
+			stored := getWorkflowRun(t, memory, "default", run.ObjectMeta.Name)
+			if hasString(stored.ObjectMeta.Finalizers, WorkflowRunFinalizer) != tt.failUpdate {
+				t.Fatal("deletion finalizer behavior changed")
+			}
+			wantPhase := v1alpha1.PhaseFailed
+			if tt.failUpdate {
+				wantPhase = v1alpha1.PhaseRunning
+			}
+			if stored.Status.Phase != wantPhase {
+				t.Fatalf("run phase = %s, want %s", stored.Status.Phase, wantPhase)
+			}
+			if jobs := listWorkflowJobs(t, memory, "default"); len(jobs) != tt.wantJobs {
+				t.Fatalf("owned jobs = %d, want %d", len(jobs), tt.wantJobs)
+			}
+			assertConfidentialFailureLog(t, logs, warning, map[string]any{
+				"reconciler": "workflow-run", "namespace": "default", "name": run.ObjectMeta.Name,
+				"requestUID": "deletion-request",
+			})
+			if logs.FilterMessage(warning).All()[0].Level != zap.WarnLevel {
+				t.Fatal("unavailable workflow spec log is not a warning")
+			}
+		})
+	}
 }
 
 func TestExpiredLeaseFailureLogsOmitRawErrors(t *testing.T) {
