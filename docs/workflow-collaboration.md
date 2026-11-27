@@ -257,9 +257,12 @@ step. Completed turns stay recorded in the ledger.
 - External agents are team members only. A standalone external step in a
   Workflow is not supported, and an ExternalAgent is limited to the namespace
   of the Workflow that references it.
-- The allow-list is a host-name check in admission and in the transport. Kubernetes
-  NetworkPolicy cannot match DNS names, so the policy only limits egress to the
-  allow-listed ports.
+- The allow-list is a host-name check in admission and in the transport, which
+  also refuses private and link-local addresses. Kubernetes NetworkPolicy cannot
+  match DNS names, so the policy only opens allow-listed ports other than 443,
+  excluding private, link-local and CGNAT ranges. The controller already needs
+  `0.0.0.0/0:443` for the Kubernetes API and CPI and policies are additive, so for
+  the default HTTPS port the network adds no restriction beyond the transport.
 - `cr_state_metrics` does not include ExternalAgent or ExternalAgentGrant.
 - This design has not had an independent security-owner review. The earlier
   [plan and reviews](development-plans/features/workflow-collaboration/plan.md)

@@ -47,8 +47,10 @@ code, and it receives data outside the cluster.
    v1 accepts `A2A` only; MCP remains a `Tool`.
 2. v1 uses a static `host:port` endpoint over TLS, a pinned Agent Card digest
    (fail closed on mismatch), a bearer credential through `SecretRef`, finite
-   limits, and an operator egress allow-list enforced by admission and
-   NetworkPolicy.
+   limits, and an operator egress allow-list enforced by admission and the
+   transport. NetworkPolicy additionally limits non-443 allow-listed ports to
+   public addresses; port 443 is already open to the controller for the
+   Kubernetes API and CPI, so it relies on the admission and transport checks.
 3. Referencing and invoking an `ExternalAgent` needs an explicit grant,
    re-checked at each send. Cross-namespace use needs a `CrossNamespaceGrant`.
 4. A client-only A2A transport implements the existing `driver.Transport`.

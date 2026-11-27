@@ -749,10 +749,19 @@ spec:
         {{- end }}
     {{- end }}
     {{- $externalAgents := include "kognition.externalAgents" . | fromJson }}
-    {{- if and $externalAgents.enabled $externalAgents.ports }}
-    # ExternalAgent delivery. HTTPS is already open above; other allow-listed ports are
-    # opened here without private, link-local or CGNAT ranges. NetworkPolicy cannot match
-    # DNS names, so the host allow-list is enforced by admission and the transport.
+    {{- $externalAgentPorts := list }}
+    {{- range $port := $externalAgents.ports }}
+    {{- if ne (int $port) 443 }}
+    {{- $externalAgentPorts = append $externalAgentPorts $port }}
+    {{- end }}
+    {{- end }}
+    {{- if and $externalAgents.enabled $externalAgentPorts }}
+    # ExternalAgent delivery on non-HTTPS ports, opened without private, link-local or
+    # CGNAT ranges. Port 443 is deliberately not repeated here: the controller already
+    # needs 0.0.0.0/0:443 above for the Kubernetes API server and CPI, and NetworkPolicy
+    # rules are additive, so an exclusion on 443 would not restrict anything. For 443 the
+    # host allow-list and the refusal of private and link-local addresses are enforced by
+    # admission and the controller transport, not by the network policy.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -764,7 +773,7 @@ spec:
               - 172.16.0.0/12
               - 192.168.0.0/16
       ports:
-        {{- range $port := $externalAgents.ports }}
+        {{- range $port := $externalAgentPorts }}
         - port: {{ $port }}
           protocol: TCP
         {{- end }}

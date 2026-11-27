@@ -336,9 +336,12 @@ k8sController:
       # egressAllowList ("host:port" or "*.domain:port"; an empty list permits
       # nothing), its Agent Card is pinned by digest, and every task needs an
       # ExternalAgentGrant. NetworkPolicy cannot match DNS names, so the host
-      # allow-list is enforced by the admission webhook and the controller
-      # transport; with networkPolicy.enabled the controller additionally gets
-      # egress only on the listed ports, excluding private and link-local ranges.
+      # allow-list, and the refusal of private and link-local addresses, are
+      # enforced by the admission webhook and the controller transport. With
+      # networkPolicy.enabled the controller additionally gets egress on allow-listed
+      # ports other than 443, excluding private, link-local and CGNAT ranges; port
+      # 443 is already open for the Kubernetes API and CPI, so for 443 the network
+      # policy adds no restriction.
       externalAgents:
         enabled: false
         egressAllowList: []

@@ -205,6 +205,15 @@ $externalAgents = Invoke-HelmTemplate -SetValues $externalAgentValues
 Assert-Contains $externalAgents "KOGNITION_EXTERNAL_AGENTS_ENABLED" "ExternalAgent switch is rendered when enabled"
 Assert-Contains $externalAgents 'value: "agents.partner.example:8443,*.partners.example:443"' "Controller and webhooks receive the identical allow-list"
 Assert-RegexMatch $externalAgents '(?s)name: test-release-kognition-k8s-controller\r?\n(?:(?!\r?\n---).)*?except:\s+- 10\.0\.0\.0/8(?:(?!\r?\n---).)*?port: 8443' "Controller egress on non-HTTPS allow-listed ports excludes private ranges"
+Assert-RegexNotMatch $externalAgents '(?s)name: test-release-kognition-k8s-controller\r?\n(?:(?!\r?\n---).)*?- 192\.168\.0\.0/16\s+ports:\s+(?:- port: (?!443\b)\d+\s+protocol: TCP\s+)*- port: 443\b' "The private-range exclusion rule never lists port 443, where it would not restrict anything"
+$externalAgentsHttpsOnly = Invoke-HelmTemplate -SetValues ($collaborationValues + @(
+    "networkPolicy.enabled=true",
+    "k8sController.workflowExecutor.collaboration.externalAgents.enabled=true",
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[0]=*.partners.example:443"
+))
+Assert-Contains $externalAgentsHttpsOnly 'value: "*.partners.example:443"' "The HTTPS-only allow-list is still rendered for the controller"
+Assert-RegexMatch $externalAgentsHttpsOnly '(?s)name: test-release-kognition-k8s-controller\r?\n(?:(?!\r?\n---).)*?port: 53' "The controller NetworkPolicy is rendered for the HTTPS-only case"
+Assert-RegexNotMatch $externalAgentsHttpsOnly '(?s)name: test-release-kognition-k8s-controller\r?\n(?:(?!\r?\n---).)*?except:' "An allow-list on port 443 alone renders no ExternalAgent exclusion rule"
 Assert-RegexMatch $externalAgents '(?s)KOGNITION_EXTERNAL_AGENTS_ENABLED.*?KOGNITION_EXTERNAL_AGENTS_ENABLED' "Admission webhooks receive the ExternalAgent switch as well as the controller"
 foreach ($invalid in @(
     "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[0]=https://agents.partner.example:8443",

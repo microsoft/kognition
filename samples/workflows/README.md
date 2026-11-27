@@ -110,11 +110,16 @@ separately on an installation that enables collaboration. See
 token Secret in place of its placeholders. It sends workflow data outside the
 cluster, so the apply-everything commands skip it too.
 
+`approval-decision.template.yaml` is a template, not a sample: it holds placeholder
+approvers and votes on a WorkflowRun that you start yourself from
+`quorum-approval.yaml`, so admission rejects it as written. Follow the steps in its
+header instead, and keep it out of the apply-everything commands below.
+
 ## Apply everything
 
 ```powershell
 kubectl apply -f samples/workflows/_agents.yaml
-Get-ChildItem samples/workflows/*.yaml -Exclude _agents.yaml, collaboration.yaml, external-agent.yaml |
+Get-ChildItem samples/workflows/*.yaml -Exclude _agents.yaml, approval-decision.template.yaml, collaboration.yaml, external-agent.yaml |
   ForEach-Object { kubectl apply -f $_.FullName }
 ```
 
@@ -123,7 +128,7 @@ Get-ChildItem samples/workflows/*.yaml -Exclude _agents.yaml, collaboration.yaml
 ```bash
 kubectl apply -f samples/workflows/_agents.yaml
 for manifest in samples/workflows/*.yaml; do
-  case "$manifest" in samples/workflows/_agents.yaml|samples/workflows/collaboration.yaml|samples/workflows/external-agent.yaml) continue ;; esac
+  case "$manifest" in samples/workflows/_agents.yaml|samples/workflows/approval-decision.template.yaml|samples/workflows/collaboration.yaml|samples/workflows/external-agent.yaml) continue ;; esac
   kubectl apply -f "$manifest" || exit 1
 done
 ```
