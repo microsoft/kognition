@@ -20,11 +20,14 @@ import (
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/kognition-ai/kognition/internal/controller"
+	"github.com/kognition-ai/kognition/internal/cpi"
 	"github.com/kognition-ai/kognition/internal/gatewaybackend"
 	"github.com/kognition-ai/kognition/internal/modelgateway"
+	"github.com/kognition-ai/kognition/internal/modelhealth"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/opa"
 	"github.com/kognition-ai/kognition/internal/runtimeauth"
+	"github.com/kognition-ai/kognition/internal/store"
 )
 
 func main() {
@@ -61,6 +64,17 @@ func run(logger *zap.Logger) error {
 	}
 	defer backend.Close()
 	st, costStore := backend.Store, backend.Cost
+	callHealth, err := modelCallHealthStore(backend, costNamespace, logger)
+	if err != nil {
+		return err
+	}
+	var callRecorder cpi.CallRecorder = observability.NewCPICallMetrics(ctrlmetrics.Registry)
+	var healthReporter *modelhealth.Reporter
+	if callHealth != nil {
+		tracker := modelhealth.NewTracker()
+		callRecorder = cpi.Recorders(callRecorder, tracker)
+		healthReporter = modelhealth.NewReporter(tracker, callHealth, modelhealth.NewReporterID(), logger)
+	}
 	usageWriter := observability.NewModelUsageMetrics(ctrlmetrics.Registry).Wrap(costStore)
 	meteredAuditStore := observability.NewTrustDecisionMetrics(ctrlmetrics.Registry).Wrap(backend.Audit)
 	policies := controller.NewInvocationPolicyEngine(
@@ -93,7 +107,10 @@ func run(logger *zap.Logger) error {
 		}
 		return err
 	})
-	options := []modelgateway.Option{modelgateway.WithObservability(tracePipeline.Tracer, tracePipeline.Collector), modelgateway.WithQuotaChecker(quota), modelgateway.WithAuditLog(observability.NewCognitiveAuditLog(meteredAuditStore))}
+	options := []modelgateway.Option{modelgateway.WithObservability(tracePipeline.Tracer, tracePipeline.Collector), modelgateway.WithQuotaChecker(quota), modelgateway.WithAuditLog(observability.NewCognitiveAuditLog(meteredAuditStore)), modelgateway.WithCallRecorder(callRecorder)}
+	// The runtime request context carries the Agent-specific deadline. Do not
+	// impose a shorter process-wide proxy timeout that would truncate valid
+	// long-running Model calls configured on the Agent.
 	server, err := modelgateway.New(st, issuer, policies, &http.Client{}, logger, options...)
 	if err != nil {
 		return fmt.Errorf("create model gateway: %w", err)
@@ -104,10 +121,18 @@ func run(logger *zap.Logger) error {
 	httpServer := &http.Server{Addr: envOrDefault("LISTEN_ADDR", ":8093"), Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 15 * time.Second}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	return serveModelGateway(ctx, httpServer, healthReporter, runtimeauth.ServeGatewayHTTP, logger)
+}
+
+func serveModelGateway(ctx context.Context, httpServer *http.Server, healthReporter *modelhealth.Reporter, serve func(context.Context, *http.Server) error, logger *zap.Logger) error {
+	if healthReporter != nil {
+		// Keep publishing through request draining, then flush before closing the backend.
+		defer healthReporter.RunInBackground(context.WithoutCancel(ctx))()
+	}
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info("Model Gateway starting", zap.String("addr", httpServer.Addr))
-		errCh <- runtimeauth.ServeGatewayHTTP(ctx, httpServer)
+		errCh <- serve(ctx, httpServer)
 	}()
 	select {
 	case <-ctx.Done():
@@ -123,6 +148,13 @@ func run(logger *zap.Logger) error {
 		}
 		return err
 	}
+}
+
+// modelCallHealthStore returns where this gateway shares passive model health:
+// ConfigMaps in Kubernetes mode, or the PostgreSQL store in standalone mode. It
+// returns nil when the backend cannot share health between processes.
+func modelCallHealthStore(backend *gatewaybackend.Backend, namespace string, logger *zap.Logger) (store.ModelCallHealthStore, error) {
+	return backend.ModelCallHealthStore(namespace, "model-gateway", logger)
 }
 
 func envOrDefault(name, fallback string) string {

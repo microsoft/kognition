@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	k8s "github.com/kognition-ai/kognition/api/k8s/v1alpha1"
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/convert"
@@ -738,6 +740,7 @@ func TestWorkflowRunRoundTrip(t *testing.T) {
 }
 
 func TestModelClassRoundTrip(t *testing.T) {
+	threshold := int32(5)
 	in := &api.ModelClass{
 		TypeMeta:   api.TypeMeta{Kind: "ModelClass", APIVersion: "kognition.dev/v1alpha1"},
 		ObjectMeta: api.ObjectMeta{Name: "gpt4o", Namespace: "default"},
@@ -755,7 +758,7 @@ func TestModelClassRoundTrip(t *testing.T) {
 				IntervalSeconds:    30,
 				TimeoutSeconds:     5,
 				LatencyThresholdMs: 2000,
-				ErrorRateThreshold: 5,
+				ErrorRateThreshold: &threshold,
 				FailureThreshold:   3,
 				SuccessThreshold:   2,
 			},
@@ -784,14 +787,77 @@ func TestModelClassRoundTrip(t *testing.T) {
 	if out.Spec.HealthProbe == nil {
 		t.Fatal("HealthProbe lost in round-trip")
 	}
-	if out.Spec.HealthProbe.ErrorRateThreshold != in.Spec.HealthProbe.ErrorRateThreshold {
-		t.Errorf("ErrorRateThreshold: got %d, want %d", out.Spec.HealthProbe.ErrorRateThreshold, in.Spec.HealthProbe.ErrorRateThreshold)
+	if !reflect.DeepEqual(out.Spec.HealthProbe.ErrorRateThreshold, in.Spec.HealthProbe.ErrorRateThreshold) {
+		t.Errorf("ErrorRateThreshold: got %v, want %v", out.Spec.HealthProbe.ErrorRateThreshold, in.Spec.HealthProbe.ErrorRateThreshold)
 	}
 	if out.Status.Phase != in.Status.Phase {
 		t.Errorf("Phase: got %q, want %q", out.Status.Phase, in.Status.Phase)
 	}
 	if out.Status.FallbackClass != in.Status.FallbackClass {
 		t.Errorf("FallbackClass: got %q, want %q", out.Status.FallbackClass, in.Status.FallbackClass)
+	}
+}
+
+func TestModelClassErrorRateThresholdSerializationAndConversion(t *testing.T) {
+	zero, fifty, hundred := int32(0), int32(50), int32(100)
+	for _, tc := range []struct {
+		name      string
+		field     string
+		threshold *int32
+	}{
+		{"omitted", "", nil},
+		{"zero", `,"errorRateThreshold":0`, &zero},
+		{"fifty", `,"errorRateThreshold":50`, &fifty},
+		{"hundred", `,"errorRateThreshold":100`, &hundred},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var in api.ModelClass
+			raw := []byte(`{"spec":{"healthProbe":{"endpoint":"https://api.example/health"` + tc.field + `}}}`)
+			if err := json.Unmarshal(raw, &in); err != nil {
+				t.Fatal(err)
+			}
+			k8sObj := convert.ModelClassToK8s(&in)
+			copied := k8sObj.DeepCopy()
+			out := convert.ModelClassFromK8s(k8sObj)
+			if !reflect.DeepEqual(in.Spec.HealthProbe.ErrorRateThreshold, tc.threshold) ||
+				!reflect.DeepEqual(k8sObj.Spec.HealthProbe.ErrorRateThreshold, tc.threshold) ||
+				!reflect.DeepEqual(copied.Spec.HealthProbe.ErrorRateThreshold, tc.threshold) ||
+				!reflect.DeepEqual(out.Spec.HealthProbe.ErrorRateThreshold, tc.threshold) {
+				t.Fatal("threshold presence or value changed in conversion or deepcopy")
+			}
+			for _, object := range []any{&in, k8sObj, copied, out} {
+				data, err := json.Marshal(object)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var decoded api.ModelClass
+				if err := json.Unmarshal(data, &decoded); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(decoded.Spec.HealthProbe.ErrorRateThreshold, tc.threshold) {
+					t.Fatalf("threshold presence or value changed in JSON: %s", data)
+				}
+			}
+			data, err := yaml.Marshal(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded api.ModelClass
+			if err := yaml.Unmarshal(data, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(decoded.Spec.HealthProbe.ErrorRateThreshold, tc.threshold) {
+				t.Fatalf("threshold presence or value changed in YAML: %s", data)
+			}
+			if tc.threshold != nil {
+				*k8sObj.Spec.HealthProbe.ErrorRateThreshold = 99
+				if !reflect.DeepEqual(in.Spec.HealthProbe.ErrorRateThreshold, tc.threshold) ||
+					!reflect.DeepEqual(copied.Spec.HealthProbe.ErrorRateThreshold, tc.threshold) ||
+					!reflect.DeepEqual(out.Spec.HealthProbe.ErrorRateThreshold, tc.threshold) {
+					t.Fatal("conversion or deepcopy shared the threshold pointer")
+				}
+			}
+		})
 	}
 }
 

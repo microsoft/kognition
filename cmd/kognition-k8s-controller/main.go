@@ -43,6 +43,7 @@ import (
 	openaidrv "github.com/kognition-ai/kognition/internal/cpi/drivers/openai"
 	"github.com/kognition-ai/kognition/internal/invocation"
 	k8saudit "github.com/kognition-ai/kognition/internal/k8s/audit"
+	k8scallhealth "github.com/kognition-ai/kognition/internal/k8s/callhealth"
 	k8sctrl "github.com/kognition-ai/kognition/internal/k8s/controller"
 	k8scost "github.com/kognition-ai/kognition/internal/k8s/cost"
 	"github.com/kognition-ai/kognition/internal/k8s/dispatcher"
@@ -370,13 +371,22 @@ func runControllerWithManager(
 	})
 
 	opaEngine := opa.NewEngine()
-	cpiRegistry := newCPIRegistry()
+	callHealthStore, err := k8scallhealth.NewConfigMapStore(mgr.GetClient(), controllerNamespace, "controller",
+		k8scallhealth.WithGarbageCollection(), k8scallhealth.WithLogger(logger.Named("model-call-health")))
+	if err != nil {
+		return fmt.Errorf("configure Kubernetes model call health: %w", err)
+	}
+	passiveHealth := newPassiveModelHealth(callHealthStore)
+	cpiRegistry := newCPIRegistry(passiveHealth.recorder(observability.NewCPICallMetrics(ctrlmetrics.Registry)))
 	dispatcherConfig, err := dispatcherConfigFromEnv()
 	if err != nil {
 		return fmt.Errorf("configure runtime dispatcher: %w", err)
 	}
 	agentDispatcher := dispatcher.NewK8sDispatcher(mgr.GetClient(), st, logger, dispatcherConfig)
 	assembly := newControllerAssembly(st, mgr.GetClient(), mgr.GetConfig(), agentDispatcher, pluginHost, logger, cpiRegistry, opaEngine, ingesterOptionsFromEnv(), auditLog, tracePipeline, usageWriter, workflowToolTracingOptions(tracePipeline)...)
+	if err := passiveHealth.register(mgr, st, assembly.reconcilers, logger); err != nil {
+		return err
+	}
 	identityContext, cancelIdentityContext := context.WithCancel(context.Background())
 	defer cancelIdentityContext()
 	identityReader, closeIdentityReader, err := runtimeauth.LoadWorkloadIdentityStatusRegistry(identityContext, os.Getenv)
@@ -997,13 +1007,14 @@ func parseControllerOptions(args []string) (controllerOptions, error) {
 	return options, nil
 }
 
-func newCPIRegistry() *cpi.Registry {
+func newCPIRegistry(recorder cpi.CallRecorder) *cpi.Registry {
 	registry := cpi.NewRegistry()
 	registry.MustRegister(openaidrv.New(nil))
 	registry.MustRegister(foundrydrv.New(nil))
 	registry.MustRegister(anthropicdrv.New(nil))
 	registry.MustRegister(ollamadrv.New(nil))
 	registry.MustRegister(bedrockdrv.New(nil))
+	registry.Observe(recorder)
 	return registry
 }
 

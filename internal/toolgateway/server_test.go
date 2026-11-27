@@ -7,17 +7,21 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/invocation"
 	"github.com/kognition-ai/kognition/internal/observability"
+	"github.com/kognition-ai/kognition/internal/runtime"
 	"github.com/kognition-ai/kognition/internal/runtimeauth"
 )
 
@@ -132,6 +136,64 @@ func TestServerVerifiesCapabilityAndExecutesBoundTool(t *testing.T) {
 	}
 	if wireBody["invocation_id"] != binding.InvocationID || wireBody["output"].(map[string]any)["updated"] != true {
 		t.Fatalf("wire response = %#v", wireBody)
+	}
+}
+
+func TestServerDoesNotLogSensitiveInvocationErrors(t *testing.T) {
+	const secret = "synthetic-backend-credential-do-not-log"
+	failures := []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "plain", err: errors.New("backend response: " + secret), code: "ToolInvocationDenied"},
+		{name: "wrapped", err: fmt.Errorf("execute backend: %w", errors.New(secret)), code: "ToolInvocationDenied"},
+		{name: "joined", err: errors.Join(errors.New("backend response: "+secret), errors.New("another failure")), code: "ToolInvocationDenied"},
+		{name: "structured", err: &runtime.StructuredToolError{Code: "ToolTransportError", Message: secret}, code: "ToolTransportError"},
+	}
+	for _, test := range failures {
+		t.Run(test.name, func(t *testing.T) {
+			server, _, _, issuer, binding, executor, ledger := toolGatewayServerFixture(t)
+			core, logs := observer.New(zap.InfoLevel)
+			logger := zap.New(core)
+			server.logger = logger.Named("tool-gateway-server")
+			server.gateway.logger = logger
+			executor.err = test.err
+			capability, err := issuer.Issue(binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, toolGatewayRequest(t, capability, `{"tool_name":"crm-update","tool_resource_version":7,"invocation_id":"invocation-1","input":{"ticket":"42"}}`))
+			if recorder.Code != http.StatusForbidden || executor.calls != 1 || len(ledger.starts) != 1 || len(ledger.completions) != 1 {
+				t.Fatalf("status=%d calls=%d starts=%d completions=%d", recorder.Code, executor.calls, len(ledger.starts), len(ledger.completions))
+			}
+			var response Response
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.ErrorCode != test.code || response.ErrorMessage != "tool invocation is not authorized" || response.InvocationID != binding.InvocationID ||
+				strings.Contains(recorder.Body.String(), secret) {
+				t.Fatalf("unexpected error response: %s", recorder.Body.String())
+			}
+			failures := logs.FilterMessage("tool invocation failed").All()
+			if len(failures) != 1 {
+				t.Fatalf("failure log count = %d, want 1", len(failures))
+			}
+			fields := failures[0].ContextMap()
+			if fields["namespace"] != binding.Namespace || fields["agent"] != binding.AgentName ||
+				fields["tool"] != binding.ToolName || fields["invocation"] != binding.InvocationID {
+				t.Fatalf("missing failure correlation fields: %v", fields)
+			}
+			for _, entry := range logs.All() {
+				if strings.Contains(entry.Message, secret) || strings.Contains(fmt.Sprint(entry.ContextMap()), secret) {
+					t.Fatalf("sensitive content reached logs: %s", entry.Message)
+				}
+			}
+			if _, exists := fields["error"]; exists {
+				t.Fatal("raw error field was logged")
+			}
+		})
 	}
 }
 

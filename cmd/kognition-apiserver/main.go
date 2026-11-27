@@ -38,6 +38,7 @@ import (
 	"github.com/kognition-ai/kognition/internal/cpi/drivers/openai"
 	"github.com/kognition-ai/kognition/internal/invocation"
 	"github.com/kognition-ai/kognition/internal/modelgateway"
+	"github.com/kognition-ai/kognition/internal/modelhealth"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/opa"
 	"github.com/kognition-ai/kognition/internal/runtime"
@@ -106,7 +107,7 @@ type apiServerRuntime struct {
 	initialize func(context.Context) error
 }
 
-type apiServerRuntimeFactory func(context.Context, *zap.Logger, []apiserver.Option) (*apiServerRuntime, error)
+type apiServerRuntimeFactory func(context.Context, *zap.Logger, *cpi.Registry, []apiserver.Option) (*apiServerRuntime, error)
 
 func runAPIServerCommand(
 	ctx context.Context,
@@ -124,7 +125,7 @@ func runAPIServerCommand(
 		logger.Warn("API authentication is DISABLED; do not expose this server to untrusted networks " +
 			"(set KOGNITION_AUTH_ENABLED=true with KOGNITION_OIDC_ISSUER)")
 	}
-	runtime, err := newRuntime(ctx, logger, options)
+	runtime, err := newRuntime(ctx, logger, registry, options)
 	if err != nil {
 		return fmt.Errorf("create API server runtime: %w", err)
 	}
@@ -175,13 +176,15 @@ func newWorkflowExecutorInitiation(ctx context.Context, st *pgstore.Store, keys 
 	})
 }
 
-func newProductionRuntime(ctx context.Context, logger *zap.Logger, options []apiserver.Option) (*apiServerRuntime, error) {
+func newProductionRuntime(ctx context.Context, logger *zap.Logger, registry *cpi.Registry, options []apiserver.Option) (*apiServerRuntime, error) {
 	pool, err := newDatabasePool(ctx, databaseURL())
 	if err != nil {
 		return nil, err
 	}
 	st := newPostgresStore(pool, logger.Named("store"))
 	metricsRegistry := prometheus.NewRegistry()
+	callTracker := modelhealth.NewTracker()
+	registry.Observe(cpi.Recorders(observability.NewCPICallMetrics(metricsRegistry), callTracker))
 	usageWriter := observability.NewModelUsageMetrics(metricsRegistry).Wrap(st)
 	auditStore := observability.NewTrustDecisionMetrics(metricsRegistry).Wrap(st)
 	bindingKeys, err := runtimeapproval.BindingKeyStoreFromJSON(os.Getenv(runtimeapproval.BindingKeysEnvironmentVariable))
@@ -260,17 +263,35 @@ func newProductionRuntime(ctx context.Context, logger *zap.Logger, options []api
 		apiserver.WithAuditLog(observability.NewCognitiveAuditLog(auditStore)),
 	)
 	options = append(options, apiserver.WithChatTracing(tracePipeline.Tracer, tracePipeline.Collector))
+	startReporter, stopReporter := modelHealthReporting(modelhealth.NewReporter(callTracker, st, modelhealth.NewReporterID(), logger))
 	return &apiServerRuntime{
 		server:   newAPIServer(serverConfigFromEnv(), st, logger.Named("apiserver"), options...),
 		listener: st,
 		initialize: func(ctx context.Context) error {
-			return st.ActivateRuntimeApprovalBindingKeys(ctx, bindingKeys)
+			if err := st.ActivateRuntimeApprovalBindingKeys(ctx, bindingKeys); err != nil {
+				return err
+			}
+			startReporter(ctx)
+			return nil
 		},
 		closePool: func() {
+			stopReporter()
 			shutdownTracePipeline(tracePipeline, logger)
 			pool.Close()
 		},
 	}, nil
+}
+
+// modelHealthReporting ties the passive model health reporter to the runtime's
+// lifecycle: start runs when the runtime is initialized and stop, which is a no-op
+// if start never ran, when its resources are closed. runServerLifecycle closes
+// them only after the server has drained its requests, and the reporter keeps
+// publishing until then (see Reporter.RunInBackground).
+func modelHealthReporting(reporter *modelhealth.Reporter) (start func(context.Context), stop func()) {
+	stopReporter := func() {}
+	start = func(ctx context.Context) { stopReporter = reporter.RunInBackground(ctx) }
+	stop = func() { stopReporter() }
+	return start, stop
 }
 
 func serverConfigFromEnv() apiserver.Config {

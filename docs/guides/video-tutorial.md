@@ -55,6 +55,12 @@ Use the [capability guides and samples](README.md) for maintained written
 walkthroughs. The video is a dated example, not an instruction to replay
 side-effecting or paid actions against an existing installation.
 
+The live pilot recorder's authenticated proxy forwards only to the operator's
+fixed HTTPS origin or literal loopback HTTP origin. Incoming requests may select
+an API path and query, but cannot change the upstream host, port or protocol;
+absolute request URLs, network-path targets and authenticated redirects are
+rejected. Choose the approved API origin before starting a recording.
+
 ## Transcript
 
 <!-- tutorial-transcript:start -->

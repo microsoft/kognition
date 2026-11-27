@@ -50,6 +50,12 @@ producer side):
 Output on stdout (single line):
 
     {"documents": N, "chunks": M, "sourceDigest": "sha256:..."}
+
+Trust model for embeddings: the daemon's own OPENAI_API_KEY and Azure AD
+tokens are sent only to api.openai.com, Azure OpenAI hosts, or hosts listed in
+KOGNITION_INGEST_TRUSTED_EMBEDDING_HOSTS (comma-separated, set at startup).
+Any other embedding baseUrl must pass SSRF validation and must bring its own
+apiKey (for example from the Model credentialRef).
 """
 
 from __future__ import annotations
@@ -67,6 +73,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Protocol
 from urllib.parse import urlparse, urlunparse
@@ -118,7 +125,47 @@ def _max_document_bytes() -> int:
     return value
 
 
+_SERVICE_INDEXER_EXECUTABLE: str | None = None
+_SERVICE_ALLOW_PRIVATE_NETWORKS: bool | None = None
+_SERVICE_TRUSTED_EMBEDDING_HOSTS: frozenset[str] = frozenset()
+_SERVICE_STRICT_AZURE_HOSTS = False
+
+
+def set_trusted_service_config(
+    *,
+    indexer_executable: str | None = None,
+    allow_private_networks: bool | None = None,
+    trusted_embedding_hosts: Iterable[str] | None = None,
+    strict_azure_hosts: bool | None = None,
+) -> None:
+    """Configure trusted service settings at daemon startup."""
+    global _SERVICE_INDEXER_EXECUTABLE, _SERVICE_ALLOW_PRIVATE_NETWORKS
+    global _SERVICE_TRUSTED_EMBEDDING_HOSTS, _SERVICE_STRICT_AZURE_HOSTS
+    if strict_azure_hosts is not None:
+        _SERVICE_STRICT_AZURE_HOSTS = strict_azure_hosts
+    if indexer_executable is not None:
+        _SERVICE_INDEXER_EXECUTABLE = indexer_executable
+    if allow_private_networks is not None:
+        _SERVICE_ALLOW_PRIVATE_NETWORKS = allow_private_networks
+    if trusted_embedding_hosts is not None:
+        _SERVICE_TRUSTED_EMBEDDING_HOSTS = frozenset(
+            host.strip().lower() for host in trusted_embedding_hosts if host.strip()
+        )
+
+
+def reset_trusted_service_config() -> None:
+    """Reset trusted service settings to unconfigured state (for testing)."""
+    global _SERVICE_INDEXER_EXECUTABLE, _SERVICE_ALLOW_PRIVATE_NETWORKS
+    global _SERVICE_TRUSTED_EMBEDDING_HOSTS, _SERVICE_STRICT_AZURE_HOSTS
+    _SERVICE_INDEXER_EXECUTABLE = None
+    _SERVICE_ALLOW_PRIVATE_NETWORKS = None
+    _SERVICE_TRUSTED_EMBEDDING_HOSTS = frozenset()
+    _SERVICE_STRICT_AZURE_HOSTS = False
+
+
 def _private_networks_allowed() -> bool:
+    if _SERVICE_ALLOW_PRIVATE_NETWORKS is not None:
+        return _SERVICE_ALLOW_PRIVATE_NETWORKS
     return os.environ.get("KOGNITION_INGEST_ALLOW_PRIVATE_NETWORKS", "").lower() == "true"
 
 
@@ -144,27 +191,72 @@ def _validate_remote_url(uri: str, *, allow_private_http: bool = False) -> None:
         raise ValueError("URL sources must not include credentials")
     if _private_networks_allowed():
         return
+    _public_addresses(parsed.hostname, parsed.port or 443)
+
+
+def _public_addresses(hostname: str, port: int) -> list[str]:
+    """Resolve a hostname and require every address to be publicly routable."""
     try:
-        literal_address = ipaddress.ip_address(parsed.hostname)
+        literal_address = ipaddress.ip_address(hostname)
     except ValueError:
         literal_address = None
     if literal_address is not None:
         if not literal_address.is_global:
             raise ValueError("URL source hostname must resolve only to publicly routable addresses")
-        return
+        return [str(literal_address)]
     try:
-        addresses = {
-            item[4][0]
-            for item in socket.getaddrinfo(
-                parsed.hostname,
-                parsed.port or 443,
-                type=socket.SOCK_STREAM,
+        addresses = list(
+            dict.fromkeys(
+                item[4][0]
+                for item in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
             )
-        }
+        )
     except socket.gaierror as exc:
-        raise ValueError(f"failed to resolve URL source hostname: {parsed.hostname}") from exc
+        raise ValueError(f"failed to resolve URL source hostname: {hostname}") from exc
     if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
         raise ValueError("URL source hostname must resolve only to publicly routable addresses")
+    return addresses
+
+
+class _PinnedTransport(httpx.HTTPTransport):
+    """Connect only to the addresses that passed validation for this request.
+
+    Validation and connection otherwise resolve the name separately, so a DNS
+    answer that changes between them (rebinding) could reach an internal
+    address. The request is rewritten to the validated IP while the Host header
+    and TLS server name keep the original hostname.
+    """
+
+    def __init__(self, exempt_hosts: Callable[[], frozenset[str]] = lambda: frozenset(), **kwargs: Any):
+        super().__init__(**kwargs)
+        self._exempt_hosts = exempt_hosts
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        if not _private_networks_allowed() and host.lower() not in self._exempt_hosts():
+            port = request.url.port or (443 if request.url.scheme == "https" else 80)
+            address = _public_addresses(host, port)[0]
+            if address != host:
+                request.url = request.url.copy_with(host=address)
+                request.extensions = {**request.extensions, "sni_hostname": host}
+        return super().handle_request(request)
+
+
+def _pinned_http_client(
+    *, exempt_hosts: Callable[[], frozenset[str]] = lambda: frozenset(), **kwargs: Any
+) -> httpx.Client:
+    """HTTP client that never follows redirects and connects only to validated addresses.
+
+    Behind a configured HTTP proxy the proxy performs resolution and egress, so
+    the client keeps its default proxy handling instead of pinning.
+    """
+    if urllib.request.getproxies():
+        return httpx.Client(follow_redirects=False, **kwargs)
+    return httpx.Client(
+        follow_redirects=False,
+        transport=_PinnedTransport(exempt_hosts=exempt_hosts),
+        **kwargs,
+    )
 
 
 def _read_http_response(response: httpx.Response, limit: int) -> bytes:
@@ -207,7 +299,9 @@ def _fetch_url(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
     uri = source["uri"]
     current_uri = uri
     limit = _max_document_bytes()
-    with httpx.Client(follow_redirects=False, timeout=30.0) as client:
+    # A redirect may change the hostname while the pinned address stays the same, so never reuse a
+    # connection whose TLS identity was verified for another hostname.
+    with _pinned_http_client(timeout=30.0, limits=httpx.Limits(max_keepalive_connections=0)) as client:
         for redirect_count in range(_MAX_URL_REDIRECTS + 1):
             _validate_remote_url(current_uri, allow_private_http=True)
             with client.stream("GET", current_uri) as response:
@@ -217,7 +311,8 @@ def _fetch_url(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
                     location = response.headers.get("location")
                     if not location:
                         raise ValueError("URL source redirect is missing a Location header")
-                    current_uri = str(response.url.join(location))
+                    # Join against the requested URL: the request itself targets the pinned IP.
+                    current_uri = str(httpx.URL(current_uri).join(location))
                     continue
                 response.raise_for_status()
                 data = _read_http_response(response, limit)
@@ -395,6 +490,49 @@ def _is_git_text_candidate(filename: str) -> bool:
     return lower in _GIT_TEXT_BASENAMES
 
 
+def _git_subpath(raw: Any) -> str:
+    subpath = (raw or "").strip("/")
+    parts = re.split(r"[\\/]", subpath)
+    if os.path.isabs(subpath) or ".." in parts:
+        raise ValueError("git source path must stay inside the repository")
+    return subpath
+
+
+def _is_within(path: str, root: str) -> bool:
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:
+        return False
+
+
+def _git_environment(home: str) -> dict[str, str]:
+    """Minimal environment for git so daemon credentials and user git config never reach a clone."""
+    inherited = (
+        "PATH", "SYSTEMROOT", "LANG", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "GIT_SSL_CAINFO",
+    )
+    environment = {name: os.environ[name] for name in inherited if name in os.environ}
+    environment.update(
+        HOME=home,
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_TERMINAL_PROMPT="0",
+    )
+    return environment
+
+
+def _git_clone_command(branch: str, url: str, destination: str) -> list[str]:
+    return [
+        "git",
+        # Only HTTPS (validated above) and no redirect, which would bypass the URL checks.
+        "-c", "protocol.allow=never",
+        "-c", "protocol.https.allow=always",
+        "-c", "http.followRedirects=false",
+        "-c", "core.symlinks=false",
+        "clone", "--depth", "1", "--branch", branch, "--", url, destination,
+    ]
+
+
 def _fetch_git(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
     import subprocess
     import tempfile
@@ -402,28 +540,35 @@ def _fetch_git(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
     url = source["url"]
     _validate_remote_url(url)
     branch = source.get("branch") or "main"
-    subpath = (source.get("path") or "").strip("/")
+    subpath = _git_subpath(source.get("path"))
     limit = _max_document_bytes()
     max_documents = _max_documents_per_source()
     document_count = 0
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as git_home:
         try:
             subprocess.run(
-                ["git", "clone", "--depth", "1", "--branch", branch, "--", url, tmp],
+                _git_clone_command(branch, url, tmp),
                 check=True,
                 capture_output=True,
                 text=True,
                 timeout=180,
+                env=_git_environment(git_home),
             )
         except subprocess.CalledProcessError as exc:  # surface a helpful error
             raise RuntimeError(f"git clone failed: {(exc.stderr or '').strip() or exc}") from exc
-        root = os.path.join(tmp, subpath) if subpath else tmp
+        clone_root = os.path.realpath(tmp)
+        root = os.path.realpath(os.path.join(clone_root, subpath)) if subpath else clone_root
+        if not _is_within(root, clone_root):
+            raise ValueError("git source path must stay inside the repository")
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d != ".git"]
             for fn in sorted(filenames):
                 if not _is_git_text_candidate(fn):
                     continue
                 full = os.path.join(dirpath, fn)
+                # Cloned content is untrusted, so a link must never lead to a file outside the clone.
+                if os.path.islink(full):
+                    continue
                 try:
                     if os.path.getsize(full) > limit:
                         raise ValueError(f"document exceeds {limit} bytes")
@@ -436,7 +581,7 @@ def _fetch_git(source: dict[str, Any]) -> Iterator[tuple[str, str]]:
                     raise ValueError(f"source exceeds {max_documents} documents")
                 text = _extract_text(data, fn)
                 if text.strip():
-                    rel = os.path.relpath(full, tmp)
+                    rel = os.path.relpath(full, clone_root)
                     yield text, f"git+{url}@{branch}#{rel}"
 
 
@@ -519,10 +664,10 @@ class Embedder:
         return vectors
 
 
-def _build_embedder(cfg: dict[str, Any], dimension: int) -> Embedder:
+def _build_embedder(cfg: dict[str, Any], dimension: int, env: dict[str, str] | None = None) -> Embedder:
     provider = (cfg.get("provider") or "openai").lower()
     model = cfg.get("model") or "text-embedding-3-small"
-    api_key = cfg.get("apiKey") or os.environ.get("OPENAI_API_KEY") or ""
+    active_env = {**os.environ, **env} if env is not None else dict(os.environ)
     base_url = cfg.get("baseUrl")
     requested_dimensions = cfg.get("dimensions")
     if requested_dimensions is not None and (
@@ -533,30 +678,89 @@ def _build_embedder(cfg: dict[str, Any], dimension: int) -> Embedder:
         raise ValueError("invocation profile embedding dimensions must match the KnowledgeBase dimension")
     if provider == "deterministic":
         return Embedder(client=None, model=model, provider=provider, dimension=dimension)
+    ambient_tier = _check_embedding_endpoint(base_url, provider)
+    # A daemon OpenAI key is meaningless to Azure OpenAI, so only an operator-listed host may receive it there.
+    daemon_key_allowed = ambient_tier == _TRUST_OPERATOR or (
+        ambient_tier == _TRUST_PROVIDER and provider != "azure_openai"
+    )
+    # Strict mode limits the Azure AD token to hosts the operator listed exactly.
+    ambient_credentials_allowed = ambient_tier == _TRUST_OPERATOR or (
+        ambient_tier == _TRUST_PROVIDER and not _SERVICE_STRICT_AZURE_HOSTS
+    )
+    api_key = cfg.get("apiKey") or (
+        active_env.get("OPENAI_API_KEY") if daemon_key_allowed else ""
+    ) or ""
+    use_azure_ad = provider == "azure_openai" and not api_key and bool(active_env.get("AZURE_TENANT_ID"))
+    if use_azure_ad and not ambient_credentials_allowed:
+        raise ValueError(
+            "Azure AD credentials may only be used with Azure OpenAI or operator-trusted embedding endpoints"
+        )
+    if not api_key and not use_azure_ad:
+        raise ValueError(
+            "embedding endpoint requires an API key; daemon credentials are only sent to trusted endpoints"
+        )
+    # Credentials must never follow a redirect to another host, and the connection
+    # must reach the address that passed validation (no DNS rebinding).
+    http_client = _pinned_http_client(exempt_hosts=lambda: _SERVICE_TRUSTED_EMBEDDING_HOSTS)
     if provider == "azure_openai":
         endpoint = _azure_resource_root(base_url or "")
         api_version = cfg.get("apiVersion") or "2024-08-01-preview"
-        # If no explicit apiKey but Azure service-principal creds are present in
-        # the environment, mint an AAD token. This matches the runtime chat
-        # path in runtime/agent/providers.py.
-        if not api_key and os.environ.get("AZURE_TENANT_ID"):
+        # Without an explicit apiKey, mint an AAD token from the Azure
+        # identity supplied for this task (matches runtime/agent/providers.py).
+        if use_azure_ad:
             client = AzureOpenAI(
-                azure_ad_token_provider=_azure_ad_token_provider(),
+                azure_ad_token_provider=_azure_ad_token_provider(env=active_env),
                 azure_endpoint=endpoint,
                 api_version=api_version,
+                http_client=http_client,
             )
         else:
             client = AzureOpenAI(
                 api_key=api_key,
                 azure_endpoint=endpoint,
                 api_version=api_version,
+                http_client=http_client,
             )
     else:
-        kw: dict[str, Any] = {"api_key": api_key}
+        kw: dict[str, Any] = {"api_key": api_key, "http_client": http_client}
         if base_url:
             kw["base_url"] = base_url
         client = OpenAI(**kw)
     return Embedder(client=client, model=model, provider=provider, dimension=dimension, requested_dimensions=requested_dimensions)
+
+
+_OPENAI_DEFAULT_HOSTS = frozenset({"api.openai.com"})
+_AZURE_OPENAI_HOST_SUFFIXES = (
+    ".openai.azure.com",
+    ".cognitiveservices.azure.com",
+    ".services.ai.azure.com",
+)
+_TRUST_OPERATOR = "operator"
+_TRUST_PROVIDER = "provider"
+
+
+def _check_embedding_endpoint(base_url: str | None, provider: str) -> str | None:
+    """Validate a caller-selected embedding endpoint.
+
+    Returns the trust tier that lets daemon-held credentials reach it: an
+    operator-listed host, or the provider's own service. Any other endpoint
+    must pass SSRF validation and receives caller credentials only (None).
+    """
+    if not base_url:
+        return None if provider == "azure_openai" else _TRUST_PROVIDER
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+    scheme = parsed.scheme.lower()
+    if host and not (parsed.username or parsed.password):
+        if host in _SERVICE_TRUSTED_EMBEDDING_HOSTS and scheme in {"http", "https"}:
+            return _TRUST_OPERATOR
+        if scheme == "https":
+            if provider == "azure_openai" and host.endswith(_AZURE_OPENAI_HOST_SUFFIXES):
+                return _TRUST_PROVIDER
+            if provider != "azure_openai" and host in _OPENAI_DEFAULT_HOSTS:
+                return _TRUST_PROVIDER
+    _validate_remote_url(base_url, allow_private_http=True)
+    return None
 
 
 def _azure_resource_root(endpoint: str) -> str:
@@ -573,16 +777,17 @@ def _azure_resource_root(endpoint: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
 
 
-def _build_azure_credential():
+def _build_azure_credential(env: dict[str, str] | None = None):
     """Select an azure-identity credential, mirroring the agent runtime and the
     Go Foundry driver: client-secret, workload-identity, managed-identity, or
     DefaultAzureCredential (default) for secretless auth on Azure. Driven by
     AZURE_CREDENTIAL_TYPE; falls back to a client secret when one is set,
     otherwise DefaultAzureCredential (managed identity / workload identity)."""
-    cred_type = os.environ.get("AZURE_CREDENTIAL_TYPE", "").strip().lower()
-    tenant_id = os.environ.get("AZURE_TENANT_ID", "")
-    client_id = os.environ.get("AZURE_CLIENT_ID", "")
-    client_secret = os.environ.get("AZURE_CLIENT_SECRET", "")
+    active_env = {**os.environ, **env} if env is not None else dict(os.environ)
+    cred_type = active_env.get("AZURE_CREDENTIAL_TYPE", "").strip().lower()
+    tenant_id = active_env.get("AZURE_TENANT_ID", "")
+    client_id = active_env.get("AZURE_CLIENT_ID", "")
+    client_secret = active_env.get("AZURE_CLIENT_SECRET", "")
 
     if cred_type == "client-secret" or (cred_type == "" and client_secret):
         from azure.identity import ClientSecretCredential
@@ -596,7 +801,7 @@ def _build_azure_credential():
         return WorkloadIdentityCredential(
             tenant_id=tenant_id or None,
             client_id=client_id or None,
-            token_file_path=os.environ.get("AZURE_FEDERATED_TOKEN_FILE"),
+            token_file_path=active_env.get("AZURE_FEDERATED_TOKEN_FILE"),
         )
     if cred_type == "managed-identity":
         from azure.identity import ManagedIdentityCredential
@@ -607,16 +812,23 @@ def _build_azure_credential():
 
     from azure.identity import DefaultAzureCredential
 
-    return DefaultAzureCredential()
+    # Pass the task identity explicitly; the SDK would otherwise read only the daemon environment.
+    identity = {
+        "managed_identity_client_id": client_id,
+        "workload_identity_client_id": client_id,
+        "workload_identity_tenant_id": tenant_id,
+    }
+    return DefaultAzureCredential(**{name: value for name, value in identity.items() if value})
 
 
 def _azure_ad_token_provider(
     scope: str = "https://cognitiveservices.azure.com/.default",
+    env: dict[str, str] | None = None,
 ) -> Callable[[], str]:
     """Token provider for Azure OpenAI embeddings. Supports client-secret,
     managed identity, and workload-identity federation via
     _build_azure_credential."""
-    credential = _build_azure_credential()
+    credential = _build_azure_credential(env=env)
 
     def get_token() -> str:
         return credential.get_token(scope).token
@@ -902,7 +1114,7 @@ def _ingest_sources(
     }
 
 
-def ingest_task(task: dict[str, Any]) -> dict[str, Any]:
+def ingest_task(task: dict[str, Any], env: dict[str, str] | None = None) -> dict[str, Any]:
     """Execute one validated ingestion task and return aggregate statistics."""
     kb = task.get("kb") or {}
     namespace = kb.get("namespace") or "default"
@@ -920,7 +1132,7 @@ def ingest_task(task: dict[str, Any]) -> dict[str, Any]:
         dimension = int(provider_index.get("dimension") or 0)
         if dimension < 1:
             raise ValueError("providerIndex.dimension must be positive")
-        embedder = _build_embedder(task.get("embedding") or {}, dimension)
+        embedder = _build_embedder(task.get("embedding") or {}, dimension, env=env)
         spool_path = os.environ.get(
             "KOGNITION_KNOWLEDGE_INDEX_SPOOL_FILE",
             "/var/run/kognition/index/chunks.jsonl",
@@ -942,7 +1154,7 @@ def ingest_task(task: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("vectorStore.dsn is required")
     _validate_table_name(table)
 
-    embedder = _build_embedder(task.get("embedding") or {}, dimension)
+    embedder = _build_embedder(task.get("embedding") or {}, dimension, env=env)
     with psycopg.connect(dsn, autocommit=False) as conn:
         register_vector(conn)
         _ensure_schema(conn, table, dimension)
@@ -954,10 +1166,13 @@ def ingest_task(task: dict[str, Any]) -> dict[str, Any]:
 
 
 def _invoke_provider_indexer() -> dict[str, Any]:
-    executable = os.environ.get(
-        "KOGNITION_KNOWLEDGE_INDEXER_EXECUTABLE",
-        "/app/kognition-knowledge-indexer",
-    )
+    if _SERVICE_INDEXER_EXECUTABLE is not None:
+        executable = _SERVICE_INDEXER_EXECUTABLE
+    else:
+        executable = os.environ.get(
+            "KOGNITION_KNOWLEDGE_INDEXER_EXECUTABLE",
+            "/app/kognition-knowledge-indexer",
+        )
     try:
         completed = subprocess.run(
             [executable],

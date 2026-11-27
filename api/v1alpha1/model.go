@@ -73,9 +73,11 @@ type HealthProbeSpec struct {
 	// Used when Type is "latency-threshold".
 	LatencyThresholdMs int64 `json:"latencyThresholdMs,omitempty" yaml:"latencyThresholdMs,omitempty"`
 
-	// ErrorRateThreshold is the maximum acceptable consecutive failures.
-	// Used when Type is "error-rate-threshold". Defaults to 3.
-	ErrorRateThreshold int32 `json:"errorRateThreshold,omitempty" yaml:"errorRateThreshold,omitempty"`
+	// ErrorRateThreshold is the error rate percentage (0-100) at which an
+	// "error-rate-threshold" probe degrades the class. It is measured over the
+	// provider failures of recent real model calls to the class's Models, needs at
+	// least 5 calls and defaults to 50 when unset. An explicit zero is preserved.
+	ErrorRateThreshold *int32 `json:"errorRateThreshold,omitempty" yaml:"errorRateThreshold,omitempty"`
 
 	// FailureThreshold is the number of consecutive probe failures before marking Degraded.
 	// Defaults to 3.

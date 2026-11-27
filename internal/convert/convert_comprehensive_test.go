@@ -1052,6 +1052,7 @@ func TestWorkflowRunStatusLifecycleFieldsRoundTrip(t *testing.T) {
 // ======================== ModelClass: Full HealthProbe ========================
 
 func TestModelClassHealthProbeFullRoundTrip(t *testing.T) {
+	threshold := int32(10)
 	in := &api.ModelClass{
 		TypeMeta:   api.TypeMeta{Kind: "ModelClass", APIVersion: "kognition.dev/v1alpha1"},
 		ObjectMeta: api.ObjectMeta{Name: "model-1"},
@@ -1069,7 +1070,7 @@ func TestModelClassHealthProbeFullRoundTrip(t *testing.T) {
 				IntervalSeconds:    60,
 				TimeoutSeconds:     10,
 				LatencyThresholdMs: 3000,
-				ErrorRateThreshold: 10,
+				ErrorRateThreshold: &threshold,
 				FailureThreshold:   5,
 				SuccessThreshold:   3,
 			},
@@ -1098,8 +1099,8 @@ func TestModelClassHealthProbeFullRoundTrip(t *testing.T) {
 	if out.Spec.HealthProbe.LatencyThresholdMs != 3000 {
 		t.Errorf("LatencyThresholdMs: %d", out.Spec.HealthProbe.LatencyThresholdMs)
 	}
-	if out.Spec.HealthProbe.ErrorRateThreshold != 10 {
-		t.Errorf("ErrorRateThreshold: %d", out.Spec.HealthProbe.ErrorRateThreshold)
+	if out.Spec.HealthProbe.ErrorRateThreshold == nil || *out.Spec.HealthProbe.ErrorRateThreshold != 10 {
+		t.Errorf("ErrorRateThreshold: %v", out.Spec.HealthProbe.ErrorRateThreshold)
 	}
 	if out.Spec.HealthProbe.SuccessThreshold != 3 {
 		t.Errorf("SuccessThreshold: %d", out.Spec.HealthProbe.SuccessThreshold)

@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -52,68 +51,6 @@ func (d *Driver) Validate(_ context.Context, model *v1alpha1.ModelSpec, _ *v1alp
 	return nil
 }
 
-func (d *Driver) Probe(ctx context.Context, model *v1alpha1.ModelSpec, creds *cpi.Credentials) (*cpi.HealthResult, error) {
-	start := time.Now()
-
-	// Send a minimal messages request with max_tokens=1 to validate connectivity.
-	baseURL := model.Endpoint
-	if baseURL == "" {
-		baseURL = defaultBaseURL
-	}
-
-	body := messagesRequest{
-		Model:     model.ModelID,
-		MaxTokens: 1,
-		Messages:  []message{{Role: "user", Content: "hi"}},
-	}
-	payload, _ := json.Marshal(body)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/v1/messages", bytes.NewReader(payload))
-	if err != nil {
-		return &cpi.HealthResult{
-			Available: false,
-			Reason:    "RequestBuildFailed",
-			Message:   err.Error(),
-		}, nil
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("anthropic-version", apiVersion)
-	if model.InvocationProfileRef != nil {
-		req.Header.Set("anthropic-version", invocationAPIVersion(model.Parameters))
-	}
-	applyAuth(req, creds)
-
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return &cpi.HealthResult{
-			Available: false,
-			Latency:   time.Since(start).String(),
-			Reason:    "EndpointUnreachable",
-			Message:   err.Error(),
-		}, nil
-	}
-	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, resp.Body)
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return &cpi.HealthResult{
-			Available: false,
-			Latency:   time.Since(start).String(),
-			Reason:    "AuthenticationFailed",
-			Message:   fmt.Sprintf("HTTP %d", resp.StatusCode),
-		}, nil
-	}
-
-	// 200 or 400 (validation error on the mini-request) both mean the endpoint is alive.
-	return &cpi.HealthResult{
-		Available:    true,
-		Latency:      time.Since(start).String(),
-		Reason:       "Healthy",
-		Message:      "Anthropic API reachable",
-		Capabilities: []string{"chat"},
-	}, nil
-}
-
 func (d *Driver) Complete(ctx context.Context, req *cpi.CompletionRequest) (*cpi.CompletionResponse, error) {
 	prepared, err := cpi.PrepareCompletion(req, d)
 	if err != nil {
@@ -149,8 +86,7 @@ func (d *Driver) Complete(ctx context.Context, req *cpi.CompletionRequest) (*cpi
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("anthropic: HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, cpi.NewRefinedProviderError("anthropic", "", resp, refineFailureReason)
 	}
 
 	var msgResp messagesResponse

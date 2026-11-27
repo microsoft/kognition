@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/kognition-ai/kognition/internal/ingestion"
 	"github.com/kognition-ai/kognition/internal/invocation"
 	"github.com/kognition-ai/kognition/internal/modelgateway"
+	"github.com/kognition-ai/kognition/internal/modelhealth"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/opa"
 	"github.com/kognition-ai/kognition/internal/runtime"
@@ -109,7 +111,7 @@ func main() {
 		logger.Fatal("configure workload identity status reporting", zap.Error(err))
 	}
 	defer closeIdentityReader()
-	mgr := newControllerManagerWithWorkloadIdentity(st, logger, tracePipeline, usageWriter, auditStore, identityReader, workflowToolTracingOptions(tracePipeline)...)
+	mgr := newControllerManagerWithWorkloadIdentity(st, logger, tracePipeline, usageWriter, auditStore, observability.NewCPICallMetrics(metricsRegistry), identityReader, workflowToolTracingOptions(tracePipeline)...)
 	if err := mgr.Start(ctx); err != nil {
 		logger.Fatal("controller manager error", zap.Error(err))
 	}
@@ -149,11 +151,60 @@ func shutdownTracePipeline(pipeline *observability.TracePipeline, logger *zap.Lo
 	}
 }
 
-func newControllerManager(st store.Store, logger *zap.Logger, tracePipeline *observability.TracePipeline, usageWriter observability.UsageEventWriter, auditStore observability.AuditStore, workflowToolOptions ...controller.WorkflowToolInvokerOption) *controller.Manager {
-	return newControllerManagerWithWorkloadIdentity(st, logger, tracePipeline, usageWriter, auditStore, nil, workflowToolOptions...)
+// passiveModelHealth wires passive model health into the controller manager: it
+// records the outcomes of the manager's own model calls, publishes them, and
+// reconciles Models whose real traffic no longer matches their status. It exists
+// only when the store can share health between processes; the methods of a nil
+// value do nothing.
+type passiveModelHealth struct {
+	sink    store.ModelCallHealthStore
+	tracker *modelhealth.Tracker
 }
 
-func newControllerManagerWithWorkloadIdentity(st store.Store, logger *zap.Logger, tracePipeline *observability.TracePipeline, usageWriter observability.UsageEventWriter, auditStore observability.AuditStore, reader *runtimeauth.WorkloadIdentityStatusRegistry, workflowToolOptions ...controller.WorkflowToolInvokerOption) *controller.Manager {
+func newPassiveModelHealth(st store.Store) *passiveModelHealth {
+	sink, ok := st.(store.ModelCallHealthStore)
+	if !ok {
+		return nil
+	}
+	return &passiveModelHealth{sink: sink, tracker: modelhealth.NewTracker()}
+}
+
+// recorder adds the passive health tracker to base, which may be nil.
+func (p *passiveModelHealth) recorder(base cpi.CallRecorder) cpi.CallRecorder {
+	if p == nil {
+		return base
+	}
+	return cpi.Recorders(base, p.tracker)
+}
+
+func (p *passiveModelHealth) register(mgr *controller.Manager, st store.Store, modelController *controller.Controller, logger *zap.Logger) {
+	if p == nil {
+		return
+	}
+	// The reporter outlives the controllers so that it publishes the outcomes of the
+	// model calls they were still making while they shut down.
+	mgr.AddBackgroundRunnable(modelhealth.NewReporter(p.tracker, p.sink, modelhealth.NewReporterID(), logger))
+	mgr.AddRunnable(controller.NewModelHealthWatcher(st, p.sink, modelController.OnUpdate, logger))
+}
+
+// newCPIRegistry registers the built-in model drivers and reports their call
+// outcomes to recorder, which may be nil.
+func newCPIRegistry(recorder cpi.CallRecorder) *cpi.Registry {
+	registry := cpi.NewRegistry()
+	registry.MustRegister(openaidrv.New(nil))
+	registry.MustRegister(foundrydrv.New(nil))
+	registry.MustRegister(anthropicdrv.New(nil))
+	registry.MustRegister(ollamadrv.New(nil))
+	registry.MustRegister(bedrockdrv.New(nil))
+	registry.Observe(recorder)
+	return registry
+}
+
+func newControllerManager(st store.Store, logger *zap.Logger, tracePipeline *observability.TracePipeline, usageWriter observability.UsageEventWriter, auditStore observability.AuditStore, workflowToolOptions ...controller.WorkflowToolInvokerOption) *controller.Manager {
+	return newControllerManagerWithWorkloadIdentity(st, logger, tracePipeline, usageWriter, auditStore, nil, nil, workflowToolOptions...)
+}
+
+func newControllerManagerWithWorkloadIdentity(st store.Store, logger *zap.Logger, tracePipeline *observability.TracePipeline, usageWriter observability.UsageEventWriter, auditStore observability.AuditStore, cpiRecorder cpi.CallRecorder, reader *runtimeauth.WorkloadIdentityStatusRegistry, workflowToolOptions ...controller.WorkflowToolInvokerOption) *controller.Manager {
 	policyEngine := opa.NewEngine()
 	agentPolicyReconciler := controller.NewAgentPolicyReconciler(st, policyEngine, logger.Named("agent-policy-reconciler"))
 	quotaReconciler := controller.NewCognitiveQuotaReconciler(st, logger.Named("runtime-quota"))
@@ -185,8 +236,9 @@ func newControllerManagerWithWorkloadIdentity(st store.Store, logger *zap.Logger
 
 	var kbIngester *ingestion.HTTPLauncher
 	if endpoint := os.Getenv("KOGNITION_KB_INGESTER_URL"); endpoint != "" {
-		kbIngester = ingestion.NewHTTPLauncher(st, endpoint, nil, logger)
-		logger.Info("standalone knowledge-base ingestion enabled", zap.String("endpoint", endpoint))
+		token := strings.TrimSpace(os.Getenv("KOGNITION_KB_INGESTER_AUTH_TOKEN"))
+		kbIngester = ingestion.NewHTTPLauncher(st, endpoint, nil, logger).WithBearerToken(token)
+		logger.Info("standalone knowledge-base ingestion enabled", zap.String("endpoint", endpoint), zap.Bool("authenticated", token != ""))
 	}
 	// Register the AgentIdentity reconciler before the Agent dependency watch.
 	agentIdentityReconciler := controller.NewAgentIdentityReconciler(st, logger.Named("agent-identity-reconciler"))
@@ -213,12 +265,8 @@ func newControllerManagerWithWorkloadIdentity(st store.Store, logger *zap.Logger
 	}
 
 	// Register the AgentInstance reconciler.
-	registry := cpi.NewRegistry()
-	registry.MustRegister(openaidrv.New(nil))
-	registry.MustRegister(foundrydrv.New(nil))
-	registry.MustRegister(anthropicdrv.New(nil))
-	registry.MustRegister(ollamadrv.New(nil))
-	registry.MustRegister(bedrockdrv.New(nil))
+	passiveHealth := newPassiveModelHealth(st)
+	registry := newCPIRegistry(passiveHealth.recorder(cpiRecorder))
 
 	cpiDispatcher := controller.NewCPIDispatcher(st, registry, logger.Named("cpi-dispatcher"))
 	if usageWriter != nil {
@@ -491,12 +539,13 @@ func newControllerManagerWithWorkloadIdentity(st store.Store, logger *zap.Logger
 
 	// Register the Model reconciler.
 	modelReconciler := controller.NewModelReconciler(st, registry, logger.Named("model-reconciler"))
-	mgr.Register(controller.ControllerConfig{
+	modelController := mgr.Register(controller.ControllerConfig{
 		Name:       "model-controller",
 		Kind:       "Model",
 		Reconciler: modelReconciler,
 		Workers:    2,
 	})
+	passiveHealth.register(mgr, st, modelController, logger)
 
 	// Register the ModelClass reconciler.
 	modelClassReconciler := controller.NewModelClassReconciler(st, registry, logger.Named("model-class-reconciler"))

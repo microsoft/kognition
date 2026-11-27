@@ -1660,6 +1660,7 @@ func TestModelClassReconciler_ProbeNilResult(t *testing.T) {
 // TestModelClassReconciler_ErrorRateThresholdProbe verifies the error-rate-threshold probe type
 // checks availability (rate-based evaluation is documented as a future enhancement).
 func TestModelClassReconciler_ErrorRateThresholdProbe(t *testing.T) {
+	threshold := int32(5)
 	driver := &configurableMockDriver{
 		name:        "openai-compatible",
 		probeResult: &cpi.HealthResult{Available: false, Reason: "HighErrorRate", Message: "error rate elevated"},
@@ -1683,7 +1684,7 @@ func TestModelClassReconciler_ErrorRateThresholdProbe(t *testing.T) {
 				Endpoint:           "https://api.example.com/health",
 				IntervalSeconds:    10,
 				Type:               "error-rate-threshold",
-				ErrorRateThreshold: 5,
+				ErrorRateThreshold: &threshold,
 				FailureThreshold:   1,
 			},
 		},

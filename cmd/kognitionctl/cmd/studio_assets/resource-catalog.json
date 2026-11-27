@@ -6850,7 +6850,9 @@
                   "type": "string"
                 },
                 "errorRateThreshold": {
-                  "description": "ErrorRateThreshold is the error rate percentage threshold (0-100).",
+                  "description": "ErrorRateThreshold is the error rate percentage (0-100) at which an\n\"error-rate-threshold\" probe degrades the class. It is measured over the\nprovider failures of recent real model calls to the class's Models, needs at\nleast 5 calls and defaults to 50 when unset. An explicit zero is preserved.",
+                  "maximum": 100,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 "failureThreshold": {
@@ -6874,7 +6876,7 @@
                   "type": "integer"
                 },
                 "type": {
-                  "description": "Type is the probe type (\"latency\", \"error-rate\", \"completion\").",
+                  "description": "Type is the probe type: \"inference-ping\" (default), \"latency-threshold\" or\n\"error-rate-threshold\". Other values are treated as \"inference-ping\".",
                   "type": "string"
                 }
               },
@@ -6976,8 +6978,10 @@
                   "type": "string"
                 },
                 "errorRateThreshold": {
-                  "description": "ErrorRateThreshold is the error rate percentage threshold (0-100).",
+                  "description": "ErrorRateThreshold is the error rate percentage (0-100) at which an\n\"error-rate-threshold\" probe degrades the class. It is measured over the\nprovider failures of recent real model calls to the class's Models, needs at\nleast 5 calls and defaults to 50 when unset. An explicit zero is preserved.",
                   "format": "int32",
+                  "maximum": 100,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 "failureThreshold": {
@@ -7010,7 +7014,7 @@
                   "type": "integer"
                 },
                 "type": {
-                  "description": "Type is the probe type (\"latency\", \"error-rate\", \"completion\").",
+                  "description": "Type is the probe type: \"inference-ping\" (default), \"latency-threshold\" or\n\"error-rate-threshold\". Other values are treated as \"inference-ping\".",
                   "type": "string"
                 }
               },

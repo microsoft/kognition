@@ -39,6 +39,9 @@ type ModelClassReconciler struct {
 	canaryUsage  observability.UsageEventWriter
 	canaryAudit  *observability.CognitiveAuditLog
 	canaryQuota  *QuotaEnforcer
+	// callHealth supplies the error rate of real model calls to the
+	// error-rate-threshold probe. It is nil when the store cannot share it.
+	callHealth store.ModelCallHealthStore
 }
 
 func (r *ModelClassReconciler) SetCanaryAccounting(ledger store.ModelDispatchStore, usage observability.UsageEventWriter, audit *observability.CognitiveAuditLog) {
@@ -46,11 +49,13 @@ func (r *ModelClassReconciler) SetCanaryAccounting(ledger store.ModelDispatchSto
 }
 
 func NewModelClassReconciler(s store.Store, registry *cpi.Registry, logger *zap.Logger) *ModelClassReconciler {
+	callHealth, _ := s.(store.ModelCallHealthStore)
 	return &ModelClassReconciler{
 		store:       s,
 		registry:    registry,
 		logger:      logger.With(zap.String("reconciler", "model-class")),
 		canaryQuota: NewQuotaEnforcer(s, NewCognitiveQuotaReconciler(s, logger), logger),
+		callHealth:  callHealth,
 	}
 }
 
@@ -89,6 +94,14 @@ func (r *ModelClassReconciler) Reconcile(ctx context.Context, req Request) (Resu
 			return Result{}, fmt.Errorf("add finalizer: %w", err)
 		}
 		return Result{Requeue: true}, nil
+	}
+
+	// Active classes can receive probe configuration updates without re-registering.
+	switch mc.Status.Phase {
+	case v1alpha1.PhaseValidating, v1alpha1.PhaseReady, v1alpha1.PhaseDegraded:
+		if valid, _, _ := validateModelClassHealthProbe(mc.Spec.HealthProbe); !valid {
+			return r.reconcileRegistered(ctx, &mc)
+		}
 	}
 
 	// State machine dispatch
@@ -323,7 +336,7 @@ func (r *ModelClassReconciler) reconcileDegraded(ctx context.Context, mc *v1alph
 	}
 
 	// Health probe configured — use stabilisation window for recovery.
-	passed, _, _ := r.probeHealth(ctx, mc)
+	passed, reason, message := r.probeHealth(ctx, mc)
 	mc.Status.LastProbeTime = time.Now().UTC().Format(time.RFC3339)
 
 	if passed {
@@ -366,6 +379,14 @@ func (r *ModelClassReconciler) reconcileDegraded(ctx context.Context, mc *v1alph
 	// Probe still failing — reset successes, stay degraded.
 	mc.Status.ConsecutiveSuccesses = 0
 	mc.Status.ConsecutiveFailures++
+	lc := lifecycle.SetCondition(
+		apiToLifecycleConditions(mc.Status.Conditions),
+		lifecycle.ConditionReady,
+		lifecycle.ConditionFalse,
+		reason,
+		message,
+	)
+	mc.Status.Conditions = lifecycleToAPIConditions(lc)
 	if err := r.updateModelClass(ctx, mc); err != nil {
 		return Result{}, fmt.Errorf("update degraded status: %w", err)
 	}
@@ -484,7 +505,7 @@ func (r *ModelClassReconciler) validateCandidate(ctx context.Context, modelClass
 		}
 		credentials = &cpi.Credentials{Type: values["type"], Data: values}
 	}
-	parameters := make(map[string]string, len(candidate.Spec.Parameters)+2)
+	parameters := make(map[string]string, len(candidate.Spec.Parameters))
 	for name, value := range candidate.Spec.Parameters {
 		parameters[name] = value
 	}
@@ -680,14 +701,8 @@ func (r *ModelClassReconciler) validateConfig(mc *v1alpha1.ModelClass) (bool, st
 		return false, "ProvisionerUnsupported", fmt.Sprintf("unsupported provisioner %q", mc.Spec.Provisioner)
 	}
 
-	if mc.Spec.HealthProbe != nil {
-		if mc.Spec.HealthProbe.Endpoint == "" {
-			return false, "HealthProbeInvalid", "healthProbe endpoint must be specified"
-		}
-		parsed, err := url.Parse(mc.Spec.HealthProbe.Endpoint)
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			return false, "HealthProbeInvalid", "healthProbe endpoint must be a valid URI"
-		}
+	if valid, reason, message := validateModelClassHealthProbe(mc.Spec.HealthProbe); !valid {
+		return false, reason, message
 	}
 
 	if mc.Spec.LatencyClass != "" {
@@ -704,6 +719,23 @@ func (r *ModelClassReconciler) validateConfig(mc *v1alpha1.ModelClass) (bool, st
 	}
 
 	return true, "ConfigValid", "provisioner and configuration validated"
+}
+
+func validateModelClassHealthProbe(probe *v1alpha1.HealthProbeSpec) (bool, string, string) {
+	if probe == nil {
+		return true, "", ""
+	}
+	if probe.Endpoint == "" {
+		return false, "HealthProbeInvalid", "healthProbe endpoint must be specified"
+	}
+	parsed, err := url.Parse(probe.Endpoint)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false, "HealthProbeInvalid", "healthProbe endpoint must be a valid URI"
+	}
+	if rate := probe.ErrorRateThreshold; rate != nil && (*rate < 0 || *rate > 100) {
+		return false, "HealthProbeInvalid", "healthProbe errorRateThreshold must be a percentage between 0 and 100"
+	}
+	return true, "", ""
 }
 
 func (r *ModelClassReconciler) handleDeletion(ctx context.Context, mc *v1alpha1.ModelClass) (Result, error) {
@@ -770,6 +802,12 @@ func (r *ModelClassReconciler) handleDeletion(ctx context.Context, mc *v1alpha1.
 // probeHealth executes the configured health probe against the CPI driver.
 // Returns (passed bool, reason string, message string).
 func (r *ModelClassReconciler) probeHealth(ctx context.Context, mc *v1alpha1.ModelClass) (bool, string, string) {
+	passed, reason, message := r.runHealthProbe(ctx, mc)
+	// Probe results can carry provider-controlled text; make it safe to persist.
+	return passed, sanitizeConditionReason(reason, "ProbeFailed"), sanitizeConditionMessage(message)
+}
+
+func (r *ModelClassReconciler) runHealthProbe(ctx context.Context, mc *v1alpha1.ModelClass) (bool, string, string) {
 	probe := mc.Spec.HealthProbe
 	if probe == nil {
 		return true, "", ""
@@ -823,11 +861,12 @@ func (r *ModelClassReconciler) probeHealth(ctx context.Context, mc *v1alpha1.Mod
 		return true, "", ""
 
 	case "error-rate-threshold":
-		// NOTE: Full error-rate evaluation requires aggregated metrics not available
-		// from a single probe. Currently this checks availability only. When the CPI
-		// HealthResult gains an ErrorRate field, compare against probe.ErrorRateThreshold.
+		// The probe checks availability; the error rate comes from real model calls.
 		if !result.Available {
 			return false, "ProbeFailed", fmt.Sprintf("error-rate-threshold: endpoint unavailable: %s", result.Message)
+		}
+		if exceeded, reason, message := r.errorRateExceeded(ctx, mc); exceeded {
+			return false, reason, message
 		}
 		return true, "", ""
 
@@ -896,6 +935,12 @@ func (r *ModelClassReconciler) findFallbackClass(ctx context.Context, mc *v1alph
 }
 
 func (r *ModelClassReconciler) updateModelClass(ctx context.Context, mc *v1alpha1.ModelClass) error {
+	// Conditions written before sanitization existed are re-persisted on every update.
+	for i := range mc.Status.Conditions {
+		c := &mc.Status.Conditions[i]
+		c.Reason = sanitizeConditionReason(c.Reason, "Unknown")
+		c.Message = sanitizeConditionMessage(c.Message)
+	}
 	data, err := json.Marshal(mc)
 	if err != nil {
 		return fmt.Errorf("marshal model class: %w", err)

@@ -1,6 +1,6 @@
 # The Kognition Manifest
 
-> *Cognition is an orchestration problem. Kubernetes already solved
+> *Kognition is an orchestration problem. Kubernetes already solved
 > orchestration. So we built on it.*
 
 Kognition's API shape, control loop, and operational model are deliberately
@@ -15,7 +15,7 @@ See the [resource interaction map](resource-interactions.md) for the complete
 
 ## 1. Why Kubernetes-native?
 
-### 1.1 Cognition is an orchestration problem
+### 1.1 Kognition is an orchestration problem
 
 Running production agents looks a lot more like running production services
 than like calling an LLM. You need:

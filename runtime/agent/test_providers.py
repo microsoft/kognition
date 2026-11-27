@@ -22,6 +22,43 @@ def test_model_gateway_base_url_adds_openai_api_prefix():
 def test_model_gateway_base_url_preserves_existing_openai_api_prefix():
     assert _model_gateway_base_url("http://model-gateway:8093/v1/") == "http://model-gateway:8093/v1"
 
+@pytest.mark.parametrize("endpoint,is_azure", [
+    ("https://example.openai.azure.com/v1", True),
+    ("https://example.cognitiveservices.azure.com", True),
+    ("https://azure.com/v1", True),
+    ("https://EXAMPLE.OPENAI.AZURE.COM:443/v1", True),
+    ("https://api.openai.com/v1", False),
+    ("https://azure.com.attacker.test/v1", False),
+    ("https://notazure.com/v1", False),
+    ("https://attacker.test/path/azure.com", False),
+    ("https://attacker.test/?endpoint=azure.com", False),
+    ("https://attacker.test/#azure.com", False),
+    ("https://azure.com@attacker.test/v1", False),
+    ("https://attacker.test:443/azure.com", False),
+])
+@pytest.mark.parametrize("provider", ["openai", "openai-compatible"])
+def test_openai_api_version_is_selected_by_azure_hostname(monkeypatch, endpoint, is_azure, provider):
+    import langchain_openai
+
+    received = {}
+    result = object()
+
+    def constructor(**kwargs):
+        received.update(kwargs)
+        return result
+
+    monkeypatch.setattr(langchain_openai, "ChatOpenAI", constructor)
+    config = AgentConfig(
+        model_provider=provider, model_endpoint=endpoint,
+        api_key="test-key", api_version="test-api-version",
+    )
+    assert create_model(config) is result
+    if is_azure:
+        assert received["default_query"] == {"api-version": "test-api-version"}
+    else:
+        assert "default_query" not in received
+    assert received.get("base_url", "https://api.openai.com/v1") == endpoint
+
 
 @pytest.mark.parametrize("profiled", [False, True])
 def test_ollama_tool_requests_use_governed_gateway_and_session_capability(monkeypatch, profiled):

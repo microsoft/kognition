@@ -86,6 +86,55 @@ func (s *toolClassUpdateCountingStore) Update(ctx context.Context, kind, namespa
 	return s.memStore.Update(ctx, kind, namespace, name, data, resourceVersion)
 }
 
+func TestToolProbeAnnotationIntegerBounds(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  int32
+	}{
+		{value: "0", want: 0}, {value: "42", want: 42},
+		{value: "2147483647", want: 2147483647}, {value: "-2147483648", want: -2147483648},
+		{value: "2147483648", want: 0}, {value: "-2147483649", want: 0},
+		{value: "4294967297", want: 0}, {value: "9223372036854775808", want: 0},
+		{value: "invalid", want: 0}, {value: "", want: 0},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			if got := getAnnotationInt32(map[string]string{"counter": test.value}, "counter"); got != test.want {
+				t.Fatalf("parsed counter = %d, want %d", got, test.want)
+			}
+		})
+	}
+	if got := getAnnotationInt32(nil, "counter"); got != 0 {
+		t.Fatalf("missing counter = %d, want 0", got)
+	}
+}
+
+func TestToolProbeCountersDoNotOverflow(t *testing.T) {
+	for _, passes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("passes-%t", passes), func(t *testing.T) {
+			tool := v1alpha1.Tool{
+				ObjectMeta: v1alpha1.ObjectMeta{Annotations: map[string]string{
+					annotationProbeFailures: "2147483647", annotationProbeSuccesses: "2147483647",
+				}},
+				Spec: v1alpha1.ToolSpec{HealthProbe: &v1alpha1.ToolHealthProbe{
+					FailureThreshold: 2147483647, SuccessThreshold: 2147483647,
+				}},
+				Status: v1alpha1.ToolStatus{Phase: v1alpha1.PhaseDegraded},
+			}
+			NewToolReconciler(newMemStore(), zaptest.NewLogger(t)).applyHealthProbe(&tool, passes, v1alpha1.PhaseDegraded, false)
+			counter, reset := annotationProbeFailures, annotationProbeSuccesses
+			wantPhase := v1alpha1.PhaseDegraded
+			if passes {
+				counter, reset = reset, counter
+				wantPhase = v1alpha1.PhaseReady
+			}
+			if tool.ObjectMeta.Annotations[counter] != "2147483647" || tool.ObjectMeta.Annotations[reset] != "0" ||
+				tool.Status.Phase != wantPhase || tool.Status.Available != passes {
+				t.Fatalf("counter overflow changed probe thresholds: annotations=%v status=%#v", tool.ObjectMeta.Annotations, tool.Status)
+			}
+		})
+	}
+}
+
 func storeTool(t *testing.T, s *memStore, tool v1alpha1.Tool) {
 	t.Helper()
 	if parsed, err := url.Parse(tool.Spec.Endpoint); err == nil {

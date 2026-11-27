@@ -119,7 +119,7 @@ func modelUsageLabels(event CostRecord) prometheus.Labels {
 }
 
 func withTokenType(labels prometheus.Labels, tokenType string) prometheus.Labels {
-	withType := make(prometheus.Labels, len(labels)+1)
+	withType := make(prometheus.Labels, len(labels))
 	for name, value := range labels {
 		withType[name] = value
 	}

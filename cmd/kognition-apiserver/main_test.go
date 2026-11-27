@@ -19,7 +19,10 @@ import (
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/apiserver"
 	"github.com/kognition-ai/kognition/internal/auth"
+	"github.com/kognition-ai/kognition/internal/cpi"
+	"github.com/kognition-ai/kognition/internal/modelhealth"
 	"github.com/kognition-ai/kognition/internal/runtimeapproval"
+	"github.com/kognition-ai/kognition/internal/store"
 )
 
 type lifecycleServerStub struct {
@@ -29,6 +32,8 @@ type lifecycleServerStub struct {
 	stop        chan struct{}
 	stopOnce    sync.Once
 	shutdowns   int
+	// onShutdown runs while the server drains, before Shutdown returns.
+	onShutdown func()
 }
 
 func newLifecycleServerStub() *lifecycleServerStub {
@@ -46,6 +51,9 @@ func (s *lifecycleServerStub) Start() error {
 
 func (s *lifecycleServerStub) Shutdown(context.Context) error {
 	s.shutdowns++
+	if s.onShutdown != nil {
+		s.onShutdown()
+	}
 	s.stopOnce.Do(func() { close(s.stop) })
 	return s.shutdownErr
 }
@@ -198,7 +206,7 @@ func TestRunAPIServerCommand(t *testing.T) {
 		t.Setenv("KOGNITION_AUTH_ENABLED", "true")
 		t.Setenv("KOGNITION_BOOTSTRAP_TOKEN", "")
 		t.Setenv("KOGNITION_OIDC_ISSUER", "")
-		err := runAPIServerCommand(context.Background(), zap.NewNop(), registry, func(context.Context, *zap.Logger, []apiserver.Option) (*apiServerRuntime, error) {
+		err := runAPIServerCommand(context.Background(), zap.NewNop(), registry, func(context.Context, *zap.Logger, *cpi.Registry, []apiserver.Option) (*apiServerRuntime, error) {
 			t.Fatal("runtime factory should not be called")
 			return nil, nil
 		})
@@ -210,7 +218,7 @@ func TestRunAPIServerCommand(t *testing.T) {
 	t.Run("runtime failure", func(t *testing.T) {
 		t.Setenv("KOGNITION_AUTH_ENABLED", "")
 		wantErr := errors.New("runtime failed")
-		err := runAPIServerCommand(context.Background(), zap.NewNop(), registry, func(context.Context, *zap.Logger, []apiserver.Option) (*apiServerRuntime, error) {
+		err := runAPIServerCommand(context.Background(), zap.NewNop(), registry, func(context.Context, *zap.Logger, *cpi.Registry, []apiserver.Option) (*apiServerRuntime, error) {
 			return nil, wantErr
 		})
 		if !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "create API server runtime") {
@@ -229,7 +237,10 @@ func TestRunAPIServerCommand(t *testing.T) {
 			<-server.started
 			cancel()
 		}()
-		err := runAPIServerCommand(ctx, zap.NewNop(), registry, func(_ context.Context, _ *zap.Logger, options []apiserver.Option) (*apiServerRuntime, error) {
+		err := runAPIServerCommand(ctx, zap.NewNop(), registry, func(_ context.Context, _ *zap.Logger, got *cpi.Registry, options []apiserver.Option) (*apiServerRuntime, error) {
+			if got != registry {
+				t.Fatal("the runtime factory must receive the command's CPI registry")
+			}
 			if len(options) != 3 {
 				t.Fatalf("options = %d, want 3", len(options))
 			}
@@ -312,17 +323,95 @@ func TestBuildServerOptionsWorkflowExecutorAttestationRejectsUnsafeConfiguration
 	}
 }
 
+// publishedOneSuccessfulCall reports whether records are the evidence of exactly
+// one successful call: it counts for the destination and for the credential that
+// made it, so it is published as two streams of one call each.
+func publishedOneSuccessfulCall(records []store.ModelCallHealth) bool {
+	if len(records) != 2 {
+		return false
+	}
+	for _, record := range records {
+		if record.Calls != 1 || record.Faults != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// The runtime closes the reporter with its other resources, which
+// runServerLifecycle does only after the server has shut down.
+func TestModelHealthReporterPublishesCallsFinishedWhileTheServerDrains(t *testing.T) {
+	tracker := modelhealth.NewTracker()
+	sink := &publishRecorder{}
+	start, stop := modelHealthReporting(modelhealth.NewReporter(tracker, sink, "apiserver-test", zap.NewNop()))
+	ctx, cancel := context.WithCancel(context.Background())
+	start(ctx)
+
+	server := newLifecycleServerStub()
+	server.onShutdown = func() {
+		// A request still in flight completes some time into the drain.
+		time.Sleep(50 * time.Millisecond)
+		tracker.RecordCall(cpi.CallOutcome{Provider: "anthropic", Operation: cpi.OperationComplete, Model: "claude", Endpoint: "https://api.example"})
+	}
+	done := make(chan error, 1)
+	go func() { done <- runServerLifecycle(ctx, server, &listenerLifecycleStub{}, stop, zap.NewNop()) }()
+	<-server.started
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("runServerLifecycle: %v", err)
+	}
+
+	published := sink.last()
+	if !publishedOneSuccessfulCall(published) {
+		t.Fatalf("published = %+v, want the call that finished during the drain", published)
+	}
+}
+
+func TestModelHealthReportingStopIsSafeWhenTheRuntimeNeverStartedIt(t *testing.T) {
+	_, stop := modelHealthReporting(modelhealth.NewReporter(modelhealth.NewTracker(), &publishRecorder{}, "apiserver-test", zap.NewNop()))
+	stop()
+}
+
+type publishRecorder struct {
+	mu      sync.Mutex
+	records []store.ModelCallHealth
+}
+
+func (p *publishRecorder) ReplaceModelCallHealth(_ context.Context, _ string, records []store.ModelCallHealth) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.records = records
+	return nil
+}
+
+func (p *publishRecorder) ListModelCallHealth(context.Context, time.Duration) ([]store.ModelCallHealth, error) {
+	return nil, nil
+}
+
+func (p *publishRecorder) last() []store.ModelCallHealth {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.records
+}
+
 func TestNewProductionRuntime(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost/database")
 	t.Setenv("KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON", `[{"version":1,"epoch":1,"algorithm":"HMAC-SHA-256","domain":"kognition.dev/runtime-approval/action/v1","status":"Active","material":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}]`)
 	for _, profile := range []string{"", "kubernetes-bound-token-v1"} {
 		t.Run("profile="+profile, func(t *testing.T) {
 			t.Setenv("KOGNITION_WORKFLOW_EXECUTOR_ATTESTATION_PROFILE", profile)
-			runtime, err := newProductionRuntime(context.Background(), zap.NewNop(), nil)
+			registry := newProductionCPIRegistry()
+			if registry.Observed() {
+				t.Fatal("the production registry must not be observed before the runtime is built")
+			}
+			runtime, err := newProductionRuntime(context.Background(), zap.NewNop(), registry, nil)
 			if err != nil {
 				t.Fatalf("newProductionRuntime: %v", err)
 			}
 			defer runtime.closePool()
+			if !registry.Observed() {
+				t.Fatal("newProductionRuntime must report CPI call outcomes to the runtime's metrics registry")
+			}
 			if runtime.server == nil || runtime.listener == nil || runtime.closePool == nil || runtime.initialize == nil {
 				t.Fatalf("runtime = %#v", runtime)
 			}

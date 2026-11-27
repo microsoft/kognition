@@ -7,15 +7,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/opa"
 	"github.com/kognition-ai/kognition/internal/runtime"
+	"github.com/kognition-ai/kognition/internal/runtime/toolexec"
 	"github.com/kognition-ai/kognition/internal/store"
 )
 
@@ -359,21 +366,66 @@ func TestDefaultWorkflowToolInvokerEnforcesIdentityAndRBACForAgentPrincipal(t *t
 }
 
 func TestDefaultWorkflowToolInvokerPreservesExecutionError(t *testing.T) {
-	memoryStore := newMemStore()
-	storeTool(t, memoryStore, v1alpha1.Tool{
-		ObjectMeta: v1alpha1.ObjectMeta{Namespace: "tenant-a", Name: "http-get"},
-	})
-	executionErr := errors.New("remote tool failed")
-	executor := &workflowRecordingExecutor{err: executionErr}
-	invoker := NewDefaultWorkflowToolInvoker(
-		memoryStore,
-		nil,
-		runtime.NewToolDispatcher(executor, nil),
-		zaptest.NewLogger(t),
-	)
-
-	_, err := invoker.InvokeTool(context.Background(), "tenant-a", "workflow:nightly", "http-get", nil)
-	if !errors.Is(err, executionErr) {
-		t.Fatalf("error = %v, want original execution error", err)
+	for _, executionErr := range []error{
+		errors.New(logSecretSentinel),
+		fmt.Errorf("remote tool failed: %w", errors.New(logSecretSentinel)),
+		errors.Join(errors.New(logSecretSentinel), errors.New("another backend failure")),
+		&runtime.StructuredToolError{Code: "ToolHTTPError", Message: logSecretSentinel},
+	} {
+		t.Run(fmt.Sprintf("%T", executionErr), func(t *testing.T) {
+			memoryStore := newMemStore()
+			storeTool(t, memoryStore, v1alpha1.Tool{
+				ObjectMeta: v1alpha1.ObjectMeta{Namespace: "tenant-a", Name: "http-get"},
+			})
+			core, logs := observer.New(zap.WarnLevel)
+			executor := &workflowRecordingExecutor{err: executionErr}
+			invoker := NewDefaultWorkflowToolInvoker(memoryStore, nil, runtime.NewToolDispatcher(executor, nil), zap.New(core))
+			output, err := invoker.InvokeTool(context.Background(), "tenant-a", "workflow:nightly", "http-get", nil)
+			if !errors.Is(err, executionErr) || output != nil || executor.calls != 1 {
+				t.Fatalf("original execution error or dispatch behavior changed: error=%v output=%v calls=%d", err, output, executor.calls)
+			}
+			assertConfidentialFailureLog(t, logs, "tool invocation failed", map[string]any{
+				"namespace": "tenant-a", "principal": "workflow:nightly", "tool": "http-get",
+			})
+		})
 	}
+}
+
+func TestWorkflowToolHTTPFailureLogsOmitRemoteResponse(t *testing.T) {
+	calls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var input map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Errorf("decode input: %v", err)
+		}
+		if input["credential"] != logSecretSentinel {
+			t.Error("input did not reach the configured executor")
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		if _, err := io.WriteString(w, "backend rejected credential: "+logSecretSentinel); err != nil {
+			t.Errorf("write backend response: %v", err)
+		}
+	}))
+	defer server.Close()
+	memory := newMemStore()
+	storeTool(t, memory, v1alpha1.Tool{
+		ObjectMeta: v1alpha1.ObjectMeta{Namespace: "tenant-a", Name: "http-tool"},
+		Spec: v1alpha1.ToolSpec{
+			Protocol: v1alpha1.ToolProtocolOpenAPI, Endpoint: server.URL,
+			Metadata: map[string]string{"allowPrivateNetwork": "true"},
+		},
+	})
+	core, logs := observer.New(zap.WarnLevel)
+	dispatcher := runtime.NewToolDispatcher(toolexec.New(server.Client()), nil)
+	invoker := NewDefaultWorkflowToolInvoker(memory, nil, dispatcher, zap.New(core))
+	output, err := invoker.InvokeTool(context.Background(), "tenant-a", "workflow:nightly", "http-tool", map[string]any{"credential": logSecretSentinel})
+	var structured *runtime.StructuredToolError
+	if output != nil || calls != 1 || !errors.As(err, &structured) || structured.Code != "ToolHTTPError" ||
+		!strings.Contains(structured.Message, logSecretSentinel) {
+		t.Fatalf("original remote error was not preserved: output=%v calls=%d error=%v", output, calls, err)
+	}
+	assertConfidentialFailureLog(t, logs, "tool invocation failed", map[string]any{
+		"namespace": "tenant-a", "principal": "workflow:nightly", "tool": "http-tool",
+	})
 }

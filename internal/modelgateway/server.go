@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -53,6 +54,7 @@ type Server struct {
 	quota     ModelQuotaChecker
 	audit     *observability.CognitiveAuditLog
 	drivers   *cpi.Registry
+	recorder  cpi.CallRecorder
 }
 
 // Option configures optional Model Gateway dependencies.
@@ -61,6 +63,13 @@ type Option func(*Server)
 // WithCPIRegistry uses administrator-registered adapters rather than a new discovery mechanism.
 func WithCPIRegistry(registry *cpi.Registry) Option {
 	return func(server *Server) { server.drivers = registry }
+}
+
+// WithCallRecorder reports the outcome of every provider call made through the
+// gateway's CPI registry. Observation applies to the registry in use after all
+// options are applied, so it also covers a registry supplied by WithCPIRegistry.
+func WithCallRecorder(recorder cpi.CallRecorder) Option {
+	return func(server *Server) { server.recorder = recorder }
 }
 
 // WithObservability emits model-inference spans after the gateway verifies a
@@ -89,6 +98,9 @@ type upstreamAuth struct {
 	Provider    string
 	Credentials *cpi.Credentials
 	Invocation  *modelinvocation.Resolved
+	// Credential is the cpi.CredentialFingerprint of the Model's secret. It lets a
+	// direct provider call be attributed to the account that made it.
+	Credential string
 }
 
 func New(store store.Store, issuer *runtimeauth.ModelSessionCapabilityIssuer, authorizer ModelAccessAuthorizer, client *http.Client, logger *zap.Logger, options ...Option) (*Server, error) {
@@ -119,6 +131,9 @@ func newServer(store store.Store, issuer *runtimeauth.ModelSessionCapabilityIssu
 	}
 	if server.drivers == nil {
 		return nil, errors.New("model gateway CPI registry is required")
+	}
+	if server.recorder != nil {
+		server.drivers.Observe(server.recorder)
 	}
 	return server, nil
 }
@@ -365,6 +380,7 @@ func (s *Server) resolveUpstreamAuth(ctx context.Context, namespace string, mode
 		return upstreamAuth{}, nil
 	}
 	values := credentials.Data
+	fingerprint := cpi.CredentialFingerprint(credentials)
 	if provider != "foundry" && provider != "openai-compatible" {
 		if provider == "anthropic" && values["apiKey"] == "" {
 			return upstreamAuth{}, errors.New("Anthropic invocation requires an API-key SecretRef")
@@ -380,9 +396,9 @@ func (s *Server) resolveUpstreamAuth(ctx context.Context, namespace string, mode
 			return upstreamAuth{}, errors.New("model API-key SecretRef is empty")
 		}
 		if provider == "foundry" {
-			return upstreamAuth{Header: "api-key", Value: apiKey}, nil
+			return upstreamAuth{Header: "api-key", Value: apiKey, Credential: fingerprint}, nil
 		}
-		return upstreamAuth{Header: "Authorization", Value: "Bearer " + apiKey}, nil
+		return upstreamAuth{Header: "Authorization", Value: "Bearer " + apiKey, Credential: fingerprint}, nil
 	}
 	if provider != "foundry" || (values["type"] != "azure-identity" && values["credentialType"] == "") {
 		return upstreamAuth{}, errors.New("model credential is not supported by the Model Gateway")
@@ -391,7 +407,7 @@ func (s *Server) resolveUpstreamAuth(ctx context.Context, namespace string, mode
 	if err != nil {
 		return upstreamAuth{}, fmt.Errorf("acquire Foundry Azure identity token: %w", err)
 	}
-	return upstreamAuth{Header: "Authorization", Value: "Bearer " + token}, nil
+	return upstreamAuth{Header: "Authorization", Value: "Bearer " + token, Credential: fingerprint}, nil
 }
 
 func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, model *v1alpha1.Model, auth upstreamAuth) (cpi.Usage, []byte, string, error) {
@@ -415,18 +431,25 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, mode
 			request.Header.Set(header, value)
 		}
 	}
+	start := time.Now()
 	response, err := s.client.Do(request)
 	if err != nil {
+		s.recordCall(auth, model, start, err)
 		writeError(w, http.StatusBadGateway, "model provider is unavailable")
 		return cpi.Usage{}, nil, "", err
 	}
 	defer func() { _ = response.Body.Close() }()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxRequestBytes+1))
 	if err != nil || len(responseBody) > maxRequestBytes {
+		if err == nil {
+			err = errors.New("model provider response is too large")
+		}
+		s.recordCall(auth, model, start, err)
 		writeError(w, http.StatusBadGateway, "model provider response is unavailable")
 		return cpi.Usage{}, nil, "", errors.New("read model provider response")
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		s.recordCall(auth, model, start, &cpi.ProviderError{Provider: auth.Provider, Status: response.StatusCode, Reason: cpi.ClassifyStatus(response.StatusCode)})
 		if response.StatusCode >= http.StatusInternalServerError {
 			writeError(w, http.StatusBadGateway, "model provider is unavailable")
 			return cpi.Usage{}, nil, "", fmt.Errorf("model provider returned %s", response.Status)
@@ -440,10 +463,30 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, body []byte, mode
 	}
 	usage, reported := completionUsage(responseBody)
 	if !reported {
-		writeError(w, http.StatusBadGateway, "model provider response omitted token usage")
-		return cpi.Usage{}, nil, "", errors.New("model provider response omitted token usage")
+		err := errors.New("model provider response omitted token usage")
+		s.recordCall(auth, model, start, err)
+		writeError(w, http.StatusBadGateway, err.Error())
+		return cpi.Usage{}, nil, "", err
 	}
+	s.recordCall(auth, model, start, nil)
 	return usage, responseBody, contentType, nil
+}
+
+// recordCall reports a direct provider call; calls through the CPI registry are recorded by the observed drivers.
+// It carries the Model's endpoint and credential like they do, so that the
+// outcome counts for the same destination and account as the Model's other calls.
+func (s *Server) recordCall(auth upstreamAuth, model *v1alpha1.Model, start time.Time, err error) {
+	if s.recorder == nil {
+		return
+	}
+	outcome := cpi.CallOutcome{
+		Provider: auth.Provider, Operation: cpi.OperationComplete, Model: model.Spec.ModelID,
+		Endpoint: model.Spec.Endpoint, Credential: auth.Credential, Duration: time.Since(start),
+	}
+	if err != nil {
+		outcome.Reason, outcome.ProviderFault = cpi.ClassifyCallError(err)
+	}
+	s.recorder.RecordCall(outcome)
 }
 
 func (s *Server) startModelSpan(ctx context.Context, claims *runtimeauth.ModelSessionCapabilityClaims, agentIdentity string, authorized *AuthorizedModel, provider string) *observability.Span {

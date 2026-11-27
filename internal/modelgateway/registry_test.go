@@ -16,6 +16,7 @@ import (
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/cpi"
 	"github.com/kognition-ai/kognition/internal/modelinvocation"
+	"github.com/kognition-ai/kognition/internal/runtimeauth"
 )
 
 type registeredInvocationAdapter struct {
@@ -62,6 +63,101 @@ func TestGatewayAcceptsAdministratorRegisteredInvocationAdapter(t *testing.T) {
 	if _, err := New(storage, issuer, authorizer, nil, zap.NewNop(), WithCPIRegistry(nil)); err == nil {
 		t.Fatal("missing administrator registry was silently replaced")
 	}
+	token := registeredAdapterCapability(t, storage, issuer, binding, adapter)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, completionRequest(token))
+	if response.Code != http.StatusOK || adapter.calls != 1 {
+		t.Fatalf("registered adapter failed: status=%d body=%s calls=%d", response.Code, response.Body.String(), adapter.calls)
+	}
+}
+
+type recordedCalls struct{ outcomes []cpi.CallOutcome }
+
+func (r *recordedCalls) RecordCall(outcome cpi.CallOutcome) { r.outcomes = append(r.outcomes, outcome) }
+
+func TestGatewayReportsProviderCallsToTheConfiguredRecorder(t *testing.T) {
+	_, storage, authorizer, issuer, binding, _ := fixture(t)
+	registry := cpi.NewRegistry()
+	adapter := &registeredInvocationAdapter{}
+	registry.MustRegister(adapter)
+	recorder := &recordedCalls{}
+	server, err := New(storage, issuer, authorizer, nil, zap.NewNop(), WithCPIRegistry(registry), WithCallRecorder(recorder))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := registeredAdapterCapability(t, storage, issuer, binding, adapter)
+
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, completionRequest(token))
+	if response.Code != http.StatusOK || adapter.calls != 1 {
+		t.Fatalf("registered adapter failed: status=%d body=%s calls=%d", response.Code, response.Body.String(), adapter.calls)
+	}
+	if len(recorder.outcomes) != 1 {
+		t.Fatalf("recorded %d outcomes, want 1: %+v", len(recorder.outcomes), recorder.outcomes)
+	}
+	got := recorder.outcomes[0]
+	if got.Provider != adapter.Name() || got.Operation != cpi.OperationComplete || got.Model != "opaque-deployment" || !got.Succeeded() {
+		t.Fatalf("outcome = %+v, want a successful complete call to opaque-deployment through %s", got, adapter.Name())
+	}
+	if got.Credential != fixtureCredentialFingerprint() || got.Credential == "" {
+		t.Fatalf("credential = %q, want the fingerprint of the Model's secret, the same the direct calls report", got.Credential)
+	}
+	if _, supported := mustDriver(t, registry, adapter.Name()).(cpi.InvocationContractProvider); !supported {
+		t.Fatal("observing the registry hid the adapter's invocation contract support")
+	}
+}
+
+func TestGatewayWithoutRecorderLeavesTheRegistryUnobserved(t *testing.T) {
+	_, storage, authorizer, issuer, _, _ := fixture(t)
+	registry := cpi.NewRegistry()
+	adapter := &registeredInvocationAdapter{}
+	registry.MustRegister(adapter)
+	if _, err := New(storage, issuer, authorizer, nil, zap.NewNop(), WithCPIRegistry(registry)); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := mustDriver(t, registry, adapter.Name()); got != cpi.Driver(adapter) {
+		t.Fatal("a gateway without a recorder must not wrap the registry's drivers")
+	}
+}
+
+func TestGatewayDoesNotBlockAPassivelyDegradedModel(t *testing.T) {
+	_, storage, authorizer, issuer, binding, _ := fixture(t)
+	registry := cpi.NewRegistry()
+	adapter := &registeredInvocationAdapter{}
+	registry.MustRegister(adapter)
+	server, err := New(storage, issuer, authorizer, nil, zap.NewNop(), WithCPIRegistry(registry))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := registeredAdapterCapability(t, storage, issuer, binding, adapter)
+	var model api.Model
+	if err := json.Unmarshal(storage.data["Model/team-a/mock-model"], &model); err != nil {
+		t.Fatal(err)
+	}
+	model.Status.Phase, model.Status.Available = api.PhaseFailed, false
+	model.Status.Conditions = []api.Condition{{Type: "Ready", Status: "False", Reason: "QuotaOrBillingError", Message: "passive health: recent model calls are failing with QuotaOrBillingError"}}
+	put(t, storage, "Model", "team-a", model.Name, model)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, completionRequest(token))
+	if response.Code != http.StatusOK || adapter.calls != 1 {
+		t.Fatalf("status=%d body=%s calls=%d, want authorized direct invocation despite passive status", response.Code, response.Body.String(), adapter.calls)
+	}
+}
+
+func mustDriver(t *testing.T, registry *cpi.Registry, name string) cpi.Driver {
+	t.Helper()
+	driver, ok := registry.Get(name)
+	if !ok {
+		t.Fatalf("driver %q is not registered", name)
+	}
+	return driver
+}
+
+// registeredAdapterCapability points the fixture Model at the registered adapter
+// and returns a runtime capability for it.
+func registeredAdapterCapability(t *testing.T, storage *memoryStore, issuer *runtimeauth.ModelSessionCapabilityIssuer, binding runtimeauth.ModelSessionCapabilityBinding, adapter *registeredInvocationAdapter) string {
+	t.Helper()
 	var model api.Model
 	if err := json.Unmarshal(storage.data["Model/team-a/mock-model"], &model); err != nil {
 		t.Fatal(err)
@@ -84,9 +180,77 @@ func TestGatewayAcceptsAdministratorRegisteredInvocationAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := httptest.NewRecorder()
-	server.ServeHTTP(response, completionRequest(token))
-	if response.Code != http.StatusOK || adapter.calls != 1 {
-		t.Fatalf("registered adapter failed: status=%d body=%s calls=%d", response.Code, response.Body.String(), adapter.calls)
+	return token
+}
+
+func TestGatewayReportsDirectProviderCallsToTheConfiguredRecorder(t *testing.T) {
+	const usage = `{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+		closed bool
+		code   int
+		reason string
+		fault  bool
+	}{
+		{name: "success", status: http.StatusOK, body: usage, code: http.StatusOK},
+		{name: "missing usage", status: http.StatusOK, body: `{}`, code: http.StatusBadGateway, reason: cpi.ReasonOther},
+		{name: "malformed response", status: http.StatusOK, body: `not json`, code: http.StatusBadGateway, reason: cpi.ReasonOther},
+		{name: "server error", status: http.StatusInternalServerError, code: http.StatusBadGateway, reason: cpi.ReasonEndpointError, fault: true},
+		{name: "rate limited", status: http.StatusTooManyRequests, code: http.StatusBadGateway, reason: cpi.ReasonRateLimited, fault: true},
+		{name: "invalid request", status: http.StatusBadRequest, code: http.StatusBadGateway, reason: cpi.ReasonInvalidRequest},
+		{name: "unreachable", closed: true, code: http.StatusBadGateway, reason: cpi.ReasonUnreachable, fault: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, storage, authorizer, issuer, binding, _ := fixture(t)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			if test.closed {
+				upstream.Close()
+			} else {
+				t.Cleanup(upstream.Close)
+			}
+			var model api.Model
+			if err := json.Unmarshal(storage.data["Model/team-a/mock-model"], &model); err != nil {
+				t.Fatal(err)
+			}
+			model.Spec.Endpoint = upstream.URL
+			put(t, storage, "Model", "team-a", model.Name, model)
+			recorder := &recordedCalls{}
+			server, err := New(storage, issuer, authorizer, nil, zap.NewNop(), WithCallRecorder(recorder))
+			if err != nil {
+				t.Fatal(err)
+			}
+			token, err := issuer.Issue(binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, completionRequest(token))
+			if response.Code != test.code {
+				t.Fatalf("status = %d, want %d: %s", response.Code, test.code, response.Body.String())
+			}
+			if len(recorder.outcomes) != 1 {
+				t.Fatalf("recorded %d outcomes, want exactly 1: %+v", len(recorder.outcomes), recorder.outcomes)
+			}
+			got := recorder.outcomes[0]
+			if got.Provider != "openai-compatible" || got.Operation != cpi.OperationComplete || got.Model != "mock" || got.Reason != test.reason || got.ProviderFault != test.fault {
+				t.Fatalf("outcome = %+v, want reason %q fault %t", got, test.reason, test.fault)
+			}
+			if got.Endpoint != upstream.URL || got.Credential != fixtureCredentialFingerprint() {
+				t.Fatalf("outcome = %+v, want the Model's endpoint %q and the fingerprint of its secret, which the health evidence is attributed by", got, upstream.URL)
+			}
+		})
 	}
+}
+
+// fixtureCredentialFingerprint is the fingerprint of the secret the fixture's Model
+// presents. The gateway keeps the "type" entry in the values it resolves and the
+// other call sites do not, so every path must still agree on it.
+func fixtureCredentialFingerprint() string {
+	return cpi.CredentialFingerprint(&cpi.Credentials{Type: "api-key", Data: map[string]string{"apiKey": "upstream-secret"}})
 }

@@ -181,7 +181,6 @@ func (c *Controller) processItem(ctx context.Context, key string) {
 		} else {
 			c.logger.Warn("reconciliation failed, will retry",
 				zap.String("key", key),
-				zap.Error(err),
 				zap.Int("retries", c.queue.NumRequeues(key)),
 			)
 		}

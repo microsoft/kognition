@@ -687,7 +687,7 @@ for (const [kind, plural, spec] of [
       ["Annotations", "tutorial.kognition.dev/description", "Support assistant tutorial"],
     ]) {
       if (kind === "MemoryClaim") {
-        const box = page.locator("details.schema-object").filter({ has: page.locator("summary").filter({ hasText: new RegExp(`^${title}$`) }) });
+        const box = page.locator("details.schema-object").filter({ has: page.locator("summary").and(page.getByText(title, { exact: true })) });
         await box.locator("summary").click();
         await expect(box).toContainText(`No ${title.toLowerCase()} configured.`);
         await expect(box.getByText("New entry key", { exact: true })).toBeVisible();
@@ -695,7 +695,7 @@ for (const [kind, plural, spec] of [
         await box.getByRole("button", { name: "Add entry", exact: true }).click();
         await page.locator(`[data-path="metadata.${title.toLowerCase()}.${key}"]`).fill(value);
       } else {
-        const box = page.locator("#builder-host .field").filter({ has: page.locator("label").filter({ hasText: new RegExp(`^${title}$`) }) }).first();
+        const box = page.locator("#builder-host .field").filter({ has: page.locator("label").and(page.getByText(title, { exact: true })) }).first();
         await expect(box).toContainText(`No ${title.toLowerCase()} configured.`);
         await box.getByRole("button", { name: "+ add entry", exact: true }).click();
         await box.getByRole("textbox", { name: `${title} key 1`, exact: true }).fill(key);
@@ -707,8 +707,8 @@ for (const [kind, plural, spec] of [
     expect(calls[0].body.metadata.labels).toEqual({ "app.kubernetes.io/part-of": "tutorial" });
     expect(calls[0].body.metadata.annotations).toEqual({ "tutorial.kognition.dev/description": "Support assistant tutorial" });
     await page.locator('[data-view="yaml"]').click();
-    await expect(page.locator("#yaml-area")).toHaveValue(/app.kubernetes.io\/part-of: tutorial/);
-    await expect(page.locator("#yaml-area")).toHaveValue(/tutorial.kognition.dev\/description: Support assistant tutorial/);
+    await expect(page.locator("#yaml-area")).toHaveValue(/app\.kubernetes\.io\/part-of: tutorial/);
+    await expect(page.locator("#yaml-area")).toHaveValue(/tutorial\.kognition\.dev\/description: Support assistant tutorial/);
   });
 }
 
