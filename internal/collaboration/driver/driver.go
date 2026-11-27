@@ -25,6 +25,8 @@ var (
 	// ErrRefused is returned by Transport.Admit when the dispatch was denied
 	// before any contact. It must wrap a reason that is safe to record.
 	ErrRefused = errors.New("driver: dispatch refused")
+	// ErrDeferred leaves a dispatch pending while other dispatches make progress.
+	ErrDeferred = errors.New("driver: dispatch deferred")
 )
 
 // maxConflictRetries bounds re-application of one event after lost CAS races.
@@ -61,7 +63,8 @@ type Observation struct {
 // dispatch-admission fence; Send is made only after the commit is durable.
 type Transport interface {
 	// Admit returns an error wrapping ErrRefused when the dispatch may not
-	// contact the member. Any other error leaves the dispatch undecided.
+	// contact the member, or ErrDeferred when it can try again on a later pass.
+	// Any other error aborts the pass and leaves the dispatch undecided.
 	Admit(ctx context.Context, msg collaboration.Message) error
 	// Send contacts the member once. Any error is recorded as uncertain.
 	Send(ctx context.Context, msg collaboration.Message) error
@@ -183,7 +186,10 @@ func (d *Driver) dispatchPending(ctx context.Context, st collaboration.State, ve
 			return st, ver, moved, err
 		}
 		if err := d.transport.Admit(ctx, msg); err != nil {
-			if !errors.Is(err, ErrRefused) {
+			switch {
+			case errors.Is(err, ErrDeferred):
+				continue
+			case !errors.Is(err, ErrRefused):
 				return st, ver, moved, err
 			}
 			if st, ver, err = d.apply(ctx, st, ver, collaboration.RefuseDispatch{ID: p.ID, Reason: err.Error()}); err != nil {
@@ -247,7 +253,10 @@ func (d *Driver) observe(ctx context.Context, st collaboration.State, ver Versio
 func event(msg collaboration.Message, obs Observation) (collaboration.Event, bool) {
 	switch msg.Kind {
 	case collaboration.DispatchPrepare:
-		return collaboration.TransferAck{TransferID: msg.Transfer.ID, Actor: obs.Actor, Accepted: obs.Accepted}, true
+		return collaboration.TransferAck{
+			TransferID: msg.Transfer.ID, Actor: obs.Actor, Accepted: obs.Accepted,
+			TokensUsed: obs.TokensUsed, TokensKnown: obs.TokensKnown,
+		}, true
 	case collaboration.DispatchCancel:
 		if obs.Status != collaboration.ReportCancelled {
 			return nil, false

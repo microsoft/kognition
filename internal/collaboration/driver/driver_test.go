@@ -21,6 +21,7 @@ var bg = context.Background()
 type scripted struct {
 	mu       sync.Mutex
 	behave   func(collaboration.Message) Observation
+	admit    func(collaboration.Message) error
 	refuse   func(collaboration.Message) bool
 	failSend func(collaboration.Message) bool
 	hideAll  bool // Observe reports nothing settled
@@ -33,6 +34,9 @@ func newScripted(b func(collaboration.Message) Observation) *scripted {
 }
 
 func (s *scripted) Admit(_ context.Context, m collaboration.Message) error {
+	if s.admit != nil {
+		return s.admit(m)
+	}
 	if s.refuse != nil && s.refuse(m) {
 		return fmt.Errorf("%w: policy", ErrRefused)
 	}
@@ -194,6 +198,32 @@ func TestHandoffTransfersOwnership(t *testing.T) {
 	requireResult(t, st, "b finished")
 	if st.Owner != "b" {
 		t.Fatalf("owner = %q", st.Owner)
+	}
+}
+
+func TestDeferredDispatchDoesNotBlockObservation(t *testing.T) {
+	c := collab(api.CollaborationStrategyParallel, "a", "b")
+	c.Parallel = &api.CollaborationParallel{Branches: []api.CollaborationBranch{{Member: "a"}, {Member: "b"}}}
+	firstObserved := false
+	tr := newScripted(func(m collaboration.Message) Observation {
+		if m.Recipient == "a" {
+			firstObserved = true
+		}
+		return done(m, collaboration.Operation{Kind: collaboration.OpComplete, Result: m.Recipient})
+	})
+	tr.admit = func(m collaboration.Message) error {
+		if m.Recipient == "b" && !firstObserved {
+			return fmt.Errorf("%w: slot occupied", ErrDeferred)
+		}
+		return nil
+	}
+	d, _ := build(t, c, tr)
+	if err := d.Begin(bg, "input"); err != nil {
+		t.Fatal(err)
+	}
+	st := finish(t, d)
+	if st.Phase != collaboration.PhaseSucceeded || len(tr.sent) != 2 {
+		t.Fatalf("phase=%s, dispatches=%d; want both branches to finish", st.Phase, len(tr.sent))
 	}
 }
 

@@ -107,6 +107,7 @@ contains runnable Parallel and Supervisor workflows and their member Agents.
 
 - `timeout` is required, greater than zero and at most 24 hours. `retry`,
   `agentRef` and `toolRef` are not allowed on the step.
+- `input` must be non-blank.
 - `protocol` is `A2A`.
 - A team has 2 to 8 members. Aliases are lowercase DNS labels of at most 32
   characters, starting with a letter. **Members must be distinct Agents.**
@@ -127,7 +128,8 @@ contains runnable Parallel and Supervisor workflows and their member Agents.
 
 Member runtimes report usage in the result artifact metadata under
 `kognition.dev/usage` as `{"totalTokens": n}`. The controller sums reported usage
-against `limits.maxTokens`. If a member reports no usable count, the controller
+against `limits.maxTokens`, including the member call that accepts or rejects a
+handoff. If a member reports no usable count, the controller
 charges the whole remaining allowance rather than assuming zero, so an
 unmetered member cannot bypass the limit. Model gateway metering of the member
 Agent still applies independently.
@@ -236,6 +238,9 @@ collaboration.
   between replicas.
 
 ## Failure and outcomes
+
+Before the first dispatch, the controller fails the step if the resolved input
+is blank or exceeds 8 KiB.
 
 A step fails with a reason such as `MemberFailed`, `MemberRejected`,
 `MemberRequestedInput`, `InvalidPayload` or `NoResult`, or when it reaches a

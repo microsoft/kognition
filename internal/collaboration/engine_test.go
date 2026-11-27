@@ -462,6 +462,39 @@ func TestHandoffUncertainPrepareFreezesUntilResolved(t *testing.T) {
 	}
 }
 
+func TestHandoffPrepareAccountsForUnknownUsageAndRefusal(t *testing.T) {
+	for _, refused := range []bool{false, true} {
+		name := "unknown usage"
+		if refused {
+			name = "refused before contact"
+		}
+		t.Run(name, func(t *testing.T) {
+			e := handoffEngine(t, 2)
+			st := run2(t, e, start(t, e), 1, handoffBehavior(t, nil))
+			prep := st.Pending()[0]
+			if prep.Allowance <= 0 || st.Counters.TokensReserved != prep.Allowance {
+				t.Fatalf("prepare did not reserve tokens: dispatch=%+v counters=%+v", prep, st.Counters)
+			}
+			wantUsed := st.Counters.TokensUsed
+			if refused {
+				st = apply(t, e, st, RefuseDispatch{prep.ID, "policy denied"})
+			} else {
+				wantUsed += prep.Allowance
+				st = apply(t, e, st, CommitDispatch{prep.ID})
+				st = apply(t, e, st, AckDispatch{prep.ID})
+				st = apply(t, e, st, TransferAck{TransferID: st.Transfer.ID, Actor: "b", Accepted: true})
+			}
+			if st.Counters.TokensUsed != wantUsed {
+				t.Fatalf("tokens used=%d, want %d", st.Counters.TokensUsed, wantUsed)
+			}
+			next := st.Pending()
+			if len(next) != 1 || st.Counters.TokensReserved != next[0].Allowance {
+				t.Fatalf("only the next turn should hold a reservation: pending=%+v counters=%+v", next, st.Counters)
+			}
+		})
+	}
+}
+
 func TestHandoffLimit(t *testing.T) {
 	e := handoffEngine(t, 1)
 	st := run(t, e, start(t, e), func(m Message) Event {

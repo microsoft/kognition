@@ -66,9 +66,11 @@ type RefuseDispatch struct{ ID, Reason string }
 
 // TransferAck is the authenticated passive acknowledgement of a handoff.
 type TransferAck struct {
-	TransferID string
-	Actor      string
-	Accepted   bool
+	TransferID  string
+	Actor       string
+	Accepted    bool
+	TokensUsed  int64
+	TokensKnown bool
 }
 
 // TaskAbandoned closes an Uncertain task that reconciliation proved or the
@@ -103,12 +105,17 @@ func New(def Definition) (*Engine, error) {
 	return &Engine{def: def}, nil
 }
 
+// ValidateInput validates the resolved input of a collaboration activation.
+func ValidateInput(input string) error {
+	if strings.TrimSpace(input) == "" {
+		return errors.New("input is required")
+	}
+	return contentErr("input", input)
+}
+
 // Start opens a ledger for the activation input.
 func (e *Engine) Start(input string) (State, error) {
-	if strings.TrimSpace(input) == "" {
-		return State{}, fmt.Errorf("%w: input is required", ErrInvalidEvent)
-	}
-	if err := contentErr("input", input); err != nil {
+	if err := ValidateInput(input); err != nil {
 		return State{}, fmt.Errorf("%w: %w", ErrInvalidEvent, err)
 	}
 	st := State{
@@ -311,8 +318,12 @@ func (e *Engine) schedule(st *State) {
 	}
 }
 
+func (e *Engine) remainingTokens(st *State) int64 {
+	return e.def.Limits.MaxTokens - st.Counters.TokensUsed - st.Counters.TokensReserved
+}
+
 func (e *Engine) allowance(st *State, t *Task) int64 {
-	avail := e.def.Limits.MaxTokens - st.Counters.TokensUsed - st.Counters.TokensReserved
+	avail := e.remainingTokens(st)
 	if t.Final {
 		// A final task that can still fan out leaves half for its work, so an unknown-usage turn cannot starve it.
 		if len(e.allowedOperations(st, t)) > 1 {
@@ -430,8 +441,13 @@ func (e *Engine) drain(st *State) {
 	if st.Transfer != nil && (st.Transfer.Status == TransferProposed || st.Transfer.Status == TransferUncertain) {
 		if st.Transfer.Status == TransferProposed {
 			st.Transfer.Status = TransferRejected
-			if p, ok := st.dispatch(st.Transfer.ID + ".p"); ok && p.Status == DispatchIntended {
-				p.Status, p.Reason = DispatchRefused, "StoppedBeforeContact"
+			if p, ok := st.dispatch(st.Transfer.ID + ".p"); ok {
+				if p.Status == DispatchIntended {
+					p.Status, p.Reason = DispatchRefused, "StoppedBeforeContact"
+					e.refund(st, p)
+				} else {
+					e.settleDispatch(st, p, 0, false)
+				}
 			}
 		}
 	}
@@ -476,9 +492,12 @@ func (e *Engine) refund(st *State, d *Dispatch) {
 }
 
 // settleDispatch closes a dispatch's token accounting exactly once.
-func (e *Engine) settleDispatch(st *State, d *Dispatch, used int64) {
+func (e *Engine) settleDispatch(st *State, d *Dispatch, used int64, known bool) {
 	if d.Status == DispatchReported || d.Status == DispatchRefused {
 		return
+	}
+	if !known {
+		used = d.Allowance
 	}
 	e.refund(st, d)
 	st.Counters.TokensUsed += used
@@ -545,11 +564,7 @@ func (e *Engine) applyReport(st *State, r TurnReport) error {
 		if d.Status == DispatchIntended {
 			return fmt.Errorf("%w: report for an uncontacted dispatch", ErrInvalidEvent)
 		}
-		used := r.TokensUsed
-		if !r.TokensKnown {
-			used = d.Allowance
-		}
-		e.settleDispatch(st, d, used)
+		e.settleDispatch(st, d, r.TokensUsed, r.TokensKnown)
 		st.Counters.Messages++
 	}
 	switch r.Status {
@@ -727,6 +742,12 @@ func (e *Engine) handoff(st *State, ti int, op Operation) {
 		e.failStep(st, ti, ReasonMessageLimit)
 		return
 	}
+	// Leave room for the owner's next turn, whether the handoff is accepted or rejected.
+	allow := e.remainingTokens(st) / 2
+	if allow <= 0 {
+		e.failStep(st, ti, ReasonTokenBudget)
+		return
+	}
 	st.NextTransfer++
 	ctx := Content{Text: op.Context, Origins: unionOrigins(t.Lineage, []string{t.Recipient})}
 	sum := sha256.Sum256([]byte(ctx.Text + "\x00" + strings.Join(ctx.Origins, ",")))
@@ -739,9 +760,10 @@ func (e *Engine) handoff(st *State, ti int, op Operation) {
 	st.Handoffs++
 	st.Counters.Delegations++
 	st.Counters.Messages++
+	st.Counters.TokensReserved += allow
 	st.Dispatches = append(st.Dispatches, Dispatch{
 		ID: tr.ID + ".p", Kind: DispatchPrepare, TaskID: t.ID, Recipient: op.To,
-		Epoch: st.Epoch, TransferID: tr.ID, Status: DispatchIntended,
+		Epoch: st.Epoch, TransferID: tr.ID, Allowance: allow, Status: DispatchIntended,
 	})
 	t.TransferID = tr.ID
 	t.State = TaskWaiting
@@ -761,16 +783,26 @@ func (e *Engine) applyAck(st *State, a TransferAck) error {
 	if tr.Status != TransferProposed && tr.Status != TransferUncertain {
 		return ErrTaskSettled
 	}
-	if d, ok := st.dispatch(tr.ID + ".p"); ok && d.Status != DispatchReported {
-		d.Status = DispatchReported
+	d, ok := st.dispatch(tr.ID + ".p")
+	if !ok || (d.Status != DispatchSent && d.Status != DispatchUncertain) {
+		return fmt.Errorf("%w: report for an uncontacted handoff", ErrInvalidEvent)
 	}
-	if !a.Accepted || st.Phase != PhaseRunning {
-		tr.Status = TransferRejected
-		return nil
+	if a.TokensUsed < 0 {
+		return fmt.Errorf("%w: negative token usage", ErrInvalidEvent)
 	}
 	ti := e.taskIndex(st, tr.TaskID)
 	if ti < 0 {
 		return ErrUnknownTask
+	}
+	e.settleDispatch(st, d, a.TokensUsed, a.TokensKnown)
+	if st.Counters.TokensUsed > e.def.Limits.MaxTokens {
+		tr.Status = TransferRejected
+		e.failStep(st, ti, ReasonTokenBudget)
+		return nil
+	}
+	if !a.Accepted || st.Phase != PhaseRunning {
+		tr.Status = TransferRejected
+		return nil
 	}
 	for i := range st.Tasks {
 		if o := &st.Tasks[i]; i != ti && !o.State.Terminal() {
@@ -800,7 +832,7 @@ func (e *Engine) applyAbandon(st *State, a TaskAbandoned) error {
 		return fmt.Errorf("%w: task is not uncertain", ErrInvalidEvent)
 	}
 	if d, ok := st.dispatch(dispatchID(t.ID, t.Turns)); ok {
-		e.settleDispatch(st, d, d.Allowance)
+		e.settleDispatch(st, d, 0, false)
 	}
 	e.settleTask(st, ti, TaskFailed, "UncertainAbandoned: "+a.Reason, nil)
 	return nil
@@ -842,7 +874,7 @@ func (e *Engine) applyDispatch(st *State, id string, to DispatchStatus, reason s
 			t := &st.Tasks[ti]
 			if !t.State.Terminal() {
 				if cur, ok := st.dispatch(dispatchID(t.ID, t.Turns)); ok {
-					e.settleDispatch(st, cur, cur.Allowance)
+					e.settleDispatch(st, cur, 0, false)
 				}
 				e.settleTask(st, ti, TaskCancelled, "RemoteCancelled", nil)
 			}
@@ -873,6 +905,7 @@ func (e *Engine) applyDispatch(st *State, id string, to DispatchStatus, reason s
 			e.settleTask(st, ti, TaskFailed, ReasonDispatchRefused+": "+d.Reason, nil)
 		case DispatchPrepare:
 			if st.Transfer != nil && st.Transfer.ID == d.TransferID {
+				e.refund(st, d)
 				st.Transfer.Status = TransferRejected
 			}
 		}

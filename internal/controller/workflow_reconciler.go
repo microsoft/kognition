@@ -391,6 +391,11 @@ func (r *WorkflowReconciler) handleDeletion(ctx context.Context, wf *v1alpha1.Wo
 }
 
 func (r *WorkflowReconciler) updateWorkflow(ctx context.Context, wf *v1alpha1.Workflow) error {
+	if wf.Status.Phase == v1alpha1.PhaseFailed {
+		if err := r.stopCollaborations(ctx, wf, "WorkflowFailed"); err != nil {
+			return err
+		}
+	}
 	return r.persistStatus(ctx, wf)
 }
 
@@ -1030,9 +1035,6 @@ func (r *WorkflowReconciler) reconcileAcyclic(ctx context.Context, wf *v1alpha1.
 			}
 		}
 		failedStep := firstSorted(failed)
-		if err := r.stopCollaborations(ctx, wf, "WorkflowFailed"); err != nil {
-			return Result{}, err
-		}
 		wf.Status.Phase = v1alpha1.PhaseFailed
 		wf.Status.ActiveStep = failedStep
 		wf.Status.ActiveSteps = nil

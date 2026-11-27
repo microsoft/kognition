@@ -128,6 +128,7 @@ func completed(msg collaboration.Message, obs driver.Observation, task *a2a.Task
 	if msg.Kind == collaboration.DispatchPrepare {
 		obs.Status = collaboration.ReportCompleted
 		obs.Accepted = err == nil && ops == nil && strings.HasPrefix(strings.ToUpper(strings.TrimSpace(text)), "ACCEPT")
+		obs.TokensUsed, obs.TokensKnown = usage(task, msg.Allowance)
 		return obs
 	}
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap/zaptest"
 
 	"github.com/kognition-ai/kognition/api/v1alpha1"
+	"github.com/kognition-ai/kognition/internal/collaboration"
 	"github.com/kognition-ai/kognition/internal/store"
 )
 
@@ -47,8 +48,9 @@ func makeCollaborationWorkflow(name string) v1alpha1.Workflow {
 		ObjectMeta: v1alpha1.ObjectMeta{Name: name, Namespace: "default", UID: "wf-collab-uid"},
 		Spec: v1alpha1.WorkflowSpec{
 			Steps: []v1alpha1.WorkflowStep{{
-				Name: "debate",
-				Type: v1alpha1.WorkflowStepTypeCollaboration,
+				Name:  "debate",
+				Type:  v1alpha1.WorkflowStepTypeCollaboration,
+				Input: "review the proposal",
 				Collaboration: &v1alpha1.WorkflowCollaboration{
 					Strategy: v1alpha1.CollaborationStrategySupervisor,
 					Protocol: v1alpha1.CollaborationProtocolA2A,
@@ -56,6 +58,92 @@ func makeCollaborationWorkflow(name string) v1alpha1.Workflow {
 			}},
 		},
 		Status: v1alpha1.WorkflowStatus{Phase: v1alpha1.PhasePending},
+	}
+}
+
+func TestWorkflowRunReconciler_RejectsInvalidResolvedCollaborationInput(t *testing.T) {
+	tests := map[string]string{
+		"blank":     " \n ",
+		"oversized": strings.Repeat("x", collaboration.MaxContentBytes+1),
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			s := newMemStore()
+			r := NewWorkflowRunReconciler(s, zaptest.NewLogger(t))
+			runner := &fakeCollaborationRunner{err: errors.New("unexpected member dispatch")}
+			r.SetCollaborationRunner(runner)
+
+			wf := makeCollaborationWorkflow("wf-invalid-input")
+			wf.Spec.Steps[0].Input = "{{ .Input }}"
+			wf.Spec.Steps[0].Timeout = "1m"
+			storeWorkflow(t, s, wf)
+			run := makeWorkflowRun("default", "invalid-input-run", wf.ObjectMeta.Name)
+			run.Spec.Input = input
+			storeWorkflowRun(t, s, run)
+			reconcileRunN(t, r, run.ObjectMeta.Namespace, run.ObjectMeta.Name, 3)
+
+			got := getWorkflowRun(t, s, run.ObjectMeta.Namespace, run.ObjectMeta.Name)
+			if got.Status.Phase != v1alpha1.PhaseFailed ||
+				len(got.Status.StepStatuses) != 1 || got.Status.StepStatuses[0].Phase != v1alpha1.PhaseFailed {
+				t.Fatalf("expected a terminal step and run failure, got %+v", got.Status)
+			}
+			if len(runner.advances) != 0 {
+				t.Fatalf("invalid input dispatched to the runner: %d calls", len(runner.advances))
+			}
+		})
+	}
+}
+
+func TestWorkflowRunReconciler_PersistsCollaborationStartOnRunnerError(t *testing.T) {
+	s := newMemStore()
+	r := NewWorkflowRunReconciler(s, zaptest.NewLogger(t))
+	runner := &fakeCollaborationRunner{err: errors.New("runner unavailable")}
+	r.SetCollaborationRunner(runner)
+	wf := makeCollaborationWorkflow("wf-runner-error")
+	wf.Spec.Steps[0].Timeout = "1m"
+	storeWorkflow(t, s, wf)
+	run := makeWorkflowRun("default", "runner-error-run", wf.ObjectMeta.Name)
+	storeWorkflowRun(t, s, run)
+	req := Request{Namespace: run.ObjectMeta.Namespace, Name: run.ObjectMeta.Name}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("add finalizer: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), req); !errors.Is(err, runner.err) {
+		t.Fatalf("expected a runner error, got %v", err)
+	}
+
+	got := getWorkflowRun(t, s, req.Namespace, req.Name)
+	if got.Status.Phase != v1alpha1.PhaseRunning || len(got.Status.StepStatuses) != 1 {
+		t.Fatalf("the active attempt was not persisted: %+v", got.Status)
+	}
+	step := got.Status.StepStatuses[0]
+	if step.StartedAt == nil || step.Phase != v1alpha1.PhaseRunning || step.Attempts != 1 {
+		t.Fatalf("expected running attempt 1 with a start time, got %+v", step)
+	}
+}
+
+func TestWorkflowRunReconciler_StopsCollaborationOnSiblingTemplateFailure(t *testing.T) {
+	s := newMemStore()
+	r := NewWorkflowRunReconciler(s, zaptest.NewLogger(t))
+	runner := &fakeCollaborationRunner{script: []WorkflowCollaborationProgress{{}}}
+	r.SetCollaborationRunner(runner)
+	wf := makeCollaborationWorkflow("wf-sibling")
+	wf.Spec.Steps[0].Timeout = "1m"
+	wf.Spec.Steps = append(wf.Spec.Steps, v1alpha1.WorkflowStep{
+		Name: "summarize", AgentRef: v1alpha1.LocalObjectReference{Name: "summarizer"},
+		Input: "{{ .Parameters.missing }}",
+	})
+	storeWorkflow(t, s, wf)
+	run := makeWorkflowRun("default", "sibling-run", wf.ObjectMeta.Name)
+	storeWorkflowRun(t, s, run)
+	reconcileRunN(t, r, run.ObjectMeta.Namespace, run.ObjectMeta.Name, 3)
+
+	got := getWorkflowRun(t, s, run.ObjectMeta.Namespace, run.ObjectMeta.Name)
+	if got.Status.Phase != v1alpha1.PhaseFailed || len(runner.advances) != 1 {
+		t.Fatalf("expected a failed run after a member was dispatched: phase=%s, advances=%d", got.Status.Phase, len(runner.advances))
+	}
+	if len(runner.stops) != 1 || runner.stops[0] != "debate:WorkflowFailed" {
+		t.Fatalf("stops = %v, want [debate:WorkflowFailed]", runner.stops)
 	}
 }
 

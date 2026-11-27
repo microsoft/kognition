@@ -535,6 +535,18 @@ func TestExternalTokenUseIsCappedAndUnknownIsChargedInFull(t *testing.T) {
 	}
 }
 
+func TestExternalHandoffPrepareChargesReportedTokens(t *testing.T) {
+	got := runMatrix(t, caseNamed(t, "handoff/external becomes owner"), map[string]int64{"x": 20}, nil)
+	st := got.state
+	if st.Phase != collaboration.PhaseSucceeded {
+		t.Fatalf("phase=%s, outcome=%+v", st.Phase, st.Outcome)
+	}
+	// The local entry turn used 10; the external prepare and final turns used 20 each.
+	if st.Counters.TokensUsed != 50 || st.Counters.TokensReserved != 0 {
+		t.Fatalf("tokens used=%d reserved=%d, want 50 used and 0 reserved", st.Counters.TokensUsed, st.Counters.TokensReserved)
+	}
+}
+
 func TestRejectedHandoffToAnExternalMemberKeepsOwnership(t *testing.T) {
 	tc := caseNamed(t, "handoff/external becomes owner")
 	tc.behave = func(m collaboration.Message) driver.Observation {

@@ -169,8 +169,8 @@ func (t *Transport) Admit(ctx context.Context, msg collaboration.Message) error 
 	if cancel {
 		return nil
 	}
-	if !t.cfg.Limiter.Reserve(t.slotKey(agent), msg.DispatchID, target.Limits.MaxConcurrentTasks, t.cfg.Now(), target.Limits.TaskTimeout+slotGrace) {
-		return fmt.Errorf("externaltransport: ExternalAgent %q already has %d tasks in flight", agent, target.Limits.MaxConcurrentTasks)
+	if !t.cfg.Limiter.Reserve(t.slotKey(agent), t.reservationID(msg.DispatchID), target.Limits.MaxConcurrentTasks, t.cfg.Now(), target.Limits.TaskTimeout+slotGrace) {
+		return fmt.Errorf("%w: ExternalAgent %q already has %d tasks in flight", driver.ErrDeferred, agent, target.Limits.MaxConcurrentTasks)
 	}
 	return nil
 }
@@ -248,7 +248,7 @@ func (t *Transport) notSent(ctx context.Context, msg collaboration.Message, agen
 // notSentAfter is notSent for a dispatch whose send intent, pending, was already
 // recorded; the marker then replaces the intent.
 func (t *Transport) notSentAfter(ctx context.Context, msg collaboration.Message, agent, pending string, cause error) error {
-	t.cfg.Limiter.Release(t.slotKey(agent), msg.DispatchID)
+	t.cfg.Limiter.Release(t.slotKey(agent), t.reservationID(msg.DispatchID))
 	var denial *Denial
 	if errors.As(cause, &denial) {
 		if err := t.record(ctx, msg, agent, Decision{
@@ -406,7 +406,7 @@ func (t *Transport) settle(ctx context.Context, msg collaboration.Message, agent
 			return driver.Observation{}, err
 		}
 	}
-	t.cfg.Limiter.Release(t.slotKey(agent), subject.DispatchID)
+	t.cfg.Limiter.Release(t.slotKey(agent), t.reservationID(subject.DispatchID))
 	obs.Settled = true
 	if obs.Actor == "" {
 		obs.Actor = msg.Recipient
@@ -445,6 +445,11 @@ func (t *Transport) record(ctx context.Context, msg collaboration.Message, agent
 }
 
 func (t *Transport) slotKey(agent string) string { return t.gate.Namespace + "/" + agent }
+
+func (t *Transport) reservationID(dispatchID string) string {
+	run := t.cfg.Run
+	return collaboration.LedgerName(run.Namespace, run.RunUID, run.RunName, run.Step, run.Attempt) + "/" + dispatchID
+}
 
 func callFor(namespace string, target Target, token Secret) Call {
 	return Call{

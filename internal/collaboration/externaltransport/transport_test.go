@@ -880,6 +880,32 @@ func TestUnknownMemberIsRefused(t *testing.T) {
 	}
 }
 
+func TestConcurrentActivationsDoNotShareReservation(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	f.limits = &api.ExternalAgentLimits{MaxConcurrentTasks: 1}
+	f.putAgent()
+	first, second := f.transport(), f.transport()
+	second.cfg.Run.Step = "other"
+	msg := startMessage("t1.1")
+	if err := first.Admit(ctx, msg); err != nil {
+		t.Fatalf("admit first activation: %v", err)
+	}
+	if err := first.Send(ctx, msg); err != nil {
+		t.Fatalf("send first activation: %v", err)
+	}
+	if err := second.Admit(ctx, msg); !errors.Is(err, driver.ErrDeferred) {
+		t.Fatalf("second activation should wait for the first, got %v", err)
+	}
+	f.client.task = completedTask("done")
+	if obs, err := first.Observe(ctx, msg); err != nil || !obs.Settled {
+		t.Fatalf("settle first activation: %+v, %v", obs, err)
+	}
+	if err := second.Admit(ctx, msg); err != nil {
+		t.Fatalf("admit second activation after release: %v", err)
+	}
+}
+
 func TestLimiter(t *testing.T) {
 	l := NewLimiter()
 	now := time.Unix(1000, 0)

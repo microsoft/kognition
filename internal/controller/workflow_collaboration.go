@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kognition-ai/kognition/api/v1alpha1"
+	"github.com/kognition-ai/kognition/internal/collaboration"
 )
 
 type collaborationOutcome int
@@ -45,13 +46,33 @@ func (r *WorkflowReconciler) advanceCollaborationStep(ctx context.Context, wf *v
 			ss.StartedAt = &startedAt
 			ss.NextRetryAt = nil
 		}
-		if err := r.emitEvent(ctx, wf, "StepDispatched", fmt.Sprintf("collaboration step %q dispatched", step.Name), map[string]string{"step": step.Name}); err != nil {
-			return collaborationRunning, 0, fmt.Errorf("append workflow event: %w", err)
-		}
 	}
-	progress, err := r.collaborationRunner.Advance(ctx, collaborationRunFor(wf, r.ownerKind, step, ss.Attempts, input))
-	if err != nil {
-		return collaborationRunning, 0, fmt.Errorf("advance collaboration step %q: %w", step.Name, err)
+	run := collaborationRunFor(wf, r.ownerKind, step, ss.Attempts, input)
+	var progress WorkflowCollaborationProgress
+	inputErr := collaboration.ValidateInput(input)
+	if inputErr != nil {
+		if resuming {
+			if err := r.collaborationRunner.Stop(ctx, run, "InvalidInput"); err != nil {
+				return collaborationRunning, 0, fmt.Errorf("stop collaboration step %q with invalid input: %w", step.Name, err)
+			}
+		}
+		progress = WorkflowCollaborationProgress{Done: true, Reason: inputErr.Error()}
+	} else {
+		if !resuming {
+			if err := r.emitEvent(ctx, wf, "StepDispatched", fmt.Sprintf("collaboration step %q dispatched", step.Name), map[string]string{"step": step.Name}); err != nil {
+				return collaborationRunning, 0, fmt.Errorf("append workflow event: %w", err)
+			}
+			// Persist the timeout and cleanup state before member contact is possible.
+			wf.Status.Phase = v1alpha1.PhaseRunning
+			if err := r.updateWorkflow(ctx, wf); err != nil {
+				return collaborationRunning, 0, fmt.Errorf("persist collaboration step %q start: %w", step.Name, err)
+			}
+		}
+		var err error
+		progress, err = r.collaborationRunner.Advance(ctx, run)
+		if err != nil {
+			return collaborationRunning, 0, fmt.Errorf("advance collaboration step %q: %w", step.Name, err)
+		}
 	}
 	switch {
 	case !progress.Done:
@@ -66,7 +87,7 @@ func (r *WorkflowReconciler) advanceCollaborationStep(ctx context.Context, wf *v
 	}
 	ss.Output = ""
 	details := map[string]string{"step": step.Name, "reason": progress.Reason}
-	if retryEligible(step.Retry, ss.Attempts) {
+	if inputErr == nil && retryEligible(step.Retry, ss.Attempts) {
 		delay := computeBackoff(step.Retry, ss.Attempts)
 		retryAt := now.Add(delay)
 		ss.Phase = v1alpha1.PhasePending
