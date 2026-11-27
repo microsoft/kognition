@@ -3203,6 +3203,16 @@ Functional requirements are grouped by area. Each row is independently testable.
 | `FR-0404` | `MemoryGrant` (read/write/summarize/forget) with provenance + cascade revocation | ✅ | MVP-7 | §7A.2, NFR-0010 |
 | `FR-0405` | `ToolGrant` (Agent↔Tool isolation) enforced at admission AND runtime | ✅ | MVP-7 | §7A.2 |
 | `FR-0406` | `ModelGrant` (Agent↔Model isolation) enforced at admission AND runtime | ✅ | MVP-7 | §7A.2, OPEN-K8S-3 (R2) |
+| `FR-0410` | Kubernetes mode authorizes people with native Kubernetes RBAC: Kognition ships `rbac.authorization.k8s.io/v1` ClusterRoles bound by operators to `User`, `Group` and `ServiceAccount` subjects, adds no human role or group store, and does not evaluate bindings itself; identity-provider integration is a platform responsibility | ⏳ | — | ADR-0031, access-control plan |
+| `FR-0411` | A catalog assigns every shipped CRD kind exactly one access class and generates the human roles from it; roles use explicit resources and verbs with no wildcards, no `deletecollection` and no `secrets`; an unclassified kind fails the build | ⏳ | — | ADR-0031, access-control plan |
+| `FR-0412` | The chart installs the human ClusterRoles inert (no bindings, no aggregation into built-in roles by default) behind a disable switch; workspace access is a RoleBinding in the workload namespace | ⏳ | — | ADR-0031, access-control plan |
+| `FR-0413` | Separation of duties: controller-owned status is not human-writable except `autonomyreviews/status`; delegation resources (grants, `SecretRef`, `AgentRole`) are separate from authoring; creating a grant cannot delegate authority the creator lacks; controller-mediated creation never exceeds the author's authority | ⏳ | — | ADR-0031 (OD-2), access-control plan |
+| `FR-0414` | Custom actions (`use`, `invoke`, `approve`, `reject`, `reconcile`) are a documented RBAC contract authorized with the caller's identity through `SubjectAccessReview`; new actions follow the same pattern | ⏳ | — | ADR-0031, access-control plan |
+| `FR-0415` | A caller can list what the current context permits through `SelfSubjectRulesReview` (advisory; enforcement stays server-side); an auditor role covers CRD evidence and a later design covers evidence stored outside CRDs | ⏳ | — | ADR-0031 (OD-5), access-control plan |
+| `FR-0416` | An end user can invoke an Agent without `secrets` read or `pods/portforward` through a separately approved aggregated action API that authorizes the caller's own identity | ⏳ | — | ADR-0031 (OD-1), access-control plan |
+| `FR-0417` | A hosted Studio forwards a per-user credential accepted by the cluster and never executes user requests under a shared privileged identity | ⏳ | — | ADR-0031 (OD-4), access-control plan |
+| `FR-0418` | Operator documentation covers the role catalog, recommended bundles, binding examples with neutral subjects, the responsibility boundary and known gaps | ⏳ | — | ADR-0031, access-control plan |
+| `FR-0419` | Qualification on a real Kubernetes API server with RBAC enabled: every role has allowed and denied cases for every kind and verb, including negative cross-namespace, escalation and revocation cases | ⏳ | — | ADR-0031, access-control plan |
 
 #### Governance, quotas, scheduling
 

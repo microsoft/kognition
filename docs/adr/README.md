@@ -44,6 +44,7 @@ This directory holds Architecture Decision Records for the Kognition platform.
 - [ADR-0028: First installation lifecycle](0028-first-installation-lifecycle.md), Accepted for fresh installation, 2026-11-12; partially supersedes ADR-0016 decision 1.
 - [ADR-0029: Workflow execution boundaries](0029-workflow-execution-boundaries.md), Accepted, 2026-11-17.
 - [ADR-0030: ExternalAgent outbound A2A trust boundary](0030-external-agent-outbound-a2a.md), Proposed, 2026-11-18.
+- [ADR-0031: Kubernetes human access control](0031-kubernetes-human-access-control.md), Proposed, 2026-11-27.
 
 ## Related
 
