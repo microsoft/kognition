@@ -115,10 +115,12 @@ Notes that affect grants:
 
 ## 6. Role catalog
 
-Verbs: **R** = `get`, `list`, `watch`. **W** = `create`, `update`, `patch`,
-`delete`. No role includes `deletecollection`. No role writes `*/status` except
-`kognition-autonomy-reviewer`, whose decision path is a status update by design.
-"Class" means the kinds in section 5.
+Verbs: **R** = `get`, `list`, `watch`. **W** = R plus `create`, `update`, `patch`,
+`delete`, because a role that can change a kind but not read it is not usable with
+declarative tools. No role includes `deletecollection`. No role writes `*/status`
+except `kognition-autonomy-reviewer`, whose decision path is a status update by
+design. Roles bound with a RoleBinding contain only namespaced kinds. "Class"
+means the kinds in section 5.
 
 | Role | Bind with | Grants |
 | --- | --- | --- |
