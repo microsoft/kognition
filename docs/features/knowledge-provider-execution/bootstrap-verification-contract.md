@@ -58,6 +58,14 @@ must have the exact installation release and namespace identity. Replacing one
 with an unrelated Fail/Deny pair fails verification even when the total count
 remains ten.
 
+The model-call-health policy permits the controller to maintain reporter
+ConfigMaps and each enabled Model or Knowledge Gateway to create/update only
+its own component's publications. Gateways cannot delete these records or write
+another component's evidence. Query-embedding reporting uses the Knowledge
+Gateway's existing installation-namespace ConfigMap permissions. Changes to
+these writer expressions change the protected policy spec and require the
+normal reviewed-manifest verification; they do not grant activation clearance.
+
 Probe policies set `enableDefaultDeny.ingress` and `enableDefaultDeny.egress`
 to `false`. They add node-health allowances while preserving the default-deny
 behavior established by workload isolation policies.

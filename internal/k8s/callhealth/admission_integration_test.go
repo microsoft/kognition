@@ -30,10 +30,20 @@ import (
 // Prepare a cluster with:
 //
 //	helm template kognition deploy/helm/kognition --namespace kognition-system \
-//	  --set mode=kubernetes --set modelGateway.enabled=true --kube-version 1.31.0
+//	  --set mode=kubernetes --set modelGateway.enabled=true \
+//	  --set knowledgeGateway.enabled=true \
+//	  --set knowledgeGateway.tls.secretName=provider-client-tls \
+//	  --set knowledgeGateway.runtimeTLS.secretName=knowledge-runtime-tls \
+//	  --set knowledgeGateway.provider.address=provider:9443 \
+//	  --set knowledgeGateway.provider.serverName=provider \
+//	  --set knowledgeGateway.provider.peerURI=spiffe://kognition.dev/knowledge/provider \
+//	  --kube-version 1.31.0
 //
-// then apply the namespace, the ServiceAccounts, the Roles (plus a binding that
-// grants the controller its Role) and every ValidatingAdmissionPolicy and binding.
+// then apply the namespace, ServiceAccounts, Roles and RoleBindings (including a
+// binding that grants the controller its Role), and every
+// ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding.
+// The TLS/provider values are rendering fixtures; these tests do not require
+// running gateways or provider connections.
 //
 // KOGNITION_ADMISSION_RELEASE (default "kognition") is the chart's full name and
 // KOGNITION_ADMISSION_NAMESPACE (default "kognition-system") the release namespace.
@@ -104,6 +114,8 @@ func TestAdmissionAllowsStoreWrites(t *testing.T) {
 		{"controller", "controller", []Option{WithGarbageCollection()}},
 		{"controller", "model-gateway", nil},
 		{"model-gateway", "model-gateway", nil},
+		{"controller", "knowledge-gateway", nil},
+		{"knowledge-gateway", "knowledge-gateway", nil},
 	} {
 		t.Run(tc.serviceAccount+" writes "+tc.component, func(t *testing.T) {
 			c := admissionClient(t, tc.serviceAccount)
@@ -155,6 +167,10 @@ func TestAdmissionDeniesForeignStoreWrites(t *testing.T) {
 	}{
 		{"model gateway writing the controller's objects", "model-gateway", "controller"},
 		{"tool gateway writing model gateway objects", "tool-gateway", "model-gateway"},
+		{"knowledge gateway writing controller objects", "knowledge-gateway", "controller"},
+		{"knowledge gateway writing model gateway objects", "knowledge-gateway", "model-gateway"},
+		{"model gateway writing knowledge gateway objects", "model-gateway", "knowledge-gateway"},
+		{"tool gateway writing knowledge gateway objects", "tool-gateway", "knowledge-gateway"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := NewConfigMapStore(admissionClient(t, tc.serviceAccount), namespace, tc.component)

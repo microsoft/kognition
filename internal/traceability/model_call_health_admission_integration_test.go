@@ -7,11 +7,13 @@ package traceability
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kognition-ai/kognition/internal/k8s/callhealth"
+	"github.com/kognition-ai/kognition/internal/store"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -52,7 +54,7 @@ func modelCallHealthAdmissionObject(component string) *corev1.ConfigMap {
 func seedModelCallHealthNameFixtures(test *testing.T, ctx context.Context, admin client.Client) []corev1.ConfigMap {
 	test.Helper()
 	var fixtures []corev1.ConfigMap
-	for _, component := range []string{"controller", "model-gateway"} {
+	for _, component := range []string{"controller", "model-gateway", "knowledge-gateway"} {
 		prefix := "kognition-mch-" + component + "-"
 		for _, name := range []string{
 			prefix + "arbitrary",
@@ -77,11 +79,12 @@ func verifyModelCallHealthConfigMapBoundary(test *testing.T, ctx context.Context
 	test.Helper()
 	controller := modelCallHealthAdmissionClient(test, config, scheme, "controller")
 	gateway := modelCallHealthAdmissionClient(test, config, scheme, "model-gateway")
+	knowledgeGateway := modelCallHealthAdmissionClient(test, config, scheme, "knowledge-gateway")
 	toolGateway := modelCallHealthAdmissionClient(test, config, scheme, "tool-gateway")
-	for _, component := range []string{"controller", "model-gateway", "tool-gateway"} {
+	for _, component := range []string{"controller", "model-gateway", "knowledge-gateway", "tool-gateway"} {
 		role := &rbacv1.Role{
 			ObjectMeta: metav1.ObjectMeta{Name: "model-call-health-fixture-" + component, Namespace: "control"},
-			Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get", "create", "update", "delete"}}},
+			Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get", "list", "create", "update", "delete"}}},
 		}
 		binding := &rbacv1.RoleBinding{
 			ObjectMeta: role.ObjectMeta,
@@ -99,7 +102,7 @@ func verifyModelCallHealthConfigMapBoundary(test *testing.T, ctx context.Context
 				}
 			})
 		}
-		for _, verb := range []string{"get", "create", "update", "delete"} {
+		for _, verb := range []string{"get", "list", "create", "update", "delete"} {
 			if err := wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 10*time.Second, true, func(ctx context.Context) (bool, error) {
 				review := &authorizationv1.SubjectAccessReview{Spec: authorizationv1.SubjectAccessReviewSpec{
 					User:   "system:serviceaccount:control:" + authorityProductionRelease + "-" + component,
@@ -129,7 +132,7 @@ func verifyModelCallHealthConfigMapBoundary(test *testing.T, ctx context.Context
 			test.Fatalf("want dedicated model call health admission denial, got %v", err)
 		}
 	}
-	for _, component := range []string{"controller", "model-gateway"} {
+	for _, component := range []string{"controller", "model-gateway", "knowledge-gateway"} {
 		value := modelCallHealthAdmissionObject(component)
 		if err := controller.Create(ctx, value); err != nil {
 			test.Fatal(err)
@@ -142,13 +145,13 @@ func verifyModelCallHealthConfigMapBoundary(test *testing.T, ctx context.Context
 		for _, writer := range []struct {
 			name   string
 			client client.Client
-		}{{"controller", controller}, {"model-gateway", gateway}} {
-			if writer.name == "model-gateway" && component == "controller" {
-				test.Run("gateway-cannot-write-controller", func(test *testing.T) {
+		}{{"controller", controller}, {"model-gateway", gateway}, {"knowledge-gateway", knowledgeGateway}} {
+			if writer.name != "controller" && writer.name != component {
+				test.Run(writer.name+"/cannot-write/"+component, func(test *testing.T) {
 					created := value.DeepCopy()
 					created.ResourceVersion, created.UID = "", ""
-					requireAdmissionDenial(test, gateway.Create(ctx, created, client.DryRunAll))
-					requireAdmissionDenial(test, gateway.Update(ctx, value.DeepCopy(), client.DryRunAll))
+					requireAdmissionDenial(test, writer.client.Create(ctx, created, client.DryRunAll))
+					requireAdmissionDenial(test, writer.client.Update(ctx, value.DeepCopy(), client.DryRunAll))
 				})
 				continue
 			}
@@ -229,6 +232,7 @@ func verifyModelCallHealthConfigMapBoundary(test *testing.T, ctx context.Context
 				test.Fatalf("controller DELETE: %v", err)
 			}
 			requireAdmissionDenial(test, gateway.Delete(ctx, value.DeepCopy(), client.DryRunAll))
+			requireAdmissionDenial(test, knowledgeGateway.Delete(ctx, value.DeepCopy(), client.DryRunAll))
 			requireAdmissionDenial(test, toolGateway.Delete(ctx, value.DeepCopy(), client.DryRunAll))
 		})
 		test.Run("foreign-writer/"+component, func(test *testing.T) {
@@ -238,4 +242,41 @@ func verifyModelCallHealthConfigMapBoundary(test *testing.T, ctx context.Context
 			requireAdmissionDenial(test, toolGateway.Update(ctx, value.DeepCopy(), client.DryRunAll))
 		})
 	}
+	test.Run("knowledge-reporter-store", func(test *testing.T) {
+		sink, err := callhealth.NewConfigMapStore(knowledgeGateway, "control", "knowledge-gateway")
+		if err != nil {
+			test.Fatal(err)
+		}
+		const reporter = "knowledge-admission-reporter"
+		if err := sink.ReplaceModelCallHealth(ctx, reporter, []store.ModelCallHealth{{Target: "t", Calls: 1}}); err != nil {
+			test.Fatalf("create reporter publication: %v", err)
+		}
+		test.Cleanup(func() {
+			var objects corev1.ConfigMapList
+			if err := controller.List(context.Background(), &objects, client.InNamespace("control"), client.MatchingLabels{callhealth.HealthLabel: "knowledge-gateway"}); err != nil {
+				test.Errorf("list exact reporter for cleanup: %v", err)
+				return
+			}
+			for i := range objects.Items {
+				object := &objects.Items[i]
+				if !strings.Contains(object.Data[callhealth.DataKey], reporter) {
+					continue
+				}
+				if err := controller.Delete(context.Background(), object, client.Preconditions{UID: &object.UID}); err != nil {
+					test.Errorf("remove exact reporter: %v", err)
+				}
+			}
+		})
+		records := make([]store.ModelCallHealth, store.MaxModelCallHealthTargets)
+		for i := range records {
+			records[i] = store.ModelCallHealth{Target: fmt.Sprintf("%064x", i), Calls: 1, LastSuccessAt: time.Now().UTC()}
+		}
+		if err := sink.ReplaceModelCallHealth(ctx, reporter, records); err != nil {
+			test.Fatalf("update maximum-size reporter publication: %v", err)
+		}
+		got, err := sink.ListModelCallHealth(ctx, time.Minute)
+		if err != nil || len(got) != len(records) {
+			test.Fatalf("read reporter publication: records=%d error=%v, want %d", len(got), err, len(records))
+		}
+	})
 }

@@ -15,6 +15,7 @@ import (
 
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	k8saudit "github.com/kognition-ai/kognition/internal/k8s/audit"
+	"github.com/kognition-ai/kognition/internal/k8s/callhealth"
 	k8sctrl "github.com/kognition-ai/kognition/internal/k8s/controller"
 	k8scost "github.com/kognition-ai/kognition/internal/k8s/cost"
 	"github.com/kognition-ai/kognition/internal/observability"
@@ -49,6 +50,20 @@ type Backend struct {
 	PostgresPool     *pgxpool.Pool
 	Claimant         api.RuntimeApprovalClaimant
 	Close            func()
+}
+
+// ModelCallHealthStore shares a gateway's passive health through its backend.
+// A backend without shared health support returns nil.
+func (b *Backend) ModelCallHealthStore(namespace, component string, logger *zap.Logger) (store.ModelCallHealthStore, error) {
+	if b.KubernetesClient != nil {
+		configMaps, err := callhealth.NewConfigMapStore(b.KubernetesClient, namespace, component, callhealth.WithLogger(logger.Named("model-call-health")))
+		if err != nil {
+			return nil, fmt.Errorf("configure Kubernetes model call health: %w", err)
+		}
+		return configMaps, nil
+	}
+	shared, _ := b.Store.(store.ModelCallHealthStore)
+	return shared, nil
 }
 
 func Open(ctx context.Context, config Config, logger *zap.Logger) (*Backend, error) {

@@ -22,7 +22,6 @@ import (
 	"github.com/kognition-ai/kognition/internal/controller"
 	"github.com/kognition-ai/kognition/internal/cpi"
 	"github.com/kognition-ai/kognition/internal/gatewaybackend"
-	callhealth "github.com/kognition-ai/kognition/internal/k8s/callhealth"
 	"github.com/kognition-ai/kognition/internal/modelgateway"
 	"github.com/kognition-ai/kognition/internal/modelhealth"
 	"github.com/kognition-ai/kognition/internal/observability"
@@ -155,15 +154,7 @@ func serveModelGateway(ctx context.Context, httpServer *http.Server, healthRepor
 // ConfigMaps in Kubernetes mode, or the PostgreSQL store in standalone mode. It
 // returns nil when the backend cannot share health between processes.
 func modelCallHealthStore(backend *gatewaybackend.Backend, namespace string, logger *zap.Logger) (store.ModelCallHealthStore, error) {
-	if backend.KubernetesClient != nil {
-		configMaps, err := callhealth.NewConfigMapStore(backend.KubernetesClient, namespace, "model-gateway", callhealth.WithLogger(logger.Named("model-call-health")))
-		if err != nil {
-			return nil, fmt.Errorf("configure Kubernetes model call health: %w", err)
-		}
-		return configMaps, nil
-	}
-	shared, _ := backend.Store.(store.ModelCallHealthStore)
-	return shared, nil
+	return backend.ModelCallHealthStore(namespace, "model-gateway", logger)
 }
 
 func envOrDefault(name, fallback string) string {

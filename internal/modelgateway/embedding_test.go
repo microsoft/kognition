@@ -25,15 +25,16 @@ import (
 )
 
 type queryEmbeddingFixture struct {
-	executor   *EmbeddingExecutor
-	storage    *memoryStore
-	authorizer *modelAuthorizer
-	quota      *recordingModelQuota
-	audit      *modelAuditStore
-	claims     *runtimeauth.KnowledgeSessionCapabilityClaims
-	binding    *knowledge.ResolvedBinding
-	calls      int
-	dimensions int
+	executor       *EmbeddingExecutor
+	storage        *memoryStore
+	authorizer     *modelAuthorizer
+	quota          *recordingModelQuota
+	audit          *modelAuditStore
+	claims         *runtimeauth.KnowledgeSessionCapabilityClaims
+	binding        *knowledge.ResolvedBinding
+	calls          int
+	dimensions     int
+	providerStatus int
 }
 
 func newQueryEmbeddingFixture(t *testing.T, extra ...Option) *queryEmbeddingFixture {
@@ -54,6 +55,11 @@ func newQueryEmbeddingFixture(t *testing.T, extra ...Option) *queryEmbeddingFixt
 		}
 		if body["model"] != "opaque-embedding-deployment" || body["dimensions"] != float64(3) || body["temperature"] != nil || body["max_tokens"] != nil {
 			t.Errorf("embedding invocation does not match its profile: %v", body)
+		}
+		if result.providerStatus != 0 && result.providerStatus != http.StatusOK {
+			writer.WriteHeader(result.providerStatus)
+			_, _ = writer.Write([]byte("synthetic provider failure"))
+			return
 		}
 		vector := make([]float64, result.dimensions)
 		vector[0] = 1

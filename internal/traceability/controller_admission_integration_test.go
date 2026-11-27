@@ -83,7 +83,9 @@ func TestControllerInstallationConfigMapAdmission(test *testing.T) {
 	healthNameFixtures := seedModelCallHealthNameFixtures(test, ctx, admin)
 	controllerRoles := 0
 	var gatewayMigrationFixture corev1.ConfigMap
-	for _, document := range renderControllerRBAC(test, "--kube-version", "1.30.3", "--set", "k8sController.managedNamespaces[0]=tenant", "--set", "agentCommunicationGateway.enabled=true", "--set", "modelGateway.enabled=true") {
+	for _, document := range renderControllerRBAC(test, "--kube-version", "1.30.3", "--set", "k8sController.managedNamespaces[0]=tenant", "--set", "agentCommunicationGateway.enabled=true", "--set", "modelGateway.enabled=true",
+		"--set", "knowledgeGateway.enabled=true", "--set", "knowledgeGateway.tls.secretName=provider-client-tls", "--set", "knowledgeGateway.runtimeTLS.secretName=knowledge-runtime-tls",
+		"--set", "knowledgeGateway.provider.address=provider:9443", "--set", "knowledgeGateway.provider.serverName=provider", "--set", "knowledgeGateway.provider.peerURI=spiffe://kognition.dev/knowledge/provider") {
 		var metadata metav1.TypeMeta
 		if err := json.Unmarshal(document.Raw, &metadata); err != nil {
 			test.Fatal(err)
