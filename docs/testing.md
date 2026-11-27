@@ -85,6 +85,13 @@ Linux filesystems can reuse an inode when a plugin recreates its socket at the
 same path. Keep the preserved-identity regression deterministic rather than
 relying on a filesystem to reproduce inode reuse.
 
+The [SQL disposition verifier](../tools/securitygate/gate.go) pins the reviewed
+migration payload, including filenames and license comments. For any migration
+byte change, review the complete delta, verify the PostgreSQL and Helm copies
+match, and refresh the reviewed digest without bypassing the content check.
+Run `go test ./tools/securitygate`; its negative controls reject unreviewed SQL,
+comment and filename changes even when the migration count is unchanged.
+
 ```powershell
 # Fast Go unit suite
 .\make.ps1 test

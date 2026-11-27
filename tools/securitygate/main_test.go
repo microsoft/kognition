@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,7 +38,7 @@ func TestSQLDisposition(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
-	for _, name := range []string{"reviewed SQL", "credential injected", "extra key", "missing key", "binary data", "annotation credential", "label credential", "changed label", "extra document", "duplicate key", "renamed configmap", "changed finding", "other target", "additional RBAC finding", "duplicate finding", "ignored finding", "vulnerability", "empty report", "summary write failure", "finding write failure", "stale report", "wrong input hash", "wrong candidate hash", "missing expected candidate", "invalid expected candidate", "uppercase expected candidate", "missing provenance"} {
+	for _, name := range []string{"reviewed SQL", "credential injected", "changed SQL", "changed SQL comment", "renamed migration", "extra key", "missing key", "binary data", "annotation credential", "label credential", "changed label", "extra document", "duplicate key", "renamed configmap", "changed finding", "other target", "additional RBAC finding", "duplicate finding", "ignored finding", "vulnerability", "empty report", "summary write failure", "finding write failure", "stale report", "wrong input hash", "wrong candidate hash", "missing expected candidate", "invalid expected candidate", "uppercase expected candidate", "missing provenance"} {
 		t.Run(name, func(t *testing.T) {
 			testRoot := t.TempDir()
 			renderedRoot := filepath.Join(testRoot, "rendered")
@@ -54,6 +55,13 @@ func TestSQLDisposition(t *testing.T) {
 			switch name {
 			case "credential injected":
 				data["006_token_reservations.sql"] = data["006_token_reservations.sql"].(string) + "\npassword = 'negative-control-only'\n"
+			case "changed SQL":
+				data["038_workflow_executor_approvals.sql"] = data["038_workflow_executor_approvals.sql"].(string) + "\nSELECT 1;\n"
+			case "changed SQL comment":
+				data["038_workflow_executor_approvals.sql"] = data["038_workflow_executor_approvals.sql"].(string) + "\n-- unreviewed change\n"
+			case "renamed migration":
+				data["038_unreviewed.sql"] = data["038_workflow_executor_approvals.sql"]
+				delete(data, "038_workflow_executor_approvals.sql")
 			case "extra key":
 				data["password"] = "negative-control-only"
 			case "missing key":
@@ -156,6 +164,11 @@ func TestSQLDisposition(t *testing.T) {
 				candidateDigest = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
 			}
 			err = run(reportPath, renderedRoot, provenancePath, candidateDigest, now, destination)
+			if name == "changed SQL" || name == "changed SQL comment" || name == "renamed migration" {
+				if err == nil || !strings.Contains(err.Error(), "migration content changed; a new review is required") {
+					t.Fatalf("unreviewed migration was not rejected by its content pin: %v", err)
+				}
+			}
 			if destination != &output && !errors.Is(err, writeFailure) {
 				t.Fatalf("output failure was not propagated: %v", err)
 			}
