@@ -263,6 +263,85 @@ func TestServerRecordsRedactedModelTrustDecisionLifecycle(t *testing.T) {
 	}
 }
 
+func TestServerAuthorizesAWorkflowMemberTaskCapabilityAndAuditsItsInvocation(t *testing.T) {
+	server, st, _, issuer, binding, capture := fixture(t)
+	auditStore := &modelAuditStore{providerCalls: func() bool { return capture.model != "" }}
+	server.audit = observability.NewCognitiveAuditLog(auditStore)
+	binding.WorkflowTask = &runtimeauth.ModelSessionWorkflowTask{Workspace: "team-a", RunUID: "run-uid", Step: "team", ActivationID: "collaboration", Attempt: 1, InvocationID: "wfc-invocation", TaskID: "task-1"}
+	capability, err := issuer.Issue(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, completionRequest(capability))
+	if response.Code != http.StatusOK || len(auditStore.entries) != 2 {
+		t.Fatalf("status=%d entries=%d body=%s", response.Code, len(auditStore.entries), response.Body.String())
+	}
+	schema := loadModelTrustDecisionSchema(t)
+	for index, entry := range auditStore.entries {
+		var decision any
+		if err := json.Unmarshal(entry.Details, &decision); err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(decision); err != nil {
+			t.Fatalf("decision %d does not match schema: %v\n%s", index, err, entry.Details)
+		}
+		if !strings.Contains(string(entry.Details), `"invocationId":"wfc-invocation"`) {
+			t.Fatalf("decision %d lacks the member invocation: %s", index, entry.Details)
+		}
+	}
+	// The task claim never substitutes for the live instance: a replaced session still denies the member.
+	var instance v1alpha1.AgentInstance
+	if err := json.Unmarshal(st.data["AgentInstance/team-a/planner-r1"], &instance); err != nil {
+		t.Fatal(err)
+	}
+	instance.Status.SessionID = "replacement-session"
+	put(t, st, "AgentInstance", "team-a", "planner-r1", instance)
+	denied := httptest.NewRecorder()
+	server.ServeHTTP(denied, completionRequest(capability))
+	if denied.Code == http.StatusOK {
+		t.Fatalf("a task capability outlived its instance session: %d", denied.Code)
+	}
+}
+
+type modelRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn modelRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+func TestServerAppliesAgentDeadlineToProviderRequest(t *testing.T) {
+	server, st, _, issuer, binding, _ := fixture(t)
+	var agent v1alpha1.Agent
+	if err := json.Unmarshal(st.data["Agent/"+binding.Namespace+"/"+binding.AgentName], &agent); err != nil {
+		t.Fatal(err)
+	}
+	agent.Spec.Runtime = &v1alpha1.AgentRuntimeSpec{Timeout: "2m"}
+	put(t, st, "Agent", binding.Namespace, binding.AgentName, agent)
+	called := false
+	server.client = &http.Client{Transport: modelRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		called = true
+		deadline, ok := request.Context().Deadline()
+		if remaining := time.Until(deadline); !ok || remaining <= time.Minute || remaining > 2*time.Minute {
+			t.Errorf("provider deadline remaining = %v, present = %t", remaining, ok)
+		}
+		return nil, errors.New("synthetic provider failure")
+	})}
+	capability, err := issuer.Issue(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := completionRequest(capability)
+	if _, ok := request.Context().Deadline(); ok {
+		t.Fatal("test request unexpectedly has a client deadline")
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if !called || response.Code != http.StatusBadGateway {
+		t.Fatalf("provider called = %t, status = %d", called, response.Code)
+	}
+}
+
 func TestServerRejectsInvalidTrustDecisionRunIDBeforeProviderDispatch(t *testing.T) {
 	server, _, _, issuer, binding, capture := fixture(t)
 	capability, err := issuer.Issue(binding)

@@ -77,7 +77,9 @@ protocol test. Stop the port-forward with Ctrl+C afterward.
 ```
 samples/workflows/
 ├── _agents.yaml                # shared agents (apply first)
+├── collaboration.yaml          # collaboration (team) steps; needs the collaboration Helm flag
 ├── conditional-branching.yaml  # CEL edge conditions
+├── external-agent.yaml         # remote A2A team member; needs the external agents Helm flag and allow-list
 ├── parallel-dispatch.yaml      # fan-out / fan-in + maxParallelSteps
 ├── tool-sandbox.yaml           # in-cluster OpenAPI+MCP tool server (apply before tool-steps-http)
 ├── tool-sandbox.ps1            # explicit-context sample server install and cleanup
@@ -96,11 +98,28 @@ samples/workflows/
 Prepare these prerequisites explicitly; installing the platform does not create
 them or authorize sample execution.
 
+`collaboration.yaml` additionally requires
+`k8sController.workflowExecutor.collaboration.enabled=true`; admission rejects its
+workflows otherwise, so the apply-everything commands below skip it. Apply it
+separately on an installation that enables collaboration. See
+[Workflow collaboration](../../docs/workflow-collaboration.md).
+
+`external-agent.yaml` additionally requires
+`k8sController.workflowExecutor.collaboration.externalAgents.enabled=true`, an
+`egressAllowList` entry for its endpoint, and a real endpoint, card digest and
+token Secret in place of its placeholders. It sends workflow data outside the
+cluster, so the apply-everything commands skip it too.
+
+`approval-decision.template.yaml` is a template, not a sample: it holds placeholder
+approvers and votes on a WorkflowRun that you start yourself from
+`quorum-approval.yaml`, so admission rejects it as written. Follow the steps in its
+header instead, and keep it out of the apply-everything commands below.
+
 ## Apply everything
 
 ```powershell
 kubectl apply -f samples/workflows/_agents.yaml
-Get-ChildItem samples/workflows/*.yaml -Exclude _agents.yaml |
+Get-ChildItem samples/workflows/*.yaml -Exclude _agents.yaml, approval-decision.template.yaml, collaboration.yaml, external-agent.yaml |
   ForEach-Object { kubectl apply -f $_.FullName }
 ```
 
@@ -109,7 +128,7 @@ Get-ChildItem samples/workflows/*.yaml -Exclude _agents.yaml |
 ```bash
 kubectl apply -f samples/workflows/_agents.yaml
 for manifest in samples/workflows/*.yaml; do
-  [ "$manifest" = 'samples/workflows/_agents.yaml' ] && continue
+  case "$manifest" in samples/workflows/_agents.yaml|samples/workflows/approval-decision.template.yaml|samples/workflows/collaboration.yaml|samples/workflows/external-agent.yaml) continue ;; esac
   kubectl apply -f "$manifest" || exit 1
 done
 ```

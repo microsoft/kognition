@@ -19,6 +19,7 @@ their links open the canonical source rather than a second maintained copy.
 | Use persistent agent memory | [Memory walkthrough](../../samples/memory-in-action/README.md) | [Memory types](../../samples/memory-all-types/README.md). |
 | Add tools | [Tools walkthrough](../../samples/tools-in-action/README.md) | [Workflow tool sandbox](../../samples/workflows/README.md). |
 | Orchestrate work | [Workflow samples](../../samples/workflows/README.md) | [Multi-agent workflow](../../samples/multi-agent-workflow/manifests.yaml). |
+| Run a team of agents in one step | [Workflow collaboration](../workflow-collaboration.md) | [Collaboration sample](../../samples/workflows/collaboration.yaml). |
 | Apply governance | [Governance examples](../../samples/governance/README.md) | [Security guidance](../security.md). |
 | Evaluate an agent | [Evaluation sample](../../samples/evaluation/README.md) | [Resource reference](../reference/README.md). |
 

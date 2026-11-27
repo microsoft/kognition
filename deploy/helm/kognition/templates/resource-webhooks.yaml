@@ -61,7 +61,7 @@ metadata:
     app.kubernetes.io/component: resource-webhooks
 rules:
   - apiGroups: ["kognition.dev"]
-    resources: ["agents", "agentinstances", "agentjobs", "agentpolicies", "cognitiveadmissionpolicies", "cognitivequotas", "cognitivelimitranges", "workspaces", "agentidentities", "agentroles", "agentrolebindings", "agentcommunicationpolicies", "memoryclaims", "memorygrants", "memoryvolumes", "memories", "memoryrecords", "knowledgebases", "knowledgebaseclaims", "knowledgebaseindexruns", "knowledgebaseindexschedules", "models", "modelgrants", "modelautoscalers", "agentautoscalers", "secretrefs", "tools", "toolgrants", "toolinvocationruns", "workflows", "workflowruns", "evaluations", "evaluationruns", "evaluationdatasets", "approvaldecisions", "autonomyreviews", "trustprofiles", "trustprofileindices", "agentservices", "intentgateways", "prompts", "solutions", "crossnamespacegrants", "runtimeapprovals", "runtimeapprovaltombstones", "runtimeapprovalquotatickets"]
+    resources: ["agents", "agentinstances", "agentjobs", "agentpolicies", "cognitiveadmissionpolicies", "cognitivequotas", "cognitivelimitranges", "workspaces", "agentidentities", "agentroles", "agentrolebindings", "agentcommunicationpolicies", "memoryclaims", "memorygrants", "memoryvolumes", "memories", "memoryrecords", "knowledgebases", "knowledgebaseclaims", "knowledgebaseindexruns", "knowledgebaseindexschedules", "models", "modelgrants", "modelautoscalers", "agentautoscalers", "secretrefs", "tools", "toolgrants", "toolinvocationruns", "workflows", "workflowruns", "evaluations", "evaluationruns", "evaluationdatasets", "approvaldecisions", "autonomyreviews", "trustprofiles", "trustprofileindices", "agentservices", "intentgateways", "prompts", "solutions", "crossnamespacegrants", "runtimeapprovals", "runtimeapprovaltombstones", "runtimeapprovalquotatickets", "externalagents", "externalagentgrants"]
     verbs: ["get", "list"]
   - apiGroups: ["kognition.dev"]
     resources: ["runtimeapprovals/status"]
@@ -151,6 +151,17 @@ spec:
               value: {{ ternary (printf "%s-agent-communication-gateway" (include "kognition.fullname" .)) "" .Values.agentCommunicationGateway.enabled | quote }}
             - name: KOGNITION_MANAGED_NAMESPACES
               value: {{ include "kognition.controllerNamespaces" . | fromJsonArray | join "," | quote }}
+            {{- if dig "enabled" false (include "kognition.workflowCollaboration" . | fromJson) }}
+            - name: KOGNITION_WORKFLOW_COLLABORATION_ENABLED
+              value: "true"
+            {{- $externalAgents := include "kognition.externalAgents" . | fromJson }}
+            {{- if $externalAgents.enabled }}
+            - name: KOGNITION_EXTERNAL_AGENTS_ENABLED
+              value: "true"
+            - name: KOGNITION_EXTERNAL_AGENT_ALLOWLIST
+              value: {{ $externalAgents.egressAllowList | join "," | quote }}
+            {{- end }}
+            {{- end }}
             - name: KOGNITION_RUNTIME_APPROVAL_WRITER_SERVICE_ACCOUNTS
               value: {{ list $name (ternary (printf "%s-tool-gateway" (include "kognition.fullname" .)) "" .Values.toolGateway.enabled) (ternary (printf "%s-memory-policy-gateway" (include "kognition.fullname" .)) "" (and .Values.memoryService.enabled .Values.memoryPolicyGateway.enabled)) (ternary (printf "%s-agent-communication-gateway" (include "kognition.fullname" .)) "" .Values.agentCommunicationGateway.enabled) | compact | join "," | quote }}
             - name: KOGNITION_RUNTIME_APPROVAL_MAXIMUM_CLOCK_SKEW

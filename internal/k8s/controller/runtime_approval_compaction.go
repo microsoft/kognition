@@ -91,12 +91,15 @@ func (s *StoreAdapter) authenticateRuntimeApprovalTombstoneReplay(ctx context.Co
 		return api.RuntimeApproval{}, err
 	}
 	if tombstone.Spec.Workspace != proposed.Spec.Workspace || tombstone.Spec.InvocationID != proposed.Spec.InvocationID ||
+		tombstone.Spec.ActorKind != proposed.Spec.ActorKind ||
 		tombstone.Spec.Plane != proposed.Spec.Plane || tombstone.Spec.Operation != proposed.Spec.Operation ||
 		tombstone.Spec.InitialDecision != proposed.Spec.InitialDecision ||
 		!sameRuntimeApprovalReference(tombstone.Spec.AgentRef, proposed.Spec.AgentRef) {
 		return api.RuntimeApproval{}, store.ErrConflict
 	}
-	if err := runtimeapproval.Verify(ctx, s.runtimeApprovalKeys(), runtimeapproval.ActionEnvelopeFromApproval(proposed, payload), binding); err != nil {
+	boundProposal := proposed
+	boundProposal.Spec.Binding = binding
+	if err := runtimeapproval.AuthenticateRetainedBinding(ctx, s.runtimeApprovalKeys(), boundProposal, payload); err != nil {
 		return api.RuntimeApproval{}, fmt.Errorf("%w: %w", store.ErrConflict, err)
 	}
 	result := proposed
@@ -133,7 +136,7 @@ func runtimeActionBindingFromKubernetes(binding k8s.RuntimeActionBinding) api.Ru
 }
 
 func runtimeApprovalTombstoneFor(object *k8s.RuntimeApproval, compactedAt time.Time, retention time.Duration) *k8s.RuntimeApprovalTombstone {
-	return &k8s.RuntimeApprovalTombstone{
+	tombstone := &k8s.RuntimeApprovalTombstone{
 		TypeMeta: metav1.TypeMeta{APIVersion: k8s.GroupVersion.String(), Kind: "RuntimeApprovalTombstone"},
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:  object.Namespace,
@@ -141,6 +144,7 @@ func runtimeApprovalTombstoneFor(object *k8s.RuntimeApproval, compactedAt time.T
 			Finalizers: []string{k8s.RuntimeApprovalRetentionFinalizer},
 		},
 		Spec: k8s.RuntimeApprovalTombstoneSpec{
+			ActorKind: object.Spec.ActorKind, ExecutorAction: object.Spec.ExecutorAction.DeepCopy(),
 			Workspace: object.Spec.Workspace, InvocationID: object.Spec.InvocationID,
 			Plane: object.Spec.Plane, Operation: object.Spec.Operation, AgentRef: object.Spec.AgentRef,
 			RuntimeApprovalUID: string(object.UID), InitialDecision: object.Spec.InitialDecision,
@@ -150,6 +154,11 @@ func runtimeApprovalTombstoneFor(object *k8s.RuntimeApproval, compactedAt time.T
 			CompactedAt: metav1.NewTime(compactedAt.UTC()), RetentionDeadline: metav1.NewTime(compactedAt.UTC().Add(retention)),
 		},
 	}
+	if object.Spec.WorkflowContext != nil {
+		context := *object.Spec.WorkflowContext
+		tombstone.Spec.WorkflowContext = &context
+	}
+	return tombstone
 }
 
 // CreateOrVerifyRuntimeApprovalTombstone persists the replay fence before the
@@ -245,11 +254,17 @@ func (s *StoreAdapter) transitionRuntimeApprovalQuotaTicketToCompacted(ctx conte
 }
 
 func runtimeApprovalFromTombstoneForGet(tombstone *k8s.RuntimeApprovalTombstone) api.RuntimeApproval {
+	converted := convert.RuntimeApprovalFromK8s(&k8s.RuntimeApproval{Spec: k8s.RuntimeApprovalSpec{
+		ActorKind: tombstone.Spec.ActorKind, AgentRef: tombstone.Spec.AgentRef,
+		ExecutorAction: tombstone.Spec.ExecutorAction, WorkflowContext: tombstone.Spec.WorkflowContext,
+	}})
 	result := api.RuntimeApproval{
 		TypeMeta:   api.TypeMeta{APIVersion: api.APIVersion, Kind: "RuntimeApproval"},
 		ObjectMeta: api.ObjectMeta{Name: tombstone.Name, Namespace: tombstone.Namespace, UID: tombstone.Spec.RuntimeApprovalUID},
 		Spec: api.RuntimeApprovalSpec{
-			Workspace: tombstone.Spec.Workspace, InvocationID: tombstone.Spec.InvocationID,
+			ActorKind: converted.Spec.ActorKind, ExecutorAction: converted.Spec.ExecutorAction,
+			WorkflowContext: converted.Spec.WorkflowContext,
+			Workspace:       tombstone.Spec.Workspace, InvocationID: tombstone.Spec.InvocationID,
 			InitialDecision: tombstone.Spec.InitialDecision, Plane: tombstone.Spec.Plane, Operation: tombstone.Spec.Operation,
 			AgentRef:  convert.RuntimeApprovalFromK8s(&k8s.RuntimeApproval{Spec: k8s.RuntimeApprovalSpec{AgentRef: tombstone.Spec.AgentRef}}).Spec.AgentRef,
 			Binding:   runtimeActionBindingFromKubernetes(tombstone.Spec.Binding),
@@ -259,6 +274,11 @@ func runtimeApprovalFromTombstoneForGet(tombstone *k8s.RuntimeApprovalTombstone)
 			DecisionState: tombstone.Spec.DecisionState, DecisionEvidenceDelivered: true,
 			ExecutionState: tombstone.Spec.ExecutionState, ExecutionDisposition: tombstone.Spec.ExecutionDisposition,
 		},
+	}
+	if result.Spec.ExecutorAction != nil {
+		result.Spec.TargetRef = result.Spec.ExecutorAction.Service
+		context := result.Spec.ExecutorAction.Context
+		result.Spec.WorkflowContext = &context
 	}
 	if rv, err := strconv.ParseInt(tombstone.ResourceVersion, 10, 64); err == nil {
 		result.ResourceVersion = rv

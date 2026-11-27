@@ -209,9 +209,22 @@ type AgentCommunicationPolicy struct {
 
 // AgentCommunicationPolicySpec defines communication rules.
 type AgentCommunicationPolicySpec struct {
-	AllowFrom   []LocalObjectReference `json:"allowFrom,omitempty"`
-	AllowTo     []LocalObjectReference `json:"allowTo,omitempty"`
-	DefaultDeny bool                   `json:"defaultDeny"`
+	AllowFrom []LocalObjectReference `json:"allowFrom,omitempty"`
+	// +kubebuilder:validation:MaxItems=256
+	AllowFromQualified []QualifiedAgentReference `json:"allowFromQualified,omitempty"`
+	AllowTo            []LocalObjectReference    `json:"allowTo,omitempty"`
+	DefaultDeny        bool                      `json:"defaultDeny"`
+}
+
+type QualifiedAgentReference struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Namespace string `json:"namespace"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^(\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?)$`
+	Name string `json:"name"`
 }
 
 // +kubebuilder:object:root=true

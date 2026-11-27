@@ -150,6 +150,8 @@ func ProductionHooksWithExecutionAuthority(st store.Store, policyEngine *opa.Eng
 			NewAutonomyReviewValidator(),
 			NewIntentGatewayValidator(),
 			NewAgentIdentityValidator(controllerUsername),
+			NewExternalAgentValidator(),
+			NewExternalAgentGrantValidator(),
 		}
 }
 

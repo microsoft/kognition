@@ -62,6 +62,10 @@ func (in *RuntimeApprovalQuotaTicketList) DeepCopyObject() runtime.Object {
 
 func (in *RuntimeApprovalQuotaTicketSpec) DeepCopyInto(out *RuntimeApprovalQuotaTicketSpec) {
 	*out = *in
+	if in.ExecutorRef != nil {
+		out.ExecutorRef = new(WorkflowExecutorPrincipal)
+		*out.ExecutorRef = *in.ExecutorRef
+	}
 	in.CreatedAt.DeepCopyInto(&out.CreatedAt)
 	if in.CompactedAt != nil {
 		out.CompactedAt = in.CompactedAt.DeepCopy()

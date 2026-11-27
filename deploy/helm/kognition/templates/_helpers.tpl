@@ -235,6 +235,51 @@ Service account name
 {{- end -}}
 
 {{/*
+Workflow collaboration settings. Member tasks run as ordinary AgentJobs, so enabling
+it needs only the native executor (which already requires fail-closed admission).
+*/}}
+{{- define "kognition.workflowCollaboration" -}}
+{{- $values := fromYaml (toYaml .Values) -}}
+{{- $executor := dig "k8sController" "workflowExecutor" (dict) $values -}}
+{{- $collaboration := dig "collaboration" (dict) $executor -}}
+{{- if dig "enabled" false $collaboration -}}
+{{- if not (dig "enabled" false $executor) -}}
+{{- fail "workflowExecutor.collaboration requires k8sController.workflowExecutor.enabled" -}}
+{{- end -}}
+{{- end -}}
+{{- $collaboration | toJson -}}
+{{- end -}}
+
+{{/*
+ExternalAgent settings (workflow collaboration members that are remote A2A agents).
+Returns JSON {enabled, egressAllowList, ports}. Enabling requires collaboration, and every
+allow-list entry must be a bare host:port or *.domain:port so the controller and the
+admission webhook parse the identical value.
+*/}}
+{{- define "kognition.externalAgents" -}}
+{{- $collaboration := include "kognition.workflowCollaboration" . | fromJson -}}
+{{- $external := dig "externalAgents" (dict) $collaboration -}}
+{{- $list := dig "egressAllowList" (list) $external -}}
+{{- $ports := list -}}
+{{- if dig "enabled" false $external -}}
+{{- if not (dig "enabled" false $collaboration) -}}
+{{- fail "workflowExecutor.collaboration.externalAgents requires workflowExecutor.collaboration.enabled" -}}
+{{- end -}}
+{{- range $entry := $list -}}
+{{- if not (regexMatch "^(\\*\\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+:[0-9]{1,5}$" $entry) -}}
+{{- fail (printf "workflowExecutor.collaboration.externalAgents.egressAllowList entry %q must be host:port or *.domain:port (lower case DNS name, no scheme or path)" $entry) -}}
+{{- end -}}
+{{- $port := last (splitList ":" $entry) | int -}}
+{{- if or (lt $port 1) (gt $port 65535) -}}
+{{- fail (printf "workflowExecutor.collaboration.externalAgents.egressAllowList entry %q has an invalid port" $entry) -}}
+{{- end -}}
+{{- $ports = append $ports $port -}}
+{{- end -}}
+{{- end -}}
+{{- dict "enabled" (dig "enabled" false $external) "egressAllowList" $list "ports" (uniq $ports | sortAlpha) | toJson -}}
+{{- end -}}
+
+{{/*
 PostgreSQL DSN
 */}}
 {{- define "kognition.databaseSecretName" -}}
@@ -242,10 +287,13 @@ PostgreSQL DSN
 {{- end }}
 
 {{- define "kognition.databaseDSN" -}}
+{{- $username := .Values.postgres.auth.username | urlquery | replace "+" "%20" -}}
+{{- $password := .Values.postgres.auth.password | urlquery | replace "+" "%20" -}}
+{{- $database := .Values.postgres.auth.database | urlquery | replace "+" "%20" -}}
 {{- if .Values.postgres.enabled }}
-{{- printf "postgres://%s:%s@%s-postgres:5432/%s?sslmode=disable" .Values.postgres.auth.username .Values.postgres.auth.password (include "kognition.fullname" .) .Values.postgres.auth.database }}
+{{- printf "postgres://%s:%s@%s-postgres:5432/%s?sslmode=disable" $username $password (include "kognition.fullname" .) $database }}
 {{- else }}
-{{- printf "postgres://%s:%s@%s:%v/%s?sslmode=%s" .Values.postgres.auth.username .Values.postgres.auth.password .Values.postgres.external.host (int .Values.postgres.external.port) .Values.postgres.auth.database .Values.postgres.external.sslmode }}
+{{- printf "postgres://%s:%s@%s:%v/%s?sslmode=%s" $username $password .Values.postgres.external.host (int .Values.postgres.external.port) $database (.Values.postgres.external.sslmode | urlquery) }}
 {{- end }}
 {{- end }}
 

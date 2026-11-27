@@ -34,4 +34,10 @@ spec:
     - {{ include "kognition.fullname" . }}-webhook.{{ .Release.Namespace }}
     - {{ include "kognition.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
     - {{ include "kognition.fullname" . }}-webhook.{{ .Release.Namespace }}.svc.cluster.local
+    {{- if .Values.k8sController.workflowExecutor.enabled }}
+    - {{ include "kognition.fullname" . }}-workflow-webhook
+    - {{ include "kognition.fullname" . }}-workflow-webhook.{{ .Release.Namespace }}
+    - {{ include "kognition.fullname" . }}-workflow-webhook.{{ .Release.Namespace }}.svc
+    - {{ include "kognition.fullname" . }}-workflow-webhook.{{ .Release.Namespace }}.svc.cluster.local
+    {{- end }}
 {{- end }}

@@ -73,6 +73,7 @@ func TestFreshValuesStartStoppedAndRetainIndependentEnforcement(t *testing.T) {
 	}
 	if values["admissionGuard"].(map[string]interface{})["stdioIsolationProfile"] != "cilium" ||
 		values["networkPolicy"].(map[string]interface{})["enabled"] != true ||
+		values["runtimeAuth"].(map[string]interface{})["create"] != true ||
 		values["migrations"].(map[string]interface{})["retainCompletedJobs"] != true {
 		t.Fatal("fresh values lost security or migration prerequisites")
 	}
@@ -84,6 +85,7 @@ func TestFreshValuesStartStoppedAndRetainIndependentEnforcement(t *testing.T) {
 		"null", "",
 		"mode: standalone", "networkPolicy:\n  enabled: false",
 		"admissionGuard:\n  stdioIsolationProfile: network-policy", "k8sController: invalid",
+		"runtimeAuth:\n  create: 'false'", "runtimeAuth:\n  existingSecret: true",
 	} {
 		input := invalid
 		if invalid != "" && invalid != "null" && !strings.HasPrefix(invalid, "k8sController:") {
@@ -105,5 +107,36 @@ func TestFreshValuesStartStoppedAndRetainIndependentEnforcement(t *testing.T) {
 	}
 	if _, err := freshReplicaCount(artifact); err == nil {
 		t.Fatal("changed private values accepted")
+	}
+}
+
+func TestFreshValuesPreserveOperatorRuntimeAuth(t *testing.T) {
+	base := "k8sController:\n  image:\n    digest: sha256:" + strings.Repeat("a", 64) + "\nruntimeAuth:\n"
+	for _, profile := range []struct {
+		name   string
+		input  string
+		secret string
+	}{
+		{"external", "  existingSecret: operator-runtime\n", "operator-runtime"},
+		{"default name preprovisioned", "  create: false\n", ""},
+	} {
+		t.Run(profile.name, func(t *testing.T) {
+			content, err := freshValues([]byte(base+profile.input), freshOptions{workloads: "team-a", replicas: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var values struct {
+				RuntimeAuth struct {
+					Create         *bool
+					ExistingSecret string
+				}
+			}
+			if err := json.Unmarshal(content, &values); err != nil {
+				t.Fatal(err)
+			}
+			if values.RuntimeAuth.Create == nil || *values.RuntimeAuth.Create || values.RuntimeAuth.ExistingSecret != profile.secret {
+				t.Fatal("operator runtime Secret configuration was not preserved")
+			}
+		})
 	}
 }

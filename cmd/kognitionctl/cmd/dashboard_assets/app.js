@@ -964,6 +964,12 @@ function metricSummary(metrics) {
 
 // ---------- Detail drawer ----------
 
+function workflowTeamSteps(object) {
+  return object?.kind === "Workflow" && Array.isArray(object.spec?.steps)
+    ? object.spec.steps.filter((step) => step?.type === "collaboration" || step?.collaboration != null)
+    : [];
+}
+
 function openDetail(obj, trigger) {
   setCatalogOpen(false, false);
   state.selected = obj;
@@ -974,12 +980,13 @@ function openDetail(obj, trigger) {
   $("detail-title").textContent = meta.name || "—";
   $("detail-subtitle").textContent = `${kind} · ${meta.namespace || "—"}`;
   $("detail").classList.remove("trust-detail");
-  document.querySelectorAll(".detail-tabs .tab").forEach((tab) => { tab.hidden = false; });
+  const hasTeams = workflowTeamSteps(obj).length > 0;
+  document.querySelectorAll(".detail-tabs .tab").forEach((tab) => { tab.hidden = tab.dataset.tab === "teams" && !hasTeams; });
   $("detail").hidden = false;
   document.body.classList.add("detail-open");
   $("detail-backdrop").hidden = false;
   setInert([".topbar", "main", ".footer"], true);
-  showDetailTab(state.detailTab);
+  showDetailTab(hasTeams ? "teams" : state.detailTab === "teams" ? "yaml" : state.detailTab);
   $("detail-close").focus();
 }
 
@@ -990,7 +997,7 @@ function closeDetail(restoreFocus = true) {
   $("detail-backdrop").hidden = true;
   setInert([".topbar", "main", ".footer"], false);
   $("detail").classList.remove("trust-detail");
-  document.querySelectorAll(".detail-tabs .tab").forEach((tab) => { tab.hidden = false; });
+  document.querySelectorAll(".detail-tabs .tab").forEach((tab) => { tab.hidden = tab.dataset.tab === "teams"; });
   state.selected = null;
   syncEditButtons();
   if (restoreFocus && state.detailTrigger && state.detailTrigger.isConnected) state.detailTrigger.focus();
@@ -1010,6 +1017,10 @@ async function showDetailTab(tab) {
 
   if (tab === "yaml") {
     body.innerHTML = `<pre id="detail-pre">${escapeHtml(toYaml(state.selected))}</pre>`;
+    return;
+  }
+  if (tab === "teams") {
+    renderWorkflowTeams(body, state.selected);
     return;
   }
   if (tab === "results") {
@@ -1067,6 +1078,57 @@ async function showDetailTab(tab) {
       body.innerHTML = `<pre>error: ${escapeHtml(e.message)}</pre>`;
     }
   }
+}
+
+function renderWorkflowTeams(body, workflow) {
+  const view = document.createElement("div");
+  view.className = "results-view";
+  const status = document.createElement("p");
+  status.className = "muted";
+  status.textContent = "Declared configuration only. A2A execution and capability discovery are not enabled.";
+  view.appendChild(status);
+  for (const step of workflowTeamSteps(workflow)) {
+    const team = step.collaboration || {};
+    const panel = document.createElement("section");
+    panel.className = "result-panel";
+    const title = document.createElement("h4");
+    title.textContent = step.name || "Unnamed team step";
+    panel.appendChild(title);
+    const config = document.createElement("dl");
+    config.className = "trust-evidence";
+    appendEvidence(config, "Strategy", team.strategy);
+    appendEvidence(config, "Protocol", team.protocol);
+    appendEvidence(config, "Timeout", step.timeout);
+    const branches = Array.isArray(team.parallel?.branches) ? team.parallel.branches : [];
+    const roles = new Map([
+      ["Supervisor", ["Coordinator", team.supervisor?.coordinator]],
+      ["Parallel", ["Synthesizer", team.parallel?.synthesizer]],
+      ["Handoff", ["Entry member", team.handoff?.entryMember]],
+      ["Peer", ["Finalizer", team.peer?.finalizer]],
+    ]);
+    const [role, alias] = roles.get(team.strategy) || [];
+    if (alias) appendEvidence(config, role, alias);
+    const namespace = workflow.metadata?.namespace || "default";
+    for (const member of Array.isArray(team.members) ? team.members : []) {
+      if (!member) continue;
+      const branch = branches.find((candidate) => candidate && candidate.member === member.name);
+      const agent = member.agentRef?.name ? `${member.agentRef.namespace || namespace}/${member.agentRef.name}` : "No agent selected";
+      const details = [agent];
+      if (branch) details.push(branch.optional ? "Optional branch" : "Required branch");
+      if (member.serviceRef?.name) details.push(`AgentService: ${member.serviceRef.name}`);
+      appendEvidence(config, member.name || "Unnamed member", details.join(" · "));
+    }
+    for (const link of Array.isArray(team.allowedInteractions) ? team.allowedInteractions : []) {
+      if (link?.from && link.to) appendEvidence(config, "Allowed interaction", `${link.from} to ${link.to}`);
+    }
+    if (team.handoff?.maxHandoffs != null) appendEvidence(config, "maxHandoffs", team.handoff.maxHandoffs);
+    for (const key of ["maxTurns", "maxMessages", "maxDelegations", "maxDelegationDepth", "maxParallelTasks", "maxTokens"]) {
+      if (team.limits?.[key] != null) appendEvidence(config, key, team.limits[key]);
+    }
+    panel.appendChild(config);
+    view.appendChild(panel);
+  }
+  body.replaceChildren(view);
 }
 
 function renderResultsTab(body, obj) {
@@ -1316,7 +1378,7 @@ function yamlScalar(s) {
 }
 
 function yamlKey(k) {
-  if (/^[A-Za-z0-9_.\-/]+$/.test(k)) return k;
+  if (/^[A-Za-z_][A-Za-z0-9_./-]*$/.test(k) && !/^(true|false|null|yes|no|on|off|y|n)$/i.test(k)) return k;
   return JSON.stringify(k);
 }
 

@@ -6,7 +6,7 @@ Kognition keeps its semantic trace model in `internal/observability` and exports
 
 ## Prometheus Metrics
 
-Enable `observability.metrics.serviceMonitor.enabled` to create Prometheus Operator scrape targets. Set `observability.metrics.serviceMonitor.additionalLabels` to match the Prometheus installation's ServiceMonitor selector. Application `namespace` labels identify Kognition workspaces; the chart uses `honorLabels: true` to preserve them.
+Enable `observability.metrics.serviceMonitor.enabled` to create Prometheus Operator scrape targets. Set `observability.metrics.serviceMonitor.labels` to match the Prometheus installation's ServiceMonitor selector. Application `namespace` labels identify Kognition workspaces; the chart uses `honorLabels: true` to preserve them.
 
 ### Standalone API Listener
 
@@ -191,7 +191,7 @@ export KOGNITION_OTEL_TRACES_PROTOCOL=http/protobuf
 
 ## Local Jaeger Verification
 
-For local Kubernetes verification, install a disposable Jaeger all-in-one instance and point the current Helm release at its OTLP gRPC endpoint.
+For local Kubernetes verification, install the development Jaeger, Prometheus Operator, and Grafana bundle. These helpers manage only the observability stack. They work before Kognition is installed and do not upgrade or restart it.
 
 ```bash
 make jaeger
@@ -207,7 +207,7 @@ On Windows, use the PowerShell shim:
 
 Then open `http://localhost:16686` and select the `kognition` service after running a workflow that invokes a tool.
 
-The helper installs Jaeger in `kognition-observability` by default and configures the existing Kognition Helm release with:
+The helper installs Jaeger in `kognition-observability` by default. Include the following settings in the private values for a fresh Kognition install. For an existing Kubernetes release, apply the settings through the [reviewed upgrade procedure](features/knowledge-provider-execution/installation-recovery-contract.md#bootstrap-commands), using the complete reviewed values for that release. Set the endpoint to match the observability namespace.
 
 ```yaml
 observability:
@@ -215,10 +215,31 @@ observability:
     enabled: true
     endpoint: jaeger-collector.kognition-observability.svc.cluster.local:4317
     protocol: grpc
+    serviceName: kognition
     environment: dev
+  metrics:
+    serviceMonitor:
+      enabled: true
+      labels: {release: kognition-observability}
+  grafanaDashboards:
+    enabled: true
+    labels: {grafana_dashboard: "1"}
+toolGateway:
+  monitoring:
+    serviceMonitor:
+      enabled: true
+      labels: {release: kognition-observability}
+    prometheusRule:
+      enabled: true
+      labels: {release: kognition-observability}
+    grafanaDashboard:
+      enabled: true
+      labels: {grafana_dashboard: "1"}
 ```
 
-Remove the local backend with:
+The `e2e-kubernetes-tool-monitoring` target installs the development observability bundle but does not configure Kognition. Before running it, enable the Tool Gateway, its ServiceMonitor, PrometheusRule, and Grafana dashboard settings on the Kognition release.
+
+Before removing the backend, disable these integrations or point Kognition at a replacement collector through the same reviewed configuration procedure. Remove the local backend with:
 
 ```bash
 make jaeger-uninstall

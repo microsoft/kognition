@@ -67,7 +67,7 @@ func (s *Store) CreateOrGetRuntimeApproval(ctx context.Context, proposed api.Run
 	if tombstone, found, err := scanRuntimeApprovalTombstone(ctx, tx, proposed.Spec.Workspace, proposed.Spec.InvocationID); err != nil {
 		return false, api.RuntimeApproval{}, err
 	} else if found {
-		if proposed.Spec.Binding != tombstone.Spec.Binding {
+		if proposed.Spec.Binding != tombstone.Spec.Binding || proposed.Spec.ActorKind != tombstone.Spec.ActorKind || proposed.Spec.InitialDecision != tombstone.Spec.InitialDecision {
 			return false, api.RuntimeApproval{}, store.ErrConflict
 		}
 		if err := runtimeapproval.AuthenticateRetainedBinding(ctx, keys, proposed, payload); err != nil {
@@ -96,7 +96,10 @@ func (s *Store) CreateOrGetRuntimeApproval(ctx context.Context, proposed api.Run
 	proposed.ObjectMeta.ResourceVersion = 1
 	proposed.ObjectMeta.CreationTimestamp = now.UTC()
 	proposed.Spec.CreatedAt = now.UTC()
-	proposed.Spec.ExpiresAt = now.Add(ttl).UTC()
+	proposed.Spec.ExpiresAt, err = runtimeapproval.RuntimeApprovalDeadline(proposed, now, ttl)
+	if err != nil {
+		return false, api.RuntimeApproval{}, err
+	}
 	runtimeapproval.FinalizeInitialStatus(&proposed, now)
 	data, err := json.Marshal(proposed)
 	if err != nil {
@@ -500,13 +503,17 @@ func scanRuntimeApproval(ctx context.Context, query runtimeApprovalQuerier, work
 func scanRuntimeApprovalTombstone(ctx context.Context, query runtimeApprovalQuerier, workspace, invocationID string) (api.RuntimeApproval, bool, error) {
 	var approval api.RuntimeApproval
 	var agentRef []byte
+	var actorKind string
+	var executorAction, workflowContext []byte
 	var createdAt, expiresAt time.Time
 	err := query.QueryRow(ctx, `SELECT runtime_approval_uid::text, name, plane, operation, agent_ref,
+		actor_kind, executor_action, workflow_context,
 		initial_decision, binding_format, binding_algorithm, binding_domain, binding_epoch,
 		binding_key_version, binding_tag, decision_state, execution_state,
 		COALESCE(execution_disposition, ''), created_at, expires_at
 		FROM runtime_approval_tombstones WHERE workspace = $1 AND invocation_id = $2`, workspace, invocationID).Scan(
 		&approval.UID, &approval.Name, &approval.Spec.Plane, &approval.Spec.Operation, &agentRef,
+		&actorKind, &executorAction, &workflowContext,
 		&approval.Spec.InitialDecision, &approval.Spec.Binding.Format, &approval.Spec.Binding.Algorithm,
 		&approval.Spec.Binding.Domain, &approval.Spec.Binding.Epoch, &approval.Spec.Binding.KeyVersion,
 		&approval.Spec.Binding.Tag, &approval.Status.DecisionState, &approval.Status.ExecutionState,
@@ -518,8 +525,27 @@ func scanRuntimeApprovalTombstone(ctx context.Context, query runtimeApprovalQuer
 	if err != nil {
 		return api.RuntimeApproval{}, false, fmt.Errorf("get RuntimeApproval tombstone: %w", err)
 	}
-	if err := json.Unmarshal(agentRef, &approval.Spec.AgentRef); err != nil {
-		return api.RuntimeApproval{}, false, fmt.Errorf("unmarshal RuntimeApproval tombstone Agent reference: %w", err)
+	if len(agentRef) > 0 {
+		if err := json.Unmarshal(agentRef, &approval.Spec.AgentRef); err != nil {
+			return api.RuntimeApproval{}, false, fmt.Errorf("unmarshal RuntimeApproval tombstone Agent reference: %w", err)
+		}
+	}
+	if actorKind == api.RuntimeApprovalActorExecutor {
+		approval.Spec.ActorKind = actorKind
+		if err := json.Unmarshal(executorAction, &approval.Spec.ExecutorAction); err != nil {
+			return api.RuntimeApproval{}, false, fmt.Errorf("invalid executor tombstone action: %w", err)
+		}
+		if approval.Spec.ExecutorAction == nil {
+			return api.RuntimeApproval{}, false, errors.New("invalid executor tombstone action: missing")
+		}
+		approval.Spec.TargetRef = approval.Spec.ExecutorAction.Service
+	} else if actorKind != "Agent" {
+		return api.RuntimeApproval{}, false, store.ErrConflict
+	}
+	if len(workflowContext) > 0 {
+		if err := json.Unmarshal(workflowContext, &approval.Spec.WorkflowContext); err != nil {
+			return api.RuntimeApproval{}, false, err
+		}
 	}
 	approval.TypeMeta = api.TypeMeta{APIVersion: api.APIVersion, Kind: "RuntimeApproval"}
 	approval.Namespace = workspace

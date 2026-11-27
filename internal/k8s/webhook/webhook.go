@@ -16,18 +16,22 @@ import (
 	"go.uber.org/zap"
 	admissionv1 "k8s.io/api/admission/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	k8s "github.com/kognition-ai/kognition/api/k8s/v1alpha1"
+	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	intadmission "github.com/kognition-ai/kognition/internal/admission"
 	"github.com/kognition-ai/kognition/internal/convert"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/requestid"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval"
 )
 
 func admissionIdentityExtra(values map[string]authenticationv1.ExtraValue) map[string][]string {
@@ -49,6 +53,11 @@ type Handler struct {
 	auditLog                     *observability.CognitiveAuditLog
 	runtimeApprovalDecisionStore runtimeApprovalOperationStore
 	runtimeApprovalForbidden     []string
+	workflowBindingNamespace     string
+	workflowBindingAdminGroups   []string
+	workflowBindingExecutors     []string
+	workflowBindingReader        client.Reader
+	workflowSubmissions          *WorkflowRunSubmissionService
 }
 
 type runtimeApprovalOperationStore interface {
@@ -101,6 +110,22 @@ func WithRuntimeApprovalDecisionStore(decisionStore runtimeApprovalOperationStor
 	}
 }
 
+func WithWorkflowBindingReader(reader client.Reader) Option {
+	return func(handler *Handler) { handler.workflowBindingReader = reader }
+}
+
+func WithWorkflowRunSubmissions(service *WorkflowRunSubmissionService) Option {
+	return func(handler *Handler) { handler.workflowSubmissions = service }
+}
+
+func WithWorkflowBindingAdministrators(namespace string, groups, executorSubjects []string) Option {
+	return func(handler *Handler) {
+		handler.workflowBindingNamespace = namespace
+		handler.workflowBindingAdminGroups = append([]string(nil), groups...)
+		handler.workflowBindingExecutors = append([]string(nil), executorSubjects...)
+	}
+}
+
 // NewAuditHandler creates the generic write-ahead mutation audit handler.
 func NewAuditHandler(auditLog *observability.CognitiveAuditLog, logger *zap.Logger) *AuditHandler {
 	return &AuditHandler{auditLog: auditLog, logger: logger}
@@ -122,6 +147,9 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	}
 
 	kind := req.Kind.Kind
+	if kind == "ConfigMap" {
+		return h.authorizeWorkflowBindingConfiguration(ctx, req, op)
+	}
 
 	objectRaw := req.Object.Raw
 	if req.Operation == admissionv1.Delete {
@@ -177,6 +205,56 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		}
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
+	if kind == "WorkflowRun" {
+		runJSON := internalJSON
+		if mutatedJSON != nil {
+			runJSON = mutatedJSON
+		}
+		var run api.WorkflowRun
+		if err := json.Unmarshal(runJSON, &run); err != nil {
+			return admission.Errored(http.StatusInternalServerError, err)
+		}
+		if op == intadmission.OperationUpdate {
+			var previous api.WorkflowRun
+			if json.Unmarshal(admReq.OldObject, &previous) != nil {
+				return admission.Errored(http.StatusBadRequest, fmt.Errorf("native Workflow update requires its previous definition"))
+			}
+			for _, annotation := range []string{runtimeapproval.NativeWorkflowSubmissionAnnotation, runtimeapproval.NativeWorkflowExecutionBindingAnnotation} {
+				if run.Annotations[annotation] != previous.Annotations[annotation] {
+					return admission.Errored(http.StatusForbidden, fmt.Errorf("native Workflow submission evidence is immutable"))
+				}
+			}
+		}
+		if op == intadmission.OperationCreate && run.Annotations[runtimeapproval.WorkflowRunAcceptanceRequiredAnnotation] == "true" {
+			if h.workflowSubmissions == nil {
+				return admission.Errored(http.StatusForbidden, fmt.Errorf("native Workflow submission requires the qualified authenticated receipt boundary"))
+			}
+			bindingJSON := []byte(run.Annotations[runtimeapproval.NativeWorkflowExecutionBindingAnnotation])
+			if len(bindingJSON) == 0 || len(bindingJSON) > 4096 {
+				return admission.Errored(http.StatusForbidden, fmt.Errorf("native Workflow submission requires an exact execution binding"))
+			}
+			if _, err := runtimeapproval.CanonicalizeJSON(bindingJSON); err != nil {
+				return admission.Errored(http.StatusForbidden, fmt.Errorf("native Workflow submission binding is invalid"))
+			}
+			var reference api.RuntimeApprovalReference
+			if err := json.Unmarshal(bindingJSON, &reference); err != nil {
+				return admission.Errored(http.StatusForbidden, fmt.Errorf("native Workflow submission binding is invalid"))
+			}
+			nativeJSON, err := h.convertToK8s(kind, runJSON, req.Object.Raw)
+			if err != nil {
+				return admission.Errored(http.StatusInternalServerError, err)
+			}
+			request := req
+			request.Object.Raw = nativeJSON
+			if h.mode == modeMutate {
+				if err := h.workflowSubmissions.Preflight(ctx, request, reference); err != nil {
+					return admission.Errored(http.StatusForbidden, fmt.Errorf("native Workflow submission preflight failed"))
+				}
+			} else if _, err := h.workflowSubmissions.Issue(ctx, request, reference); err != nil {
+				return admission.Errored(http.StatusForbidden, fmt.Errorf("native Workflow submission authorization failed"))
+			}
+		}
+	}
 	// If the chain produced a mutated object, convert back to K8s and create a patch.
 	if h.mode != modeValidate && mutatedJSON != nil && string(mutatedJSON) != string(internalJSON) {
 		patchedRaw, err := h.convertToK8s(kind, mutatedJSON, req.Object.Raw)
@@ -188,6 +266,150 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		return admission.PatchResponseFromRaw(req.Object.Raw, patchedRaw)
 	}
 
+	return admission.Allowed("")
+}
+
+func (h *Handler) authorizeWorkflowBindingConfiguration(ctx context.Context, req admission.Request, operation intadmission.Operation) admission.Response {
+	if req.Kind.Group != "" {
+		return admission.Errored(http.StatusBadRequest, fmt.Errorf("binding configuration requires a core ConfigMap"))
+	}
+	const bindingPrefix = "kognition-workflow-executor-binding-"
+	const acceptancePrefix = "kognition-workflow-run-acceptance-"
+	const submissionPrefix = "kognition-workflow-run-submission-"
+	protected := strings.HasPrefix(req.Name, bindingPrefix)
+	protectedAcceptance := strings.HasPrefix(req.Name, acceptancePrefix)
+	protectedSubmission := strings.HasPrefix(req.Name, submissionPrefix)
+	metadata := make([]metav1.ObjectMeta, 0, 2)
+	for _, raw := range [][]byte{req.Object.Raw, req.OldObject.Raw} {
+		if len(raw) == 0 {
+			continue
+		}
+		var object struct {
+			Metadata metav1.ObjectMeta `json:"metadata"`
+		}
+		if err := json.Unmarshal(raw, &object); err != nil {
+			return admission.Errored(http.StatusBadRequest, fmt.Errorf("invalid ConfigMap metadata"))
+		}
+		metadata = append(metadata, object.Metadata)
+		protected = protected || strings.HasPrefix(object.Metadata.Name, bindingPrefix) ||
+			strings.HasPrefix(object.Metadata.GenerateName, bindingPrefix) ||
+			object.Metadata.Labels["kognition.dev/internal-record"] == "workflow-executor-binding"
+		protectedAcceptance = protectedAcceptance || strings.HasPrefix(object.Metadata.Name, acceptancePrefix) || strings.HasPrefix(object.Metadata.GenerateName, acceptancePrefix) ||
+			object.Metadata.Labels["kognition.dev/internal-record"] == "workflow-run-acceptance"
+		protectedSubmission = protectedSubmission || strings.HasPrefix(object.Metadata.Name, submissionPrefix) || strings.HasPrefix(object.Metadata.GenerateName, submissionPrefix) ||
+			object.Metadata.Labels["kognition.dev/internal-record"] == "workflow-run-submission"
+	}
+	if protectedSubmission {
+		if h.workflowSubmissions == nil || h.workflowSubmissions.AuthorizePrivateRecordWrite(ctx, req, true) != nil {
+			return admission.Errored(http.StatusForbidden, fmt.Errorf("native Workflow submission evidence requires its authenticated validating receipt boundary"))
+		}
+		return admission.Allowed("")
+	}
+	if protectedAcceptance {
+		if h.workflowSubmissions == nil || h.workflowSubmissions.AuthorizePrivateRecordWrite(ctx, req, false) != nil {
+			return admission.Errored(http.StatusForbidden, fmt.Errorf("native Workflow acceptance requires the qualified authenticated submission receipt boundary"))
+		}
+		return admission.Allowed("")
+	}
+	if !protected {
+		return admission.Allowed("")
+	}
+	deny := func() admission.Response {
+		return admission.Errored(http.StatusForbidden, fmt.Errorf("operator administration is required for Workflow execution bindings"))
+	}
+	if h.workflowBindingNamespace == "" || req.Namespace != h.workflowBindingNamespace || req.Name == "" ||
+		len(h.workflowBindingAdminGroups) == 0 || len(h.workflowBindingExecutors) == 0 ||
+		req.UserInfo.Username == "" || req.UserInfo.Username == "system:anonymous" || len(metadata) == 0 {
+		return deny()
+	}
+	for _, object := range metadata {
+		if object.Name != req.Name || object.Namespace != "" && object.Namespace != req.Namespace {
+			return deny()
+		}
+	}
+	for _, executor := range h.workflowBindingExecutors {
+		if executor == "" || executor == "*" || req.UserInfo.Username == executor {
+			return deny()
+		}
+	}
+	allowed := false
+	for _, group := range req.UserInfo.Groups {
+		if group == "system:unauthenticated" {
+			return deny()
+		}
+		for _, administratorGroup := range h.workflowBindingAdminGroups {
+			if administratorGroup == "" || administratorGroup == "*" {
+				return deny()
+			}
+			allowed = allowed || group == administratorGroup
+		}
+	}
+	if !allowed {
+		return deny()
+	}
+	if req.Operation == admissionv1.Delete {
+		return deny()
+	}
+	if req.Operation != admissionv1.Delete {
+		object := &corev1.ConfigMap{}
+		if _, err := runtimeapproval.CanonicalizeJSON(req.Object.Raw); err != nil {
+			return admission.Errored(http.StatusBadRequest, fmt.Errorf("invalid binding configuration JSON"))
+		}
+		if err := json.Unmarshal(req.Object.Raw, object); err != nil {
+			return admission.Errored(http.StatusBadRequest, fmt.Errorf("invalid binding configuration"))
+		}
+		authority, err := runtimeapproval.DecodeWorkflowExecutorAuthority([]byte(object.Data["binding.json"]))
+		operator := api.ControlPlaneRoleSubject{Method: "tokenreview", Issuer: "kubernetes.io/tokenreview", Subject: req.UserInfo.Username}
+		executorAllowed := false
+		for _, subject := range h.workflowBindingExecutors {
+			executorAllowed = executorAllowed || subject == authority.Executor.Subject
+		}
+		if err != nil || len(object.Data) != 1 || len(object.BinaryData) != 0 || object.Immutable != nil && *object.Immutable ||
+			object.Labels["kognition.dev/internal-record"] != "workflow-executor-binding" ||
+			object.Name != runtimeapproval.WorkflowExecutorBindingObjectName(authority.Reference.Namespace, authority.Reference.Name) ||
+			authority.Reference.UID != "" || authority.Reference.ResourceVersion != 0 || authority.ApprovedBy != operator ||
+			authority.Executor.Method != "tokenreview" || authority.Executor.Issuer != "kubernetes.io/tokenreview" || !executorAllowed {
+			return admission.Errored(http.StatusBadRequest, fmt.Errorf("binding requires valid bounded operator configuration and server-owned identity"))
+		}
+		if req.Operation == admissionv1.Update {
+			old := &corev1.ConfigMap{}
+			if err := json.Unmarshal(req.OldObject.Raw, old); err != nil {
+				return admission.Errored(http.StatusBadRequest, fmt.Errorf("invalid prior binding configuration"))
+			}
+			prior, err := runtimeapproval.DecodeWorkflowExecutorAuthority([]byte(old.Data["binding.json"]))
+			if err != nil || prior.Workflow != authority.Workflow || prior.WorkflowRevisionDigest != authority.WorkflowRevisionDigest || prior.Executor != authority.Executor {
+				return admission.Errored(http.StatusConflict, fmt.Errorf("Workflow revision and executor binding are immutable"))
+			}
+		}
+		if authority.Enabled || req.Operation == admissionv1.Create {
+			if h.workflowBindingReader == nil {
+				return admission.Errored(http.StatusServiceUnavailable, fmt.Errorf("binding requires uncached Workflow definition verification"))
+			}
+			workflow := &k8s.Workflow{}
+			if err := h.workflowBindingReader.Get(ctx, client.ObjectKey{Namespace: authority.Workflow.Namespace, Name: authority.Workflow.Name}, workflow); err != nil {
+				return admission.Errored(http.StatusServiceUnavailable, fmt.Errorf("live Workflow unavailable: %w", err))
+			}
+			raw, err := json.Marshal(convert.WorkflowFromK8s(workflow))
+			if err != nil {
+				return admission.Errored(http.StatusServiceUnavailable, err)
+			}
+			if err := runtimeapproval.ValidateWorkflowExecutorAuthorityDefinition(authority, raw); err != nil {
+				return admission.Errored(http.StatusConflict, err)
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return admission.Errored(http.StatusInternalServerError, err)
+	}
+	if req.DryRun != nil && *req.DryRun {
+		return admission.Allowed("")
+	}
+	if h.auditLog == nil {
+		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("binding administration requires durable audit storage"))
+	}
+	if err := recordResourceAudit(ctx, h.auditLog, req, "ConfigMap", operation); err != nil {
+		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("binding administration audit durability failed"))
+	}
 	return admission.Allowed("")
 }
 
@@ -215,8 +437,8 @@ func SetupWithManager(mgr ctrl.Manager, chain *intadmission.Chain, logger *zap.L
 	configured := NewHandler(chain, scheme, logger, options...)
 
 	srv := mgr.GetWebhookServer()
-	srv.Register("/mutate", &webhook.Admission{Handler: newHandlerForMode(chain, scheme, logger, modeMutate)})
-	srv.Register("/validate", &webhook.Admission{Handler: newHandlerForMode(chain, scheme, logger, modeValidate)})
+	srv.Register("/mutate", &webhook.Admission{Handler: newHandlerForMode(chain, scheme, logger, modeMutate, options...)})
+	srv.Register("/validate", &webhook.Admission{Handler: newHandlerForMode(chain, scheme, logger, modeValidate, options...)})
 	if configured.auditLog != nil {
 		srv.Register("/audit", &webhook.Admission{Handler: NewAuditHandler(configured.auditLog, logger)})
 	}

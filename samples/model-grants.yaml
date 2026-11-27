@@ -164,3 +164,13 @@ apiVersion: kognition.dev/v1alpha1
 kind: ModelGrant
 metadata: {name: sample-demo-writer-gpt-6-luna, namespace: kognition-demo}
 spec: {agentRef: {name: writer}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-wfext-analyst-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: wfext-analyst}, modelRef: {name: gpt-6-luna}}
+---
+apiVersion: kognition.dev/v1alpha1
+kind: ModelGrant
+metadata: {name: sample-wfext-writer-gpt-6-luna, namespace: default}
+spec: {agentRef: {name: wfext-writer}, modelRef: {name: gpt-6-luna}}

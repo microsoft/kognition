@@ -14,6 +14,7 @@ import (
 	k8sapi "github.com/kognition-ai/kognition/api/k8s/v1alpha1"
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/runtimeapproval"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval/conformancetest"
 )
 
 func TestRuntimeApprovalValidatorProtectsDedicatedLifecycle(t *testing.T) {
@@ -93,6 +94,69 @@ func TestRuntimeApprovalValidatorProtectsDedicatedLifecycle(t *testing.T) {
 	pending.Finalizers = nil
 	if response := validator.Validate(context.Background(), &Request{Operation: OperationDelete, Kind: "RuntimeApproval", Namespace: "team-a", OldObject: encode(pending), UserInfo: controller}); response.Allowed {
 		t.Fatal("non-terminal RuntimeApproval delete was admitted")
+	}
+}
+
+func TestRuntimeApprovalValidatorExecutorActorIsStrictAndProtected(t *testing.T) {
+	keys, err := runtimeapproval.NewStaticBindingKeyStore([]runtimeapproval.BindingKey{{Version: 1,
+		Algorithm: runtimeapproval.BindingAlgorithmV1, Domain: runtimeapproval.BindingDomainV1,
+		Status: runtimeapproval.BindingKeyActive, Material: []byte("0123456789abcdef0123456789abcdef")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, _ := conformancetest.ExecutorApprovalProposal(t, keys, "executor-admission")
+	approval.Finalizers = []string{k8sapi.RuntimeApprovalCompactionFinalizer}
+	const controller = "system:serviceaccount:control:controller"
+	const executor = "system:serviceaccount:control:executor-gateway"
+	validator := NewRuntimeApprovalValidator(controller, executor).WithExecutionWriters(map[string]string{executor: api.RuntimeApprovalPlaneWorkflow})
+	data, err := json.Marshal(approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &Request{Operation: OperationCreate, Kind: "RuntimeApproval", Namespace: "team-a", Object: data, UserInfo: UserInfo{Username: executor}}
+	if response := validator.Validate(context.Background(), request); !response.Allowed {
+		t.Fatalf("typed executor approval rejected: %s", response.Reason)
+	}
+	request.UserInfo.Username = "author"
+	if response := validator.Validate(context.Background(), request); response.Allowed {
+		t.Fatal("author created executor execution authority")
+	}
+	request.UserInfo.Username = executor
+	for name, change := range map[string]func(*api.RuntimeApproval){
+		"mixed Agent identity": func(approval *api.RuntimeApproval) { approval.Spec.AgentRef = approval.Spec.ExecutorAction.Target },
+		"mixed session":        func(approval *api.RuntimeApproval) { approval.Spec.SessionRef = "fabricated" },
+		"wrong plane":          func(approval *api.RuntimeApproval) { approval.Spec.Plane = api.RuntimeApprovalPlaneTool },
+		"wrong actor":          func(approval *api.RuntimeApproval) { approval.Spec.ActorKind = "Agent" },
+		"changed context": func(approval *api.RuntimeApproval) {
+			changed := *approval.Spec.WorkflowContext
+			changed.OwnerEpoch++
+			approval.Spec.WorkflowContext = &changed
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := approval
+			change(&changed)
+			request.Object, err = json.Marshal(changed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response := validator.Validate(context.Background(), request); response.Allowed {
+				t.Fatalf("invalid %s admitted", name)
+			}
+		})
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	spec := raw["spec"].(map[string]any)
+	spec["executorAction"].(map[string]any)["skipPolicy"] = true
+	request.Object, err = json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := validator.Validate(context.Background(), request); response.Allowed || !strings.Contains(response.Reason, "unknown field") {
+		t.Fatalf("unknown executor governance field not rejected: %+v", response)
 	}
 }
 

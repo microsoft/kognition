@@ -16,9 +16,21 @@ import (
 const ModelSessionCapabilityAudience = "kognition-model-gateway-session"
 const ModelProfileSessionCapabilityAudience = "kognition-model-gateway-profile-session-v1"
 
+// ModelSessionWorkflowTask identifies the one Workflow A2A member task a capability may serve.
+type ModelSessionWorkflowTask struct {
+	Workspace    string `json:"workspace"`
+	RunUID       string `json:"run_uid"`
+	Step         string `json:"step"`
+	ActivationID string `json:"activation_id"`
+	Attempt      int64  `json:"attempt"`
+	InvocationID string `json:"invocation_id"`
+	TaskID       string `json:"task_id"`
+}
+
 // ModelSessionCapabilityBinding identifies the active workload session and
 // exact Model revision allowed to request inference through Model Gateway.
 type ModelSessionCapabilityBinding struct {
+	WorkflowTask             *ModelSessionWorkflowTask
 	Namespace                string
 	AgentName                string
 	AgentIdentityName        string
@@ -36,6 +48,7 @@ type ModelSessionCapabilityBinding struct {
 }
 
 type ModelSessionCapabilityClaims struct {
+	WorkflowTask             *ModelSessionWorkflowTask               `json:"workflow_task,omitempty"`
 	Namespace                string                                  `json:"namespace"`
 	AgentName                string                                  `json:"agent_name"`
 	AgentIdentityName        string                                  `json:"agent_identity_name"`
@@ -88,16 +101,31 @@ func (i *ModelSessionCapabilityIssuer) TTL() time.Duration {
 }
 
 func (i *ModelSessionCapabilityIssuer) Issue(binding ModelSessionCapabilityBinding) (string, error) {
+	return i.IssueUntil(binding, time.Time{})
+}
+
+// IssueUntil issues a capability that expires no later than notAfter; a zero notAfter keeps only the TTL.
+func (i *ModelSessionCapabilityIssuer) IssueUntil(binding ModelSessionCapabilityBinding, notAfter time.Time) (string, error) {
 	if err := validateModelSessionBinding(binding); err != nil {
 		return "", err
 	}
 	now := i.now().UTC()
+	expiresAt := now.Add(i.ttl)
+	if !notAfter.IsZero() {
+		if !notAfter.After(now) {
+			return "", fmt.Errorf("runtime model session capability bound has already passed")
+		}
+		if notAfter.Before(expiresAt) {
+			expiresAt = notAfter.UTC()
+		}
+	}
 	audience := ModelSessionCapabilityAudience
 	if binding.InvocationProfileBinding != nil {
 		audience = ModelProfileSessionCapabilityAudience
 	}
 	claims := ModelSessionCapabilityClaims{
-		Namespace: binding.Namespace, AgentName: binding.AgentName, AgentIdentityName: binding.AgentIdentityName,
+		WorkflowTask: binding.WorkflowTask,
+		Namespace:    binding.Namespace, AgentName: binding.AgentName, AgentIdentityName: binding.AgentIdentityName,
 		InstanceName: binding.InstanceName, InstanceUID: binding.InstanceUID, SessionID: binding.SessionID,
 		WorkflowName: binding.WorkflowName, StepName: binding.StepName,
 		Solution: binding.Solution, SolutionRev: binding.SolutionRev,
@@ -107,7 +135,7 @@ func (i *ModelSessionCapabilityIssuer) Issue(binding ModelSessionCapabilityBindi
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:     uuid.NewString(),
 			Issuer: memoryCapabilityIssuer, Audience: jwt.ClaimStrings{audience},
-			IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(i.ttl)),
+			IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
 	}
 	return i.keys.Sign(claims)
@@ -151,7 +179,8 @@ func (i *ModelSessionCapabilityIssuer) VerifyClaims(token string) (*ModelSession
 
 func modelSessionBindingFromClaims(claims *ModelSessionCapabilityClaims) ModelSessionCapabilityBinding {
 	return ModelSessionCapabilityBinding{
-		Namespace: claims.Namespace, AgentName: claims.AgentName, AgentIdentityName: claims.AgentIdentityName,
+		WorkflowTask: claims.WorkflowTask,
+		Namespace:    claims.Namespace, AgentName: claims.AgentName, AgentIdentityName: claims.AgentIdentityName,
 		InstanceName: claims.InstanceName, InstanceUID: claims.InstanceUID, SessionID: claims.SessionID,
 		WorkflowName: claims.WorkflowName, StepName: claims.StepName,
 		Solution: claims.Solution, SolutionRev: claims.SolutionRev,
@@ -167,6 +196,9 @@ func validateModelSessionBinding(binding ModelSessionCapabilityBinding) error {
 	}
 	if binding.Namespace == "" || binding.AgentName == "" || binding.AgentIdentityName == "" || binding.InstanceName == "" || binding.InstanceUID == "" || binding.SessionID == "" || binding.ModelName == "" || binding.ModelResourceVersion <= 0 {
 		return fmt.Errorf("runtime model session capability requires every binding field")
+	}
+	if task := binding.WorkflowTask; task != nil && (task.Workspace == "" || task.RunUID == "" || task.Step == "" || task.ActivationID == "" || task.Attempt < 1 || task.InvocationID == "" || task.TaskID == "") {
+		return fmt.Errorf("runtime model workflow task binding requires every field")
 	}
 	if candidate := binding.CandidateBinding; candidate != nil && (candidate.Namespace != binding.Namespace || candidate.ModelName == "" || candidate.ModelUID == "" || candidate.ModelResourceVersion <= 0 || !modelinvocation.ValidDigest(candidate.SpecDigest)) {
 		return fmt.Errorf("runtime model capability candidate binding is invalid")

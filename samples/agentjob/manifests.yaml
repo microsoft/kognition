@@ -1,0 +1,25 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# AgentJob Sample
+#
+# A one-shot agent task: the controller runs hello-agent once with the given
+# input, retries up to backoffLimit times, and records the output in status.
+#
+# Prereq: samples/simple-agent (Agent hello-agent, Model gpt-6-luna).
+#
+# Observe:
+#   kubectl get agentjobs.kognition.dev
+#   kubectl get agentjob hello-agent-job -o jsonpath='{.status}'
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentJob
+metadata:
+  name: hello-agent-job
+  namespace: default
+spec:
+  agentRef:
+    name: hello-agent
+  input: "In two sentences, explain what a Kubernetes custom resource is."
+  backoffLimit: 1
+  completionPolicy: Success

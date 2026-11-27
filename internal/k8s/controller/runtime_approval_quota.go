@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	k8s "github.com/kognition-ai/kognition/api/k8s/v1alpha1"
+	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/store"
 )
 
@@ -67,23 +68,30 @@ func (s *StoreAdapter) ConfigureRuntimeApprovalQuota(limits RuntimeApprovalQuota
 }
 
 func runtimeApprovalQuotaTicketFor(object *k8s.RuntimeApproval, chargedBytes int64) *k8s.RuntimeApprovalQuotaTicket {
-	return &k8s.RuntimeApprovalQuotaTicket{
+	ticket := &k8s.RuntimeApprovalQuotaTicket{
 		TypeMeta: metav1.TypeMeta{APIVersion: k8s.GroupVersion.String(), Kind: "RuntimeApprovalQuotaTicket"},
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: object.Namespace, Name: object.Name,
 			Finalizers: []string{k8s.RuntimeApprovalQuotaTicketRetirementFinalizer},
 		},
 		Spec: k8s.RuntimeApprovalQuotaTicketSpec{
+			ActorKind: object.Spec.ActorKind,
 			Workspace: object.Spec.Workspace, InvocationID: object.Spec.InvocationID,
 			AgentRef: object.Spec.AgentRef, Binding: object.Spec.Binding,
 			Phase: k8s.RuntimeApprovalQuotaTicketPhaseLive, ChargedBytes: chargedBytes,
 			CreatedAt: object.Spec.CreatedAt,
 		},
 	}
+	if object.Spec.ExecutorAction != nil {
+		executor := object.Spec.ExecutorAction.Executor
+		ticket.Spec.ExecutorRef = &executor
+	}
+	return ticket
 }
 
 func sameRuntimeApprovalQuotaTicketIdentity(existing, candidate *k8s.RuntimeApprovalQuotaTicket) bool {
 	return existing.Namespace == candidate.Namespace && existing.Name == candidate.Name &&
+		existing.Spec.ActorKind == candidate.Spec.ActorKind && reflect.DeepEqual(existing.Spec.ExecutorRef, candidate.Spec.ExecutorRef) &&
 		existing.Spec.Workspace == candidate.Spec.Workspace && existing.Spec.InvocationID == candidate.Spec.InvocationID &&
 		reflect.DeepEqual(existing.Spec.AgentRef, candidate.Spec.AgentRef) &&
 		reflect.DeepEqual(existing.Spec.Binding, candidate.Spec.Binding) &&
@@ -118,7 +126,9 @@ func (s *StoreAdapter) reserveRuntimeApprovalQuotaTicket(ctx context.Context, ob
 		item := &list.Items[i]
 		workspaceRecords++
 		workspaceBytes += item.Spec.ChargedBytes
-		if item.Spec.AgentRef.UID == candidate.Spec.AgentRef.UID {
+		if item.Spec.ActorKind == candidate.Spec.ActorKind &&
+			(candidate.Spec.ActorKind == api.RuntimeApprovalActorExecutor && reflect.DeepEqual(item.Spec.ExecutorRef, candidate.Spec.ExecutorRef) ||
+				candidate.Spec.ActorKind == "" && item.Spec.AgentRef.UID == candidate.Spec.AgentRef.UID) {
 			agentRecords++
 			agentBytes += item.Spec.ChargedBytes
 		}

@@ -168,8 +168,9 @@ type WorkflowBudget struct {
 	MaxTokensPerCycle int64 `json:"maxTokensPerCycle,omitempty"`
 }
 
-// WorkflowStepType discriminates between agent-backed and tool-backed steps.
-// +kubebuilder:validation:Enum=agent;tool
+// WorkflowStepType discriminates between agent-backed, tool-backed, and
+// collaboration steps.
+// +kubebuilder:validation:Enum=agent;tool;collaboration
 type WorkflowStepType string
 
 const (
@@ -177,10 +178,13 @@ const (
 	WorkflowStepTypeAgent WorkflowStepType = "agent"
 	// WorkflowStepTypeTool invokes a Tool directly, with no AgentJob or LLM round-trip.
 	WorkflowStepTypeTool WorkflowStepType = "tool"
+	// WorkflowStepTypeCollaboration runs a governed multi-agent collaboration.
+	WorkflowStepTypeCollaboration WorkflowStepType = "collaboration"
 )
 
 // WorkflowStep defines a single step in a workflow DAG.
 // Steps are pure execution nodes; all topology is expressed through Edges.
+// +kubebuilder:validation:XValidation:rule="(has(self.type) && self.type == 'collaboration') == has(self.collaboration)",message="collaboration is required exactly when type is collaboration"
 type WorkflowStep struct {
 	// Name is the unique step identifier within this workflow.
 	Name string `json:"name"`
@@ -224,6 +228,11 @@ type WorkflowStep struct {
 	// MemoryClaim overrides the workflow-level MemoryClaim for this step.
 	// +optional
 	MemoryClaim *WorkflowMemoryClaim `json:"memoryClaim,omitempty"`
+
+	// Collaboration configures the step when type="collaboration" and must be
+	// empty for every other type.
+	// +optional
+	Collaboration *WorkflowCollaboration `json:"collaboration,omitempty"`
 }
 
 // WorkflowStepRetry configures retry behavior for a workflow step.

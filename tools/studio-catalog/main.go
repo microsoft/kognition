@@ -113,7 +113,7 @@ func catalog(root string) ([]byte, error) {
 		switch kind {
 		case "AutonomyClass", "TrustProfile", "Workspace", "AgentPolicy", "CognitiveAdmissionPolicy",
 			"CognitiveQuota", "CognitiveLimitRange", "AgentRole", "AgentRoleBinding",
-			"AgentCommunicationPolicy", "ModelGrant", "MemoryGrant", "ToolGrant", "CrossNamespaceGrant":
+			"AgentCommunicationPolicy", "ModelGrant", "MemoryGrant", "ToolGrant", "CrossNamespaceGrant", "ExternalAgentGrant":
 			r.Group = "Govern"
 		case "MemoryClass", "MemoryClaim", "KnowledgeBaseClass", "KnowledgeBaseClaim", "SecretRef", "KnowledgeBaseIndexSchedule":
 			r.Group = "Operate"

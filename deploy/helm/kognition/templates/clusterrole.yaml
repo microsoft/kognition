@@ -16,6 +16,14 @@ rules:
   - apiGroups: ["kognition.dev"]
     resources: ["knowledgebindingrecords"]
     verbs: ["get", "create"]
+  {{- if .Values.k8sController.workflowExecutor.enabled }}
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+  {{- end }}
   {{- if .Values.knowledgeGateway.enabled }}
   - apiGroups: ["knowledge.kognition.dev"]
     resources: ["knowledgebaseclasses"]
@@ -115,6 +123,14 @@ rules:
   - apiGroups: ["kognition.dev"]
     resources: ["modelinvocationprofiles"]
     verbs: ["get", "list", "watch"]
+  # ExternalAgent is read-only for the controller except for its status. The
+  # controller never creates, edits or deletes external agents or their grants.
+  - apiGroups: ["kognition.dev"]
+    resources: ["externalagents", "externalagentgrants"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kognition.dev"]
+    resources: ["externalagents/status"]
+    verbs: ["get", "update", "patch"]
   - apiGroups: ["kognition.dev"]
     resources: ["runtimeapprovals"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -157,6 +173,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "services"]
     verbs: ["get", "list", "watch"]
+  {{- if $.Values.k8sController.workflowExecutor.enabled }}
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    resourceNames: [{{ include "kognition.controllerServiceAccountName" $ | quote }}]
+    verbs: ["get"]
+  {{- end }}
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch"]
@@ -179,6 +201,12 @@ rules:
       - configmaps
     verbs: ["get", "list", "watch", "create", "delete"]
   {{- if ne $namespace $.Release.Namespace }}
+  {{- if dig "enabled" false (include "kognition.workflowCollaboration" $ | fromJson) }}
+  # Collaboration ledgers are updated in place; admission confines this to wfc-* records.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["update"]
+  {{- end }}
   - apiGroups: [""]
     resources: ["configmaps"]
     resourceNames: ["kognition-knowledge-gateway-ca"]

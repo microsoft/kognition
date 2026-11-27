@@ -43,17 +43,20 @@ const (
 // It marshals/unmarshals K8s resources to []byte using the internal types via
 // the convert layer, allowing existing reconcilers to operate unchanged.
 type StoreAdapter struct {
-	client                      client.Client
-	runtimeApprovalReader       client.Reader
-	controlNamespace            string
-	toolInvocationReceiptWriter string
-	now                         func() time.Time
-	maximumClockSkew            time.Duration
-	runtimeApprovalQuota        RuntimeApprovalQuotaLimits
-	runtimeApprovalClockHealth  func() error
-	runtimeApprovalBindingMu    sync.RWMutex
-	runtimeApprovalActivationMu sync.Mutex
-	runtimeApprovalBindingKeys  runtimeapproval.BindingKeyStore
+	client                        client.Client
+	runtimeApprovalReader         client.Reader
+	workflowExecutorReader        client.Reader
+	workflowExecutorAuthorization *WorkflowExecutorKubernetesAuthorization
+	workflowExecutorRecords       *WorkflowExecutorRecordStore
+	controlNamespace              string
+	toolInvocationReceiptWriter   string
+	now                           func() time.Time
+	maximumClockSkew              time.Duration
+	runtimeApprovalQuota          RuntimeApprovalQuotaLimits
+	runtimeApprovalClockHealth    func() error
+	runtimeApprovalBindingMu      sync.RWMutex
+	runtimeApprovalActivationMu   sync.Mutex
+	runtimeApprovalBindingKeys    runtimeapproval.BindingKeyStore
 }
 
 var _ runtimeapproval.TrustProfileIndexValidator = (*StoreAdapter)(nil)
@@ -285,7 +288,10 @@ func (s *StoreAdapter) UpdateAndGet(ctx context.Context, kind, namespace, name s
 	}
 
 	statusNeedsUpdate := kindHasStatusSubresource(kind) && statusChanged(current, obj)
-	nonStatusChanged := metadataChanged(current, obj)
+	// Compare against the live object in the internal representation, so a
+	// value the API server stores in another spelling (a duration "5m" that
+	// round-trips as "5m0s") does not turn a status write into a spec write.
+	nonStatusChanged := metadataChanged(s.normalizedThroughInternal(kind, current), obj)
 
 	// Only perform the spec/metadata update if something changed.
 	if nonStatusChanged {
@@ -661,6 +667,20 @@ func instanceEventName(kind, name string) string {
 	return prefix + "-" + uuid.NewString()
 }
 
+// normalizedThroughInternal returns obj as it reads back from the internal
+// representation. It returns obj unchanged when the conversion is unavailable.
+func (s *StoreAdapter) normalizedThroughInternal(kind string, obj client.Object) client.Object {
+	data, err := s.marshalToInternal(kind, obj)
+	if err != nil {
+		return obj
+	}
+	normalized, err := s.unmarshalFromInternal(kind, data)
+	if err != nil {
+		return obj
+	}
+	return normalized
+}
+
 // marshalToInternal converts a K8s runtime object to internal JSON via the convert layer.
 func (s *StoreAdapter) marshalToInternal(kind string, obj client.Object) ([]byte, error) {
 	switch kind {
@@ -722,6 +742,10 @@ func (s *StoreAdapter) marshalToInternal(kind string, obj client.Object) ([]byte
 		return json.Marshal(convert.ModelClassFromK8s(resource))
 	case "ModelInvocationProfile":
 		return marshalConverted(obj, "*k8s.ModelInvocationProfile", convert.ModelInvocationProfileFromK8s)
+	case "ExternalAgent":
+		return marshalConverted(obj, "*k8s.ExternalAgent", convert.ExternalAgentFromK8s)
+	case "ExternalAgentGrant":
+		return marshalConverted(obj, "*k8s.ExternalAgentGrant", convert.ExternalAgentGrantFromK8s)
 	case "ModelGrant":
 		resource, ok := obj.(*k8s.ModelGrant)
 		if !ok || resource == nil {
@@ -896,6 +920,10 @@ func (s *StoreAdapter) marshalListToInternal(kind string, listObj client.ObjectL
 		return marshalConvertedList(listObj, "*k8s.ModelClassList", func(list *k8s.ModelClassList) []k8s.ModelClass { return list.Items }, convert.ModelClassFromK8s)
 	case "ModelInvocationProfile":
 		return marshalConvertedList(listObj, "*k8s.ModelInvocationProfileList", func(list *k8s.ModelInvocationProfileList) []k8s.ModelInvocationProfile { return list.Items }, convert.ModelInvocationProfileFromK8s)
+	case "ExternalAgent":
+		return marshalConvertedList(listObj, "*k8s.ExternalAgentList", func(list *k8s.ExternalAgentList) []k8s.ExternalAgent { return list.Items }, convert.ExternalAgentFromK8s)
+	case "ExternalAgentGrant":
+		return marshalConvertedList(listObj, "*k8s.ExternalAgentGrantList", func(list *k8s.ExternalAgentGrantList) []k8s.ExternalAgentGrant { return list.Items }, convert.ExternalAgentGrantFromK8s)
 	case "ModelGrant":
 		return marshalConvertedList(listObj, "*k8s.ModelGrantList", func(list *k8s.ModelGrantList) []k8s.ModelGrant { return list.Items }, convert.ModelGrantFromK8s)
 	case "AutonomyClass":
@@ -1067,6 +1095,18 @@ func (s *StoreAdapter) unmarshalFromInternal(kind string, data []byte) (client.O
 			return nil, fmt.Errorf("unmarshal %s from internal: %w", kind, err)
 		}
 		return convert.ModelInvocationProfileToK8s(&internal), nil
+	case "ExternalAgent":
+		var internal api.ExternalAgent
+		if err := json.Unmarshal(data, &internal); err != nil {
+			return nil, fmt.Errorf("unmarshal %s from internal: %w", kind, err)
+		}
+		return convert.ExternalAgentToK8s(&internal), nil
+	case "ExternalAgentGrant":
+		var internal api.ExternalAgentGrant
+		if err := json.Unmarshal(data, &internal); err != nil {
+			return nil, fmt.Errorf("unmarshal %s from internal: %w", kind, err)
+		}
+		return convert.ExternalAgentGrantToK8s(&internal), nil
 	case "ModelGrant":
 		var internal api.ModelGrant
 		if err := json.Unmarshal(data, &internal); err != nil {
@@ -1325,6 +1365,10 @@ func (s *StoreAdapter) newObject(kind string) (client.Object, error) {
 		return &k8s.ModelClass{}, nil
 	case "ModelInvocationProfile":
 		return &k8s.ModelInvocationProfile{}, nil
+	case "ExternalAgent":
+		return &k8s.ExternalAgent{}, nil
+	case "ExternalAgentGrant":
+		return &k8s.ExternalAgentGrant{}, nil
 	case "ModelGrant":
 		return &k8s.ModelGrant{}, nil
 	case "AutonomyClass":
@@ -1431,6 +1475,10 @@ func (s *StoreAdapter) newListObject(kind string) (client.ObjectList, error) {
 		return &k8s.ModelClassList{}, nil
 	case "ModelInvocationProfile":
 		return &k8s.ModelInvocationProfileList{}, nil
+	case "ExternalAgent":
+		return &k8s.ExternalAgentList{}, nil
+	case "ExternalAgentGrant":
+		return &k8s.ExternalAgentGrantList{}, nil
 	case "ModelGrant":
 		return &k8s.ModelGrantList{}, nil
 	case "AutonomyClass":
@@ -1559,7 +1607,7 @@ func isClusterScopedKind(kind string) bool {
 
 func kindHasStatusSubresource(kind string) bool {
 	switch kind {
-	case "AgentRole", "AgentRoleBinding", "AgentCommunicationPolicy", "AutonomyClass", "CognitiveAdmissionPolicy", "CognitiveLimitRange", "CrossNamespaceGrant", "MemoryGrant", "ModelGrant", "ModelInvocationProfile":
+	case "AgentRole", "AgentRoleBinding", "AgentCommunicationPolicy", "AutonomyClass", "CognitiveAdmissionPolicy", "CognitiveLimitRange", "CrossNamespaceGrant", "MemoryGrant", "ModelGrant", "ModelInvocationProfile", "ExternalAgentGrant":
 		return false
 	default:
 		return true

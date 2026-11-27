@@ -247,6 +247,37 @@ func TestEventEmitter_ReconcileErrorTakesPrecedenceOverStatus(t *testing.T) {
 	}
 }
 
+func TestEventEmitter_SkipsClusterScopedObjects(t *testing.T) {
+	recorder := events.NewFakeRecorder(1)
+	obj := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kognition.dev/v1alpha1",
+		"kind":       "KnowledgeBaseClass",
+		"metadata":   map[string]interface{}{"name": "pgvector-default"},
+		"status":     map[string]interface{}{"phase": "Failed"},
+	}}
+	scheme := runtime.NewScheme()
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "kognition.dev", Version: "v1alpha1", Kind: "KnowledgeBaseClass"},
+		&unstructured.Unstructured{},
+	)
+	emitter := &eventEmitter{
+		client:   fake.NewClientBuilder().WithScheme(scheme).WithObjects(obj).Build(),
+		recorder: recorder,
+		kind:     "KnowledgeBaseClass",
+		lastSeen: make(map[types.NamespacedName]string),
+	}
+
+	emitter.emit(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "pgvector-default"},
+	}, fmt.Errorf("provider unavailable"))
+
+	select {
+	case event := <-recorder.Events:
+		t.Fatalf("unexpected event for cluster-scoped object: %q", event)
+	default:
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TC-0274: fingerprint unit tests
 // ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
+	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/admission"
 	"github.com/kognition-ai/kognition/internal/auth"
 	"github.com/kognition-ai/kognition/internal/controlplaneauth"
@@ -26,6 +27,7 @@ import (
 	"github.com/kognition-ai/kognition/internal/opa"
 	"github.com/kognition-ai/kognition/internal/requestid"
 	"github.com/kognition-ai/kognition/internal/runtime"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval"
 	"github.com/kognition-ai/kognition/internal/store"
 	intentgatewayv1alpha1 "github.com/kognition-ai/kognition/proto/gen/kognition/v1alpha1"
 )
@@ -172,6 +174,20 @@ func WithControlPlaneAdminGroups(groups []string) Option {
 	}
 }
 
+func WithWorkflowExecutorPrincipals(principals []api.ControlPlaneRoleSubject) Option {
+	return func(s *Server) {
+		s.workflowExecutorPrincipals = append([]api.ControlPlaneRoleSubject(nil), principals...)
+	}
+}
+
+func WithWorkflowExecutorClock(clock func(context.Context) (time.Time, error)) Option {
+	return func(s *Server) { s.workflowExecutorClock = clock }
+}
+
+func WithWorkflowExecutorInitiation(service *runtimeapproval.WorkflowExecutorInitiationService, target func(context.Context, runtimeapproval.WorkflowExecutorAction) error) Option {
+	return func(s *Server) { s.workflowExecutorInitiation, s.workflowExecutorInitiationTarget = service, target }
+}
+
 func WithAgentServiceToken(token string) Option {
 	return func(s *Server) {
 		s.agentServiceToken = token
@@ -204,12 +220,16 @@ type Server struct {
 	grpcServer            *grpc.Server
 	grpcListener          net.Listener
 
-	authenticator           auth.Authenticator
-	authRequiredGroups      []string
-	controlPlaneAdminGroups []string
-	agentServiceToken       string
-	runtimeApprovals        store.RuntimeApprovalExecutionStore
-	approvalAuthorizer      runtimeApprovalAuthorizer
+	authenticator                    auth.Authenticator
+	authRequiredGroups               []string
+	controlPlaneAdminGroups          []string
+	workflowExecutorPrincipals       []api.ControlPlaneRoleSubject
+	workflowExecutorClock            func(context.Context) (time.Time, error)
+	workflowExecutorInitiation       *runtimeapproval.WorkflowExecutorInitiationService
+	workflowExecutorInitiationTarget func(context.Context, runtimeapproval.WorkflowExecutorAction) error
+	agentServiceToken                string
+	runtimeApprovals                 store.RuntimeApprovalExecutionStore
+	approvalAuthorizer               runtimeApprovalAuthorizer
 }
 
 type APIServerStore interface {
@@ -283,6 +303,15 @@ func (s *Server) registerRoutes() {
 	// Health endpoints
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /readyz", s.handleReadyz)
+
+	s.mux.HandleFunc("POST /internal/workflow-execution/namespaces/{namespace}/bindings", s.handleWorkflowBindingCreate)
+	s.mux.HandleFunc("GET /internal/workflow-execution/namespaces/{namespace}/bindings/{name}", s.handleWorkflowBindingGet)
+	s.mux.HandleFunc("PUT /internal/workflow-execution/namespaces/{namespace}/bindings/{name}", s.handleWorkflowBindingUpdate)
+	s.mux.HandleFunc("DELETE /internal/workflow-execution/namespaces/{namespace}/bindings/{name}", s.handleWorkflowBindingRevoke)
+	s.mux.HandleFunc("POST /internal/workflow-execution/namespaces/{namespace}/runs", s.handleAcceptedWorkflowRun)
+	s.mux.HandleFunc("POST /internal/workflow-execution/namespaces/{namespace}/initiation-capabilities", s.handleWorkflowExecutorCapability)
+	s.mux.HandleFunc("POST /internal/workflow-execution/namespaces/{namespace}/initiations/resolve", s.handleWorkflowExecutorInitiationResolve)
+	s.mux.HandleFunc("POST /internal/workflow-execution/namespaces/{namespace}/initiations/dispatch", s.handleWorkflowExecutorInitiationDispatch)
 
 	// Resource CRUD — pattern: /apis/{group}/{version}/namespaces/{namespace}/{resource}
 	s.mux.HandleFunc("GET /apis/kognition.dev/v1alpha1/namespaces/{namespace}/{resource}", s.handleList)

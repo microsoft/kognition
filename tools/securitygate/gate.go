@@ -23,7 +23,7 @@ import (
 )
 
 const migrationTarget = "kognition/templates/migrations-configmap.yaml"
-const migrationDigest = "c483d0002492b09345f9a83b328a8b8391c903ff30cb195ce40fa7bedacce2ca"
+const migrationDigest = "f8e065bd90189aaf58675f94b9791a2e3f3ad57adc8ae4a8b0bff654cedc6ad9"
 const migrationMessage = `ConfigMap 'security-test-kognition-migrations' in 'control' namespace stores secrets in key(s) or value(s) '{"        (status <> 'Prepared' AND preparation_token ", "006_token_reservations.sql", "007_token_reservation_quota_periods.sql"}'`
 
 type finding struct {
@@ -222,7 +222,7 @@ func verifyMigration(root string) error {
 		return errors.New("migration labels changed; a new review is required")
 	}
 	data, ok := document["data"].(map[string]any)
-	if !ok || len(data) != 37 {
+	if !ok || len(data) != 38 {
 		return errors.New("migration key set changed")
 	}
 	keys := make([]string, 0, len(data))

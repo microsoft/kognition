@@ -1539,6 +1539,9 @@ func checkedTokenDelta(current, delta int64) (int64, error) {
 // Get retrieves a resource by kind, namespace, and name.
 // The returned JSON has metadata.resourceVersion injected from the DB column.
 func (s *Store) Get(ctx context.Context, kind, namespace, name string) ([]byte, error) {
+	if privateWorkflowRecord(kind) {
+		return nil, store.ErrConflict
+	}
 	var data []byte
 	var resourceVersion int64
 	var uid string
@@ -1584,6 +1587,9 @@ func injectResourceIdentity(data []byte, uid string, rv int64) []byte {
 
 // List returns all resources matching the query.
 func (s *Store) List(ctx context.Context, kind string, opts store.ListOptions) ([][]byte, error) {
+	if privateWorkflowRecord(kind) {
+		return nil, store.ErrConflict
+	}
 	query := `SELECT data, resource_version, id::text FROM resources WHERE kind = $1 AND deleted_at IS NULL`
 	args := []any{kind}
 
@@ -1647,6 +1653,9 @@ func (s *Store) Create(ctx context.Context, kind, namespace, name string, data [
 // CreateAndGet persists a resource using the PostgreSQL row UUID as its
 // standalone incarnation and returns exactly the representation stored.
 func (s *Store) CreateAndGet(ctx context.Context, kind, namespace, name string, data []byte) ([]byte, error) {
+	if privateWorkflowRecord(kind) {
+		return nil, store.ErrConflict
+	}
 	uid := uuid.NewString()
 	stored := injectResourceIdentity(data, uid, 1)
 	_, err := s.pool.Exec(ctx,
@@ -1728,6 +1737,9 @@ func (s *Store) Update(ctx context.Context, kind, namespace, name string, data [
 // UpdateAndGet modifies a resource and returns the representation written by
 // the same SQL statement, avoiding a race with a subsequent reader.
 func (s *Store) UpdateAndGet(ctx context.Context, kind, namespace, name string, data []byte, resourceVersion int64) ([]byte, error) {
+	if privateWorkflowRecord(kind) {
+		return nil, store.ErrConflict
+	}
 	var newVersion int64
 	var updatedData []byte
 	var uid string
@@ -1813,6 +1825,9 @@ func (s *Store) UpdateControlPlaneRoleBinding(ctx context.Context, namespace, na
 
 // Delete soft-deletes a resource.
 func (s *Store) Delete(ctx context.Context, kind, namespace, name string) error {
+	if privateWorkflowRecord(kind) {
+		return store.ErrConflict
+	}
 	var data []byte
 	var resourceVersion int64
 	var uid string
@@ -1932,6 +1947,9 @@ func (s *Store) DeleteControlPlaneRoleBinding(ctx context.Context, namespace, na
 
 // Watch returns a channel of events for a resource kind.
 func (s *Store) Watch(ctx context.Context, kind string, opts store.ListOptions) (<-chan store.WatchEvent, error) {
+	if privateWorkflowRecord(kind) {
+		return nil, store.ErrConflict
+	}
 	ch := make(chan store.WatchEvent, 64)
 
 	s.mu.Lock()
@@ -2258,6 +2276,9 @@ func (s *Store) exists(ctx context.Context, kind, namespace, name string) (bool,
 
 // CreateRevision stores an immutable revision snapshot for a resource.
 func (s *Store) CreateRevision(ctx context.Context, kind, namespace, name string, revision int64, spec, data []byte) error {
+	if privateWorkflowRecord(kind) {
+		return store.ErrConflict
+	}
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO resource_revisions (kind, namespace, name, revision, spec, data)
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -2268,6 +2289,9 @@ func (s *Store) CreateRevision(ctx context.Context, kind, namespace, name string
 
 // ListRevisions returns all revisions for a resource, ordered by revision number.
 func (s *Store) ListRevisions(ctx context.Context, kind, namespace, name string) ([]store.Revision, error) {
+	if privateWorkflowRecord(kind) {
+		return nil, store.ErrConflict
+	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT revision, spec, data, created_at, created_by
 		 FROM resource_revisions
@@ -2295,6 +2319,9 @@ func (s *Store) ListRevisions(ctx context.Context, kind, namespace, name string)
 
 // GetRevision retrieves a specific revision of a resource.
 func (s *Store) GetRevision(ctx context.Context, kind, namespace, name string, revision int64) (*store.Revision, error) {
+	if privateWorkflowRecord(kind) {
+		return nil, store.ErrConflict
+	}
 	var rev store.Revision
 	var createdAt time.Time
 	err := s.pool.QueryRow(ctx,
@@ -2315,6 +2342,9 @@ func (s *Store) GetRevision(ctx context.Context, kind, namespace, name string, r
 
 // AppendEvent appends an execution event for a resource instance.
 func (s *Store) AppendEvent(ctx context.Context, kind, namespace, name string, event store.InstanceEvent) error {
+	if privateWorkflowRecord(kind) {
+		return store.ErrConflict
+	}
 	details, err := json.Marshal(event.Details)
 	if err != nil {
 		return fmt.Errorf("marshal event details: %w", err)
@@ -2329,6 +2359,9 @@ func (s *Store) AppendEvent(ctx context.Context, kind, namespace, name string, e
 
 // ListEvents returns all events for a resource instance, ordered by timestamp ascending.
 func (s *Store) ListEvents(ctx context.Context, kind, namespace, name string) ([]store.InstanceEvent, error) {
+	if privateWorkflowRecord(kind) {
+		return nil, store.ErrConflict
+	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT event_type, reason, message, details, created_at
 		 FROM instance_events

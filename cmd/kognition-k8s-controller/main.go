@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -22,12 +23,16 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
+	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/admission"
 	intctrl "github.com/kognition-ai/kognition/internal/controller"
 	"github.com/kognition-ai/kognition/internal/cpi"
@@ -250,6 +255,28 @@ func runControllerWithManager(
 	if err := st.ConfigureRuntimeApprovalClock(maximumClockSkew, k8sctrl.NewHostClockHealthCheck(maximumClockSkew)); err != nil {
 		return fmt.Errorf("configure RuntimeApproval host clock: %w", err)
 	}
+	executionRecords, err := k8sctrl.NewWorkflowExecutorRecordStore(mgr.GetClient(), mgr.GetAPIReader(), controllerNamespace, func() (time.Time, error) { return st.WorkflowExecutorClock(context.Background()) })
+	if err != nil {
+		return fmt.Errorf("configure protected Workflow execution records: %w", err)
+	}
+	if err := st.ConfigureWorkflowExecutorRecords(executionRecords); err != nil {
+		return err
+	}
+	if err := st.ConfigureWorkflowExecutorReader(mgr.GetAPIReader()); err != nil {
+		return err
+	}
+	executorConfig, err := workflowExecutorAuthorizationFromEnv(context.Background(), mgr.GetConfig(), mgr.GetAPIReader(), controllerNamespace)
+	if err != nil {
+		return fmt.Errorf("configure native Workflow executor identity: %w", err)
+	}
+	if executorConfig != nil {
+		if options.disableWebhooks {
+			return fmt.Errorf("configured Workflow executor requires admission protection")
+		}
+		if err := st.ConfigureWorkflowExecutorAuthorization(*executorConfig); err != nil {
+			return err
+		}
+	}
 	if err := mgr.AddReadyzCheck("runtime-approval-clock", func(*http.Request) error {
 		return st.RuntimeApprovalClockReady()
 	}); err != nil {
@@ -272,6 +299,29 @@ func runControllerWithManager(
 		return st.RuntimeApprovalBindingKeysReady(request.Context())
 	}); err != nil {
 		return fmt.Errorf("register RuntimeApproval binding-key readiness: %w", err)
+	}
+	var workflowSubmissions *webhook.WorkflowRunSubmissionService
+	if executorConfig != nil {
+		reviews, err := kubernetes.NewForConfig(mgr.GetConfig())
+		if err != nil {
+			return fmt.Errorf("configure Workflow submission access reviews: %w", err)
+		}
+		workflowSubmissions = &webhook.WorkflowRunSubmissionService{
+			Authorizer: &webhook.WorkflowUseAdmissionAuthorizer{Reader: mgr.GetAPIReader(), AccessReviews: reviews.AuthorizationV1().SubjectAccessReviews()},
+			Bindings:   executionRecords, Receipts: executionRecords, Keys: bindingKeys, RecordNamespace: controllerNamespace,
+			CurrentWriter: st.AuthenticatedWorkflowExecutorUser,
+			Clock: func() (time.Time, error) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := st.RuntimeApprovalBindingKeysReady(ctx); err != nil {
+					return time.Time{}, err
+				}
+				return st.WorkflowExecutorClock(ctx)
+			},
+		}
+		if err := st.ConfigureWorkflowRunSubmission(workflowSubmissions); err != nil {
+			return fmt.Errorf("configure verified Workflow submission finalizer: %w", err)
+		}
 	}
 	if err := configureCanaryOperationRetention(mgr, st, logger, os.Getenv("KOGNITION_CANARY_OPERATION_RETENTION")); err != nil {
 		return err
@@ -345,10 +395,37 @@ func runControllerWithManager(
 	}
 	defer closeIdentityReader()
 	if identityReader != nil {
+		if workflowSubmissions != nil {
+			assembly.reconcilers = append(assembly.reconcilers, k8sctrl.NewWorkflowRunSubmissionReconciler(mgr.GetAPIReader(), st))
+		}
 		for _, reconciler := range assembly.reconcilers {
 			if identityAdapter, ok := reconciler.(*k8sctrl.AgentIdentityReconcilerAdapter); ok {
 				identityAdapter.ConfigureWorkloadIdentityReader(st, identityReader)
 			}
+		}
+	}
+	externalOn, err := externalAgentsEnabled(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("configure external agents: %w", err)
+	}
+	collaborationRunner, err := workflowCollaborationRunnerFromEnv(mgr, st, intctrl.NewCommunicationPolicyEngine(st, logger.Named("workflow-collaboration-policy")), auditLog, logger)
+	if err != nil {
+		return fmt.Errorf("configure workflow collaboration: %w", err)
+	}
+	if collaborationRunner != nil {
+		for _, reconciler := range assembly.reconcilers {
+			switch adapter := reconciler.(type) {
+			case *k8sctrl.WorkflowReconcilerAdapter:
+				adapter.SetCollaborationRunner(collaborationRunner)
+			case *k8sctrl.WorkflowRunReconcilerAdapter:
+				adapter.SetCollaborationRunner(collaborationRunner)
+			}
+		}
+		enableCollaborationAdmission(assembly.validating, externalOn)
+	}
+	if externalOn {
+		if _, err := enableExternalAgentAdmission(assembly.validating, os.Getenv); err != nil {
+			return fmt.Errorf("configure external agents: %w", err)
 		}
 	}
 	runtimeApprovalRetention, err := k8sctrl.RuntimeApprovalTombstoneRetention(os.Getenv("KOGNITION_RUNTIME_APPROVAL_TOMBSTONE_RETENTION"))
@@ -367,11 +444,16 @@ func runControllerWithManager(
 	}
 
 	chain := admission.NewChain(assembly.mutating, assembly.validating)
+	bindingOptions, err := workflowBindingWebhookOptionsFromEnv(controllerNamespace, mgr.GetAPIReader())
+	if err != nil {
+		return err
+	}
+	if options.disableWebhooks && os.Getenv(runtimeapproval.WorkflowExecutorPrincipalsEnvironmentVariable) != "" {
+		return fmt.Errorf("configured Workflow execution bindings cannot disable admission webhooks")
+	}
+	bindingOptions = append(bindingOptions, webhook.WithAuditLog(auditLog), webhook.WithRuntimeApprovalDecisionStore(st, runtimeApprovalAdmissionUsernamesFromEnv()...), webhook.WithWorkflowRunSubmissions(workflowSubmissions))
 	if err := setupWebhooks(options.disableWebhooks, func() error {
-		return webhook.SetupWithManager(mgr, chain, logger,
-			webhook.WithAuditLog(auditLog),
-			webhook.WithRuntimeApprovalDecisionStore(st, runtimeApprovalAdmissionUsernamesFromEnv()...),
-		)
+		return webhook.SetupWithManager(mgr, chain, logger, bindingOptions...)
 	}); err != nil {
 		return fmt.Errorf("setup webhooks: %w", err)
 	}
@@ -423,6 +505,16 @@ func runResourceWebhooksWithManager(options controllerOptions, logger *zap.Logge
 	if err := st.ConfigureRuntimeApprovalClock(skew, k8sctrl.NewHostClockHealthCheck(skew)); err != nil {
 		return fmt.Errorf("configure admission RuntimeApproval clock: %w", err)
 	}
+	executionRecords, err := k8sctrl.NewWorkflowExecutorRecordStore(direct, direct, namespace, func() (time.Time, error) { return st.WorkflowExecutorClock(context.Background()) })
+	if err != nil {
+		return fmt.Errorf("configure protected admission Workflow execution records: %w", err)
+	}
+	if err := st.ConfigureWorkflowExecutorRecords(executionRecords); err != nil {
+		return err
+	}
+	if err := st.ConfigureWorkflowExecutorReader(direct); err != nil {
+		return err
+	}
 	keys, err := runtimeapproval.BindingKeyStoreFromJSON(os.Getenv(runtimeapproval.BindingKeysEnvironmentVariable))
 	if err != nil {
 		return fmt.Errorf("configure admission binding keys: %w", err)
@@ -444,10 +536,26 @@ func runResourceWebhooksWithManager(options controllerOptions, logger *zap.Logge
 	}
 	mutating, validating := admission.ProductionHooksWithExecutionAuthority(st, opa.NewEngine(), runtimeApprovalDecisionAuthorityFromEnv(), runtimeApprovalExecutionWritersFromEnv(), runtimeApprovalAdmissionUsernamesFromEnv()...)
 	validating = append(validating, cognamespace.NewProductionCrossNamespaceHook(st))
-	if err := webhook.SetupWithManager(mgr, admission.NewChain(mutating, validating), logger,
-		webhook.WithAuditLog(observability.NewCognitiveAuditLog(auditStore)),
-		webhook.WithRuntimeApprovalDecisionStore(st, runtimeApprovalAdmissionUsernamesFromEnv()...),
-	); err != nil {
+	externalOn, err := externalAgentsEnabled(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if enabled, err := workflowCollaborationEnabled(os.Getenv); err != nil {
+		return err
+	} else if enabled {
+		enableCollaborationAdmission(validating, externalOn)
+	}
+	if externalOn {
+		if _, err := enableExternalAgentAdmission(validating, os.Getenv); err != nil {
+			return err
+		}
+	}
+	bindingOptions, err := workflowBindingWebhookOptionsFromEnv(namespace, direct)
+	if err != nil {
+		return err
+	}
+	bindingOptions = append(bindingOptions, webhook.WithAuditLog(observability.NewCognitiveAuditLog(auditStore)), webhook.WithRuntimeApprovalDecisionStore(st, runtimeApprovalAdmissionUsernamesFromEnv()...))
+	if err := webhook.SetupWithManager(mgr, admission.NewChain(mutating, validating), logger, bindingOptions...); err != nil {
 		return fmt.Errorf("setup resource admission: %w", err)
 	}
 	if err := mgr.AddReadyzCheck("resource-webhooks", mgr.GetWebhookServer().StartedChecker()); err != nil {
@@ -458,6 +566,105 @@ func runResourceWebhooksWithManager(options controllerOptions, logger *zap.Logge
 		return fmt.Errorf("start resource admission manager: %w", err)
 	}
 	return nil
+}
+
+func workflowBindingWebhookOptionsFromEnv(namespace string, reader client.Reader) ([]webhook.Option, error) {
+	principals, err := runtimeapproval.WorkflowExecutorPrincipalsFromJSON(os.Getenv(runtimeapproval.WorkflowExecutorPrincipalsEnvironmentVariable))
+	if err != nil {
+		return nil, fmt.Errorf("configure Workflow executor principals: %w", err)
+	}
+	var subjects, groups []string
+	for _, principal := range principals {
+		parts := strings.Split(principal.Subject, ":")
+		if principal.Method != "tokenreview" || principal.Issuer != "kubernetes.io/tokenreview" || len(parts) != 4 || parts[0] != "system" || parts[1] != "serviceaccount" || len(validation.IsDNS1123Label(parts[2])) != 0 || len(validation.IsDNS1123Subdomain(parts[3])) != 0 {
+			return nil, fmt.Errorf("native Workflow executor must identify an exact TokenReview ServiceAccount")
+		}
+		subjects = append(subjects, principal.Subject)
+	}
+	for _, group := range strings.Split(os.Getenv("KOGNITION_WORKFLOW_BINDING_ADMIN_GROUPS"), ",") {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
+		}
+		if strings.Contains(group, "*") || group == "system:authenticated" || group == "system:unauthenticated" || group == "system:serviceaccounts" || strings.HasPrefix(group, "system:serviceaccounts:") || len(group) > 256 || len(groups) >= 16 {
+			return nil, fmt.Errorf("Workflow binding administrators require bounded explicit operator groups")
+		}
+		groups = append(groups, group)
+	}
+	return []webhook.Option{webhook.WithWorkflowBindingAdministrators(namespace, groups, subjects), webhook.WithWorkflowBindingReader(reader)}, nil
+}
+
+func workflowExecutorAuthorizationFromEnv(ctx context.Context, config *rest.Config, reader client.Reader, namespace string) (*k8sctrl.WorkflowExecutorKubernetesAuthorization, error) {
+	principals, err := runtimeapproval.WorkflowExecutorPrincipalsFromJSON(os.Getenv(runtimeapproval.WorkflowExecutorPrincipalsEnvironmentVariable))
+	if err != nil {
+		return nil, err
+	}
+	if len(principals) == 0 {
+		return nil, nil
+	}
+	podName := os.Getenv("KOGNITION_WORKFLOW_EXECUTOR_POD_NAME")
+	tokenFile := os.Getenv("KOGNITION_WORKFLOW_EXECUTOR_TOKEN_FILE")
+	if config == nil || reader == nil || len(validation.IsDNS1123Label(namespace)) != 0 || len(validation.IsDNS1123Subdomain(podName)) != 0 || !filepath.IsAbs(tokenFile) || len(tokenFile) > 4096 {
+		return nil, fmt.Errorf("native executor requires its exact pod, uncached reader and explicit absolute credential file")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	pod := &corev1.Pod{}
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: podName}, pod); err != nil {
+		return nil, fmt.Errorf("read executor pod identity: %w", err)
+	}
+	if pod.UID == "" || pod.DeletionTimestamp != nil || pod.Namespace != namespace || pod.Name != podName || len(validation.IsDNS1123Subdomain(pod.Spec.ServiceAccountName)) != 0 {
+		return nil, fmt.Errorf("executor pod has no exact live ServiceAccount identity")
+	}
+	subject := api.ControlPlaneRoleSubject{Method: "tokenreview", Issuer: "kubernetes.io/tokenreview", Subject: "system:serviceaccount:" + namespace + ":" + pod.Spec.ServiceAccountName}
+	approved := false
+	for _, principal := range principals {
+		approved = approved || principal == subject
+	}
+	if !approved {
+		return nil, fmt.Errorf("executor pod does not match an explicitly configured native principal")
+	}
+	account := &corev1.ServiceAccount{}
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: pod.Spec.ServiceAccountName}, account); err != nil {
+		return nil, fmt.Errorf("read executor ServiceAccount identity: %w", err)
+	}
+	if account.UID == "" || account.DeletionTimestamp != nil || account.Namespace != namespace || account.Name != pod.Spec.ServiceAccountName {
+		return nil, fmt.Errorf("executor ServiceAccount has no immutable live identity")
+	}
+	credential := boundedTokenFileCredential(tokenFile)
+	if _, err := credential(ctx); err != nil {
+		return nil, err
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("create executor identity review client: %w", err)
+	}
+	return &k8sctrl.WorkflowExecutorKubernetesAuthorization{TokenReviews: clientset.AuthenticationV1().TokenReviews(), AccessReviews: clientset.AuthorizationV1().SubjectAccessReviews(), Credential: credential, Subject: subject.Subject, WorkloadUID: string(pod.UID), ServiceAccountUID: string(account.UID), PodNamespace: namespace, PodName: podName, Pods: reader}, nil
+}
+
+func boundedTokenFileCredential(tokenFile string) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		file, err := os.Open(tokenFile)
+		if err != nil {
+			return "", fmt.Errorf("executor credential file unavailable")
+		}
+		defer func() { _ = file.Close() }()
+		raw, err := io.ReadAll(io.LimitReader(file, 65537))
+		if err != nil || len(raw) > 65536 {
+			return "", fmt.Errorf("executor credential exceeds its finite bound or is unreadable")
+		}
+		token := strings.TrimSpace(string(raw))
+		if token == "" || strings.ContainsAny(token, " \t\r\n") {
+			return "", fmt.Errorf("executor credential is empty or malformed")
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		return token, nil
+	}
 }
 
 func configurePluginHost(mgr ctrl.Manager, logger *zap.Logger) (*plugin.Host, error) {
@@ -989,6 +1196,7 @@ func newControllerAssembly(
 		k8sctrl.NewSecretRefReconcilerAdapter(st, logger),
 		k8sctrl.NewToolReconcilerAdapter(st, logger, intctrl.WithExecProbeRunner(k8sctrl.NewKubernetesExecProbeRunner(kubeClient))),
 		k8sctrl.NewToolClassReconcilerAdapter(st, logger),
+		k8sctrl.NewExternalAgentReconcilerAdapter(st, logger, externalAgentReconcilerOptions(os.Getenv)...),
 		k8sctrl.NewToolInvocationRunReconcilerAdapter(st, logger, intctrl.WithStdioInvocationRunner(k8sctrl.NewKubernetesStdioInvocationRunner(kubeClient, config))),
 		workflowAdapter,
 		workflowRunAdapter,

@@ -24,6 +24,33 @@
 {{- $agentCommunicationGatewayPort := dig "service" "port" 8094 $agentCommunicationGateway }}
 {{- $pluginHost := dig "k8sController" "pluginHost" (dict) $values }}
 {{- $pluginHostEnabled := dig "enabled" false $pluginHost }}
+{{- $workflowExecutor := dig "k8sController" "workflowExecutor" (dict) $values }}
+{{- $workflowExecutorEnabled := dig "enabled" false $workflowExecutor }}
+{{- $collaboration := include "kognition.workflowCollaboration" . | fromJson }}
+{{- $collaborationEnabled := dig "enabled" false $collaboration }}
+{{- $externalAgents := include "kognition.externalAgents" . | fromJson }}
+{{- if $workflowExecutorEnabled }}
+{{- if or (not .Values.webhook.enabled) (ne .Values.webhook.failurePolicy "Fail") (lt (int .Values.k8sController.replicaCount) 1) }}
+{{- fail "workflowExecutor requires fail-closed admission and k8sController.replicaCount >= 1 (the controller starts at replicaCount after checked activation)" }}
+{{- end }}
+{{- if ne (int .Values.webhook.port) 9443 }}
+{{- fail "workflowExecutor requires webhook.port=9443 to match the native controller TLS listener" }}
+{{- end }}
+{{- $principals := dig "principals" (list) $workflowExecutor }}
+{{- if ne (len $principals) 1 }}{{- fail "native workflowExecutor requires one explicit controller ServiceAccount principal" }}{{- end }}
+{{- $principal := first $principals }}
+{{- $subject := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kognition.controllerServiceAccountName" .) }}
+{{- if or (ne (len $principal) 3) (ne $principal.method "tokenreview") (ne $principal.issuer "kubernetes.io/tokenreview") (ne $principal.subject $subject) }}
+{{- fail "workflowExecutor principal must exactly identify the controller ServiceAccount using TokenReview" }}
+{{- end }}
+{{- $groups := dig "bindingAdminGroups" (list) $workflowExecutor }}
+{{- if or (eq (len $groups) 0) (gt (len $groups) 16) }}{{- fail "workflowExecutor requires explicit bounded binding administrator groups" }}{{- end }}
+{{- range $group := $groups }}
+{{- if or (eq $group "") (gt (len $group) 256) (contains "*" $group) (contains "," $group) (has $group (list "system:authenticated" "system:unauthenticated" "system:serviceaccounts")) (hasPrefix "system:serviceaccounts:" $group) }}
+{{- fail "workflowExecutor binding administrators cannot be shared or broad authentication groups" }}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -67,6 +94,28 @@ spec:
               value: {{ .Release.Namespace | quote }}
             - name: KOGNITION_MANAGED_NAMESPACES
               value: {{ include "kognition.controllerNamespaces" . | fromJsonArray | join "," | quote }}
+            {{- if $workflowExecutorEnabled }}
+            - name: KOGNITION_WORKFLOW_EXECUTOR_PRINCIPALS
+              value: {{ $workflowExecutor.principals | toJson | quote }}
+            - name: KOGNITION_WORKFLOW_EXECUTOR_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: KOGNITION_WORKFLOW_EXECUTOR_TOKEN_FILE
+              value: /var/run/kognition/workflow-executor/token
+            - name: KOGNITION_WORKFLOW_BINDING_ADMIN_GROUPS
+              value: {{ $workflowExecutor.bindingAdminGroups | join "," | quote }}
+            {{- if $collaborationEnabled }}
+            - name: KOGNITION_WORKFLOW_COLLABORATION_ENABLED
+              value: "true"
+            {{- if $externalAgents.enabled }}
+            - name: KOGNITION_EXTERNAL_AGENTS_ENABLED
+              value: "true"
+            - name: KOGNITION_EXTERNAL_AGENT_ALLOWLIST
+              value: {{ $externalAgents.egressAllowList | join "," | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- if $pluginHostEnabled }}
             - name: KOGNITION_PLUGIN_HOST_ENABLED
               value: "true"
@@ -386,6 +435,11 @@ spec:
               mountPath: /tmp/k8s-webhook-server/serving-certs
               readOnly: true
             {{- end }}
+            {{- if $workflowExecutorEnabled }}
+            - name: workflow-executor-token
+              mountPath: /var/run/kognition/workflow-executor
+              readOnly: true
+            {{- end }}
             {{- if $pluginHostEnabled }}
             - name: plugin-sockets
               mountPath: {{ dig "socketDir" "/var/run/kognition/plugins" $pluginHost | quote }}
@@ -457,6 +511,16 @@ spec:
         - name: webhook-tls
           secret:
             secretName: {{ include "kognition.fullname" . }}-webhook-tls
+        {{- end }}
+        {{- if $workflowExecutorEnabled }}
+        - name: workflow-executor-token
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  audience: kognition.dev/workflow-executor
+                  expirationSeconds: 600
+                  path: token
         {{- end }}
         {{- if $pluginHostEnabled }}
         - name: plugin-sockets

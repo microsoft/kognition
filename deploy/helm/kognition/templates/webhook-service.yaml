@@ -21,4 +21,26 @@ spec:
     app.kubernetes.io/name: {{ include "kognition.name" . }}
     app.kubernetes.io/component: resource-webhooks
     app.kubernetes.io/instance: {{ .Release.Name }}
+{{- if .Values.k8sController.workflowExecutor.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kognition.fullname" . }}-workflow-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kognition.labels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-controller
+spec:
+  type: ClusterIP
+  ports:
+    - name: https
+      port: 443
+      targetPort: {{ .Values.webhook.port }}
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: {{ include "kognition.name" . }}
+    app.kubernetes.io/component: k8s-controller
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
 {{- end }}

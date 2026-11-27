@@ -1,0 +1,26 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# AgentIdentity Sample
+#
+# The controller creates an `agent-identity-<agent>` AgentIdentity for every
+# Agent automatically. That name prefix, the auto-created-for-agent label,
+# owner references and status are reserved for the controller and rejected by
+# admission. This sample declares an additional, manually managed identity with
+# an explicit SPIFFE ID for hello-agent.
+#
+# Prereq: samples/simple-agent (Agent hello-agent).
+#
+# Observe:
+#   kubectl get agentidentities.kognition.dev
+#   kubectl get agentidentity hello-agent-manual-identity -o yaml
+---
+apiVersion: kognition.dev/v1alpha1
+kind: AgentIdentity
+metadata:
+  name: hello-agent-manual-identity
+  namespace: default
+spec:
+  agentRef:
+    name: hello-agent
+  spiffeID: spiffe://kognition.dev/workspace/default/agent/hello-agent-manual

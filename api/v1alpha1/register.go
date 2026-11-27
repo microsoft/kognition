@@ -58,6 +58,8 @@ var KindRegistry = map[string]func() Object{
 	"AgentAutoscaler":            func() Object { return &AgentAutoscaler{} },
 	"ModelAutoscaler":            func() Object { return &ModelAutoscaler{} },
 	"ApprovalDecision":           func() Object { return &ApprovalDecision{} },
+	"ExternalAgent":              func() Object { return &ExternalAgent{} },
+	"ExternalAgentGrant":         func() Object { return &ExternalAgentGrant{} },
 }
 
 // NewObject creates a new zero-value resource by kind name.

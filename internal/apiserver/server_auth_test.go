@@ -19,6 +19,7 @@ import (
 
 	"github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/auth"
+	"github.com/kognition-ai/kognition/internal/controlplaneauth"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/requestid"
 	"github.com/kognition-ai/kognition/internal/runtimeapproval"
@@ -253,6 +254,134 @@ func TestControlPlanePolicyManagementRejectsUnknownFields(t *testing.T) {
 	}
 	if _, err := memory.Get(context.Background(), "ControlPlaneRole", "control", "unknown-field"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("stored rejected policy error = %v, want %v", err, store.ErrNotFound)
+	}
+}
+
+func TestControlPlaneExecutionPolicyManagement(t *testing.T) {
+	memory := newMemStore()
+	authenticator := &recordingAuthenticator{identities: map[string]*auth.Identity{
+		"author":       {Method: "oidc", Issuer: "https://issuer.example", Subject: "author"},
+		"policy-admin": {Method: "oidc", Issuer: "https://issuer.example", Subject: "administrator", Groups: []string{"control-plane-admins"}},
+	}}
+	server := New(Config{}, memory, zap.NewNop(), WithAuthenticator(authenticator, nil), WithControlPlaneAdminGroups([]string{"control-plane-admins"}))
+	path := "/apis/kognition.dev/v1alpha1/namespaces/control/controlplaneroles"
+	body := `{"metadata":{"name":"workflow-executor"},"spec":{"executionRules":[{"effect":"allow","operation":"Workflow/use","workspace":"planning","resourceName":"investigate","resourceUID":"workflow-uid","revisionDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"effect":"allow","operation":"Agent/invoke","workspace":"workers","resourceName":"analyst","resourceUID":"agent-uid"}]}}`
+	request := func(token, payload string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(payload))
+		req.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, req)
+		return response
+	}
+	if response := request("author", body); response.Code != http.StatusForbidden {
+		t.Fatalf("author created execution authority: %d %s", response.Code, response.Body.String())
+	}
+	if _, err := memory.Get(context.Background(), "ControlPlaneRole", "control", "workflow-executor"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("author persisted execution authority: %v", err)
+	}
+	if response := request("policy-admin", body); response.Code != http.StatusCreated {
+		t.Fatalf("administrator could not create exact policy: %d %s", response.Code, response.Body.String())
+	}
+	data, err := memory.Get(context.Background(), "ControlPlaneRole", "control", "workflow-executor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var role v1alpha1.ControlPlaneRole
+	if err := json.Unmarshal(data, &role); err != nil || len(role.Spec.ExecutionRules) != 2 || role.Spec.ExecutionRules[0].ResourceUID != "workflow-uid" || role.Spec.ExecutionRules[1].Operation != v1alpha1.ControlPlaneAgentInvoke {
+		t.Fatalf("execution scope was not retained: %s, %v", data, err)
+	}
+	executor := &auth.Identity{Method: "mtls", Issuer: "executor-ca", Subject: "executor"}
+	bindingRequest := httptest.NewRequest(http.MethodPost, "/apis/kognition.dev/v1alpha1/namespaces/control/controlplanerolebindings", bytes.NewBufferString(
+		`{"metadata":{"name":"executor"},"spec":{"roleRef":{"name":"workflow-executor"},"subjects":[{"method":"mtls","issuer":"executor-ca","subject":"executor"}]}}`,
+	))
+	bindingRequest.Header.Set("Authorization", "Bearer policy-admin")
+	bindingResponse := httptest.NewRecorder()
+	server.ServeHTTP(bindingResponse, bindingRequest)
+	if bindingResponse.Code != http.StatusCreated {
+		t.Fatalf("executor binding creation: %d %s", bindingResponse.Code, bindingResponse.Body.String())
+	}
+	authorizer := controlplaneauth.New(memory)
+	if err := authorizer.AuthorizeAgentInvocation(context.Background(), executor, "workers", "analyst", "agent-uid"); err != nil {
+		t.Fatalf("API-managed invocation permission: %v", err)
+	}
+	if err := authorizer.AuthorizeWorkflowUse(context.Background(), executor, "planning", "investigate", "workflow-uid", strings.Repeat("a", 64)); err != nil {
+		t.Fatalf("API-managed Workflow-use permission: %v", err)
+	}
+	role.Spec.ExecutionRules[1].ResourceUID = "replacement-uid"
+	updateData, err := json.Marshal(role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		token string
+		want  int
+	}{
+		{"author", http.StatusForbidden},
+		{"policy-admin", http.StatusOK},
+	} {
+		updateRequest := httptest.NewRequest(http.MethodPut, path+"/workflow-executor", bytes.NewReader(updateData))
+		updateRequest.Header.Set("Authorization", "Bearer "+test.token)
+		updateResponse := httptest.NewRecorder()
+		server.ServeHTTP(updateResponse, updateRequest)
+		if updateResponse.Code != test.want {
+			t.Fatalf("execution policy update by %s: %d %s", test.token, updateResponse.Code, updateResponse.Body.String())
+		}
+		if test.token == "author" {
+			if err := authorizer.AuthorizeAgentInvocation(context.Background(), executor, "workers", "analyst", "replacement-uid"); !errors.Is(err, controlplaneauth.ErrForbidden) {
+				t.Fatalf("author changed execution authority: %v", err)
+			}
+		}
+	}
+	if err := authorizer.AuthorizeAgentInvocation(context.Background(), executor, "workers", "analyst", "agent-uid"); !errors.Is(err, controlplaneauth.ErrForbidden) {
+		t.Fatalf("stale policy still authorized old target: %v", err)
+	}
+	if err := authorizer.AuthorizeAgentInvocation(context.Background(), executor, "workers", "analyst", "replacement-uid"); err != nil {
+		t.Fatalf("updated API-managed authority: %v", err)
+	}
+	bounded := role
+	bounded.Name = "bounded"
+	bounded.Spec.ExecutionRules = make([]v1alpha1.ControlPlaneExecutionRule, 129)
+	for index := range bounded.Spec.ExecutionRules {
+		bounded.Spec.ExecutionRules[index] = role.Spec.ExecutionRules[1]
+	}
+	for _, test := range []struct {
+		count int
+		want  int
+	}{
+		{129, http.StatusUnprocessableEntity},
+		{128, http.StatusCreated},
+	} {
+		bounded.Spec.ExecutionRules = bounded.Spec.ExecutionRules[:test.count]
+		payload, err := json.Marshal(bounded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response := request("policy-admin", string(payload)); response.Code != test.want {
+			t.Fatalf("execution rule count %d: %d %s", test.count, response.Code, response.Body.String())
+		}
+	}
+	for name, rule := range map[string]string{
+		"wildcard":          `{"effect":"allow","operation":"Agent/invoke","workspace":"*","resourceName":"analyst","resourceUID":"agent-uid"}`,
+		"unknown operation": `{"effect":"allow","operation":"Tool/invoke","workspace":"workers","resourceName":"analyst","resourceUID":"agent-uid"}`,
+		"missing uid":       `{"effect":"allow","operation":"Agent/invoke","workspace":"workers","resourceName":"analyst"}`,
+		"missing revision":  `{"effect":"allow","operation":"Workflow/use","workspace":"planning","resourceName":"investigate","resourceUID":"workflow-uid"}`,
+		"unknown field":     `{"effect":"allow","operation":"Agent/invoke","workspace":"workers","resourceName":"analyst","resourceUID":"agent-uid","executorServiceAccount":"admin"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload := `{"metadata":{"name":"invalid"},"spec":{"executionRules":[` + rule + `]}}`
+			response := request("policy-admin", payload)
+			want := http.StatusUnprocessableEntity
+			if name == "unknown field" {
+				want = http.StatusBadRequest
+			}
+			if response.Code != want {
+				t.Fatalf("invalid policy status = %d, want %d: %s", response.Code, want, response.Body.String())
+			}
+			if _, err := memory.Get(context.Background(), "ControlPlaneRole", "control", "invalid"); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("invalid execution policy persisted: %v", err)
+			}
+		})
 	}
 }
 

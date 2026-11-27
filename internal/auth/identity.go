@@ -30,7 +30,8 @@ type Identity struct {
 	// Method is how the caller authenticated: "oidc", "token", or "anonymous".
 	Method string
 	// Claims holds the raw verified token claims (OIDC only).
-	Claims map[string]any
+	Claims                  map[string]any
+	workflowControllerProof func(context.Context) (string, error)
 }
 
 type contextKey struct{}
@@ -55,4 +56,12 @@ func Anonymous() *Identity {
 func IsAuthenticated(ctx context.Context) bool {
 	id, ok := IdentityFromContext(ctx)
 	return ok && id != nil && id.Method != "" && id.Method != "anonymous"
+}
+
+func AuthenticatedWorkflowControllerUID(ctx context.Context) (string, error) {
+	id, ok := IdentityFromContext(ctx)
+	if !ok || id == nil || id.Method != "oidc" || id.workflowControllerProof == nil {
+		return "", ErrInvalidToken
+	}
+	return id.workflowControllerProof(ctx)
 }

@@ -1,8 +1,7 @@
 # Webhook Implementation Comprehensive Review (US-0071)
 
 **Date**: 2026-05-30 (refreshed after second-pass review remediation)  
-**Status**: REVIEW COMPLETE - Implementation Complete & Ready for Production  
-**Result**: ✅ APPROVED - All Quality Gates Passed
+**Status**: Historical implementation review, not a release approval
 
 > **BACKLOG mapping**: TC IDs referenced inside this document (TC-0213..TC-0224) are **doc-internal review IDs** only. The corresponding canonical project IDs allocated in [BACKLOG.md](../../../BACKLOG.md) under US-0071 are **TC-0245..TC-0249** (metadata-merge regression, 14-kind table-driven regression, and three envtest harness cases). The hardening pass itself is tracked as **T-0316**.
 
@@ -10,15 +9,13 @@
 
 ## Executive Summary
 
-The webhook implementation (`internal/k8s/webhook/`) is **production-ready** with:
-- ✅ **All unit test functions passing** (including new TC-0223 metadata-preservation regression, 100% pass rate)
-- ✅ **74.6% statement coverage** (up from 74.0% after TC-0223 addition; +28.4pp over the prior 46.2% baseline)
-- ✅ **Correct type handling** for all 18 validation and 4 mutation kinds
-- ✅ **No bugs, panics, or runtime errors** identified
-- ✅ **Proper error handling** with HTTP status codes
-- ✅ **Metadata preservation verified** — `mergeMutatedMeta()` helper added to `convertToK8s()` so mutator-added Labels/Annotations/Finalizers survive the internal→k8s round trip; covered by regression test TC-0223
-- ✅ **Full project builds clean** with no lint errors
-- ✅ **Helm templates complete** (4 webhook configuration files, ValidatingWebhookConfiguration now wires `memoryclaims` and `memoryvolumes`)
+The final recorded webhook package run passed with **77.0% statement coverage**,
+and the three envtest cases passed. Earlier figures in this review refer to
+intermediate runs, not the current release. The hardening pass expanded reverse
+conversion to all 18 reviewed kinds, added metadata-preservation regressions,
+and wired `memoryclaims` and `memoryvolumes` into the validating webhook template.
+Envtest verifies admission behavior against a Kubernetes API server; it does not
+exercise a deployed Helm release or establish production readiness.
 
 ### Second-Pass Review Remediation (2026-05-30)
 
@@ -134,13 +131,13 @@ The flow implements the admission webhook pattern correctly:
 
 ---
 
-#### `convertToK8s()` (4 mutation-supporting kinds)
+#### `convertToK8s()` (18 supported conversions)
 
 **Status**: ✅ **CORRECT**
 
-Only implements conversion for kinds with registered mutating hooks:
-- Agent, AgentInstance, Tool, ToolClass
-- All others return error: "convertToK8s not implemented for kind: X"
+After the second pass, conversion covers all 18 reviewed kinds. The four kinds
+with registered mutating hooks at review time were Agent, AgentInstance, Tool,
+and ToolClass; conversion support does not itself register a mutating hook.
 
 **Metadata Preservation Logic** (Critical):
 ```go
@@ -148,17 +145,12 @@ Only implements conversion for kinds with registered mutating hooks:
 2. Convert K8s → internal type
 3. Unmarshal mutated internal JSON into internal object
 4. Convert internal → K8s (applies mutation)
-5. Restore original TypeMeta + ObjectMeta (CRITICAL ✅)
+5. Restore original TypeMeta and merge mutator-added metadata into ObjectMeta
 6. Marshal back to JSON
 ```
 
-**Correctness**: ✅ **PERFECT**
-- Metadata preserved without corruption
-- Mutation isolated to Spec/Status fields
-- No TypeMeta/ObjectMeta leakage from mutations
-- Order of restoration ensures original metadata wins
-
-**Example**: Agent mutation adds default replicas and runtime.class to internal spec, but TypeMeta/ObjectMeta from original preserved → correct K8s response.
+TC-0223 verifies that a mutator-added label survives conversion. TC-0224 exercises
+the same metadata path for the 14 newly covered kinds.
 
 ---
 
@@ -515,47 +507,18 @@ Current testing approach is correct for **unit scope**. End-to-end integration t
 
 ---
 
-## 7. Production Readiness Checklist
+## 7. Evidence And Limits
 
-| Aspect | Status | Details |
-|--------|--------|---------|
-| **Correctness** | ✅ PASS | All code paths verified, no logical errors |
-| **Type Safety** | ✅ PASS | All 20 K8s types, all pointer receivers correct |
-| **Error Handling** | ✅ PASS | All errors caught, HTTP status codes correct |
-| **Concurrency** | ✅ PASS | Stateless handler, thread-safe |
-| **Performance** | ✅ PASS | O(1) logic, <1ms overhead |
-| **Testing** | ✅ PASS | 11/11 tests pass, 45.9% coverage, all scenarios |
-| **No Bugs** | ✅ PASS | No panics, nil dereferences, or runtime errors |
-| **Metadata Preservation** | ✅ PASS | Original K8s metadata always preserved |
-| **Integration** | ✅ PASS | Helm templates complete, admission chain integrated |
-| **Build** | ✅ PASS | Full project builds clean, no lint errors |
-| **Deployment Ready** | ✅ PASS | Can deploy via Helm, controller-runtime ready |
+The initial snapshot recorded 11 passing tests and 45.9% statement coverage.
+Later runs recorded 74.0% after expanding the conversion tests, 74.6% after the
+first metadata regression, and 77.0% after the 14-kind expansion. The final
+envtest result was three passing cases. These percentages describe historical
+webhook package runs, not repository-wide coverage or certification against
+current gates.
 
----
-
-## 8. Summary
-
-### What Works Well ✅
-1. **Clean architecture**: Separation of K8s webhook layer from internal admission logic
-2. **Type-safe conversions**: All 20 kinds properly handled with correct field names
-3. **Correct error handling**: HTTP status codes semantically meaningful
-4. **Metadata preservation**: Original K8s metadata never corrupted by admission chain
-5. **Comprehensive testing**: 11 tests covering all major code paths and edge cases
-6. **No panics**: All pointers, JSON, types safely handled
-7. **Performance**: Minimal overhead, suitable for production webhooks
-
-### What Could Improve 🔍
-1. Add request UID to error logs (debugging enhancement)
-2. Add context cancellation test (optional test coverage)
-3. Add documentation to internal functions (onboarding enhancement)
-4. Implement E2E tests with real cluster (out of scope, future work)
-
-### Overall Assessment 🎯
-**✅ PRODUCTION READY**
-
-The webhook implementation is **correct, high-quality, bug-free, and complete**. All unit tests pass, coverage is strong (45.9%), and integration with the admission chain is working as designed. The Helm templates are in place for deployment.
-
-**Recommendation**: Merge and deploy to production.
+Deployment acceptance was outside the scope of this review. A release decision
+requires current evidence for the target chart, cluster, admission behavior,
+and applicable release gates.
 
 ---
 

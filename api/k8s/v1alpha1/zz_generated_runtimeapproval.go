@@ -63,6 +63,15 @@ func (in *RuntimeApprovalList) DeepCopyObject() runtime.Object {
 
 func (in *RuntimeApprovalSpec) DeepCopyInto(out *RuntimeApprovalSpec) {
 	*out = *in
+	if in.ExecutorAction != nil {
+		out.ExecutorAction = new(WorkflowExecutorActionReference)
+		*out.ExecutorAction = *in.ExecutorAction
+		in.ExecutorAction.ExpiresAt.DeepCopyInto(&out.ExecutorAction.ExpiresAt)
+	}
+	if in.WorkflowContext != nil {
+		out.WorkflowContext = new(WorkflowActionContext)
+		*out.WorkflowContext = *in.WorkflowContext
+	}
 	if in.TrustProfileRef != nil {
 		out.TrustProfileRef = new(RuntimeApprovalReference)
 		*out.TrustProfileRef = *in.TrustProfileRef
@@ -70,6 +79,20 @@ func (in *RuntimeApprovalSpec) DeepCopyInto(out *RuntimeApprovalSpec) {
 	out.AuthorizationRefs = append([]RuntimeApprovalReference(nil), in.AuthorizationRefs...)
 	in.CreatedAt.DeepCopyInto(&out.CreatedAt)
 	in.ExpiresAt.DeepCopyInto(&out.ExpiresAt)
+}
+
+func (in *WorkflowExecutorActionReference) DeepCopyInto(out *WorkflowExecutorActionReference) {
+	*out = *in
+	in.ExpiresAt.DeepCopyInto(&out.ExpiresAt)
+}
+
+func (in *WorkflowExecutorActionReference) DeepCopy() *WorkflowExecutorActionReference {
+	if in == nil {
+		return nil
+	}
+	out := new(WorkflowExecutorActionReference)
+	in.DeepCopyInto(out)
+	return out
 }
 
 func (in *RuntimeApprovalSpec) DeepCopy() *RuntimeApprovalSpec {

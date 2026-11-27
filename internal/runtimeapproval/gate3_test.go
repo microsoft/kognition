@@ -13,6 +13,7 @@ import (
 	"time"
 
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
+	"github.com/kognition-ai/kognition/internal/store"
 )
 
 func TestNewGate3CoordinatorRejectsInvalidConfig(t *testing.T) {
@@ -48,6 +49,66 @@ func TestNewGate3CoordinatorDefaultsNow(t *testing.T) {
 	})
 	if err != nil || coordinator.now == nil {
 		t.Fatalf("NewGate3Coordinator() = %v, err %v", coordinator, err)
+	}
+}
+
+func TestGate3CoordinatorWorkflowContextRequiresQualifiedDispatch(t *testing.T) {
+	coordinator := newGate3Coordinator(t, "never")
+	request := validGate3Request()
+	request.WorkflowContext = &api.WorkflowActionContext{Workspace: "origin", RunUID: "run-uid", Step: "team",
+		ActivationID: "visit-1", Attempt: 1, OwnerEpoch: 1, BindingDigest: strings.Repeat("a", 64)}
+	result, err := coordinator.Resolve(context.Background(), request)
+	if !errors.Is(err, ErrWorkflowDispatchUnsupported) || result.State == Gate3StateReady {
+		t.Fatalf("unqualified Workflow action admitted: %+v %v", result, err)
+	}
+	if fake := coordinator.store.(*fakeGate3Store); fake.creates != 0 {
+		t.Fatal("unqualified Workflow action created an approval")
+	}
+}
+
+func TestGate3CoordinatorRegistersWorkflowEffectAndRejectsStoppedRetry(t *testing.T) {
+	coordinator := newGate3Coordinator(t, "never")
+	legacy, err := coordinator.Resolve(context.Background(), validGate3Request())
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor, err := WorkflowApprovalActorDigest(legacy.Approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validGate3Request()
+	request.InvocationID = "workflow-invocation"
+	request.WorkflowContext = &api.WorkflowActionContext{Workspace: "origin", RunUID: "run-uid", Step: "team",
+		ActivationID: "visit-1", Attempt: 1, OwnerEpoch: 1, BindingDigest: strings.Repeat("a", 64)}
+	now := time.Now().UTC()
+	activation, err := store.NewWorkflowActivation(store.WorkflowActivationSpec{Key: workflowContextKey(*request.WorkflowContext),
+		BindingDigest: request.WorkflowContext.BindingDigest, Actors: []string{actor}, MaxEffects: 2, MaxBytes: 32768, ExpiresAt: now.Add(time.Hour)}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := &workflowDispatchFixtureStore{activation: activation, now: now}
+	dispatch, err := NewWorkflowDispatchGate(WorkflowDispatchConfig{Activations: fixture, Approvals: coordinator.store.(*fakeGate3Store),
+		Keys: coordinator.keys, Clock: func() (time.Time, error) { return time.Now().UTC(), nil },
+		Eligibility: func(context.Context, api.RuntimeApproval) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.workflowDispatch = dispatch
+	result, err := coordinator.Resolve(context.Background(), request)
+	if err != nil || result.State != Gate3StateReady || result.Approval.Spec.WorkflowContext == nil {
+		t.Fatalf("qualified Workflow action = %+v %v", result, err)
+	}
+	effect, err := WorkflowApprovalEffect(result.Approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixture.activation.Effects[effect.ID].State != store.WorkflowEffectRegistered || result.Approval.Status.ExecutionState != api.RuntimeApprovalExecutionNotStarted {
+		t.Fatal("Ready result skipped registration or claimed execution")
+	}
+	stopWorkflowDispatchFixture(t, fixture)
+	result, err = coordinator.Resolve(context.Background(), request)
+	if err == nil || result.State == Gate3StateReady {
+		t.Fatalf("stopped Workflow retry regained readiness: %+v %v", result, err)
 	}
 }
 
@@ -482,6 +543,16 @@ type fakeGate3Store struct {
 
 func newFakeGate3Store() *fakeGate3Store {
 	return &fakeGate3Store{approvals: map[string]*api.RuntimeApproval{}, now: time.Now}
+}
+
+func (s *fakeGate3Store) GetRuntimeApprovalByInvocation(_ context.Context, workspace, invocationID string) (api.RuntimeApproval, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	approval, found := s.approvals[invocationID]
+	if !found || approval.Spec.Workspace != workspace {
+		return api.RuntimeApproval{}, store.ErrNotFound
+	}
+	return *approval, nil
 }
 
 func (s *fakeGate3Store) CreateOrGetRuntimeApproval(_ context.Context, proposed api.RuntimeApproval, _ json.RawMessage, ttl time.Duration) (bool, api.RuntimeApproval, error) {

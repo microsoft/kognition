@@ -14,6 +14,8 @@
     Requires: helm v3.x+ installed and on PATH.
 #>
 
+param([switch]$WorkflowExecutorOnly)
+
 $ErrorActionPreference = "Stop"
 $ChartPath = Join-Path $PSScriptRoot ".."
 $Passed = 0
@@ -119,6 +121,116 @@ Write-Host " Kognition Helm Chart Regression Tests" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
+$workflowDefault = Invoke-HelmTemplate -SetValues @("mode=kubernetes")
+Assert-NotContains $workflowDefault "KOGNITION_WORKFLOW_EXECUTOR_PRINCIPALS" "Default profile does not invent an executor"
+Assert-NotContains $workflowDefault "name: workflow-executor-token" "Default profile does not mount an executor credential"
+Assert-Contains $workflowDefault "name: workflow-records.kognition.dev" "Default profile protects private execution records"
+Assert-NotContains $workflowDefault "name: workflow-submission.kognition.dev" "Default profile does not route executor submissions"
+$workflowExecutorValues = @(
+    "mode=kubernetes",
+    "k8sController.workflowExecutor.enabled=true",
+    "k8sController.workflowExecutor.principals[0].method=tokenreview",
+    "k8sController.workflowExecutor.principals[0].issuer=kubernetes.io/tokenreview",
+    "k8sController.workflowExecutor.principals[0].subject=system:serviceaccount:default:test-release-kognition-controller",
+    "k8sController.workflowExecutor.bindingAdminGroups[0]=workflow-operators"
+)
+$workflowProfile = Invoke-HelmTemplate -SetValues $workflowExecutorValues
+foreach ($render in @($workflowDefault, $workflowProfile)) {
+    Assert-Contains $render "(has(request.name) && (" "Name match tolerates nameless collection deletes so namespace deletion is not blocked"
+}
+Assert-Contains $workflowProfile "fieldPath: metadata.name" "Executor uses actual downward-API pod name"
+Assert-Contains $workflowProfile "value: /var/run/kognition/workflow-executor/token" "Executor reads the projected credential file"
+Assert-Contains $workflowProfile "audience: kognition.dev/workflow-executor" "Executor has a dedicated token audience"
+Assert-Contains $workflowProfile "expirationSeconds: 600" "Executor credential rotates with a finite lifetime"
+Assert-Contains $workflowProfile 'resources: ["tokenreviews"]' "Executor can independently review its identity"
+Assert-Contains $workflowProfile 'resources: ["subjectaccessreviews"]' "Executor can independently review named authorization"
+Assert-Contains $workflowProfile 'resourceNames: ["test-release-kognition-controller"]' "ServiceAccount read is limited to the executor"
+Assert-Contains $workflowProfile "- test-release-kognition-workflow-webhook.default.svc" "TLS certificate covers the executor admission Service"
+Assert-Contains $workflowProfile "variables.workflowRecord ||" "State policy admits the tightly shaped Workflow evidence"
+Assert-Contains $workflowProfile "name: protected-workflow-record" "Private admission does not gate ordinary bootstrap state"
+Assert-Contains $workflowProfile "[object, oldObject].exists(candidate" "Private admission covers old and new protected metadata"
+Assert-RegexMatch $workflowProfile '(?s)name: workflow-records\.kognition\.dev.*?failurePolicy: Fail.*?name: test-release-kognition-workflow-webhook' "Private guard routes fail-closed to the executor"
+Assert-RegexMatch $workflowProfile '(?s)name: workflow-submission\.kognition\.dev.*?name: test-release-kognition-workflow-webhook' "Workflow submission routes to the executor"
+$ordinaryValidation = [regex]::Match($workflowProfile, '(?s)  - name: validate\.kognition\.dev.*?(?=\n  - name:)').Value
+Assert-Contains $ordinaryValidation "- workflows" "Ordinary validator still validates definitions"
+Assert-NotContains $ordinaryValidation "- workflowruns" "Executor is the only WorkflowRun validation owner"
+Assert-RegexMatch $workflowProfile '(?s)name: test-release-kognition-webhook\r?\n(?:(?!\r?\n---).)*app.kubernetes.io/component: resource-webhooks' "Ordinary admission retains its distinct workload"
+Assert-RegexMatch $workflowProfile '(?s)name: test-release-kognition-workflow-webhook\r?\n(?:(?!\r?\n---).)*app.kubernetes.io/component: k8s-controller' "Executor admission uses the controller workload"
+foreach ($invalid in @(
+    "webhook.enabled=false",
+    "webhook.failurePolicy=Ignore",
+    "webhook.port=8443",
+    "k8sController.replicaCount=0",
+    "k8sController.workflowExecutor.principals[0].method=oidc",
+    "k8sController.workflowExecutor.principals[0].issuer=untrusted",
+    "k8sController.workflowExecutor.principals[0].subject=system:serviceaccount:default:test-release-kognition-webhook",
+    "k8sController.workflowExecutor.principals[0].unknown=untrusted",
+    "k8sController.workflowExecutor.bindingAdminGroups[0]=system:authenticated",
+    "k8sController.workflowExecutor.bindingAdminGroups[0]=system:serviceaccounts:default"
+)) {
+    Assert-HelmTemplateFails -SetValues ($workflowExecutorValues + $invalid) -Pattern @("workflowExecutor") -TestName "Executor rejects $invalid"
+}
+$collaborationValues = $workflowExecutorValues + @(
+    "k8sController.managedNamespaces[0]=kognition-work",
+    "k8sController.workflowExecutor.collaboration.enabled=true"
+)
+foreach ($render in @($workflowDefault, $workflowProfile)) {
+    Assert-NotContains $render "KOGNITION_WORKFLOW_COLLABORATION_ENABLED" "Collaboration is not rendered unless enabled"
+    Assert-NotContains $render "variables.collaborationLedger ||" "Collaboration ledger admission is not opened unless enabled"
+}
+$collaboration = Invoke-HelmTemplate -SetValues $collaborationValues
+Assert-Contains $collaboration "KOGNITION_WORKFLOW_COLLABORATION_ENABLED" "Controller and admission webhooks receive the collaboration switch"
+Assert-NotContains $collaboration "workflow-collaboration-token" "Collaboration needs no receiver credential"
+Assert-NotContains $collaboration "workflow-collaboration-ca" "Collaboration needs no receiver CA"
+Assert-NotContains $collaboration "variables.workflowActivation" "Collaboration needs no activation records"
+Assert-Contains $collaboration "variables.collaborationLedger ||" "State policy admits the collaboration ledgers"
+Assert-Contains $collaboration "candidate.metadata.name.matches('^wfc-[0-9a-f]{24}(-handles)?`$')" "Ledger admission is confined to collaboration names"
+Assert-RegexMatch $collaboration '(?s)namespace: "kognition-work".*?configmaps\"\]\r?\n    verbs: \["update"\]' "Controller can update ledgers in managed namespaces"
+Assert-Contains $collaboration "owner.kind in ['Workflow', 'WorkflowRun']" "Ledgers may carry only a single Workflow or WorkflowRun owner"
+Assert-Contains $collaboration "(!has(owner.blockOwnerDeletion) || !owner.blockOwnerDeletion)" "Ledger owners cannot block owner deletion"
+foreach ($invalid in @(
+    "k8sController.workflowExecutor.collaboration.unknown=true"
+)) {
+    Assert-HelmTemplateFails -SetValues ($collaborationValues + $invalid) -Pattern @("collaboration", "Additional property") -TestName "Collaboration rejects $invalid"
+}
+Assert-NotContains $collaboration "KOGNITION_EXTERNAL_AGENTS_ENABLED" "ExternalAgent is off unless explicitly enabled"
+Assert-NotContains $collaboration "KOGNITION_EXTERNAL_AGENT_ALLOWLIST" "ExternalAgent allow-list is not rendered unless enabled"
+$externalAgentValues = $collaborationValues + @(
+    "networkPolicy.enabled=true",
+    "k8sController.workflowExecutor.collaboration.externalAgents.enabled=true",
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[0]=agents.partner.example:8443",
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[1]=*.partners.example:443"
+)
+$externalAgents = Invoke-HelmTemplate -SetValues $externalAgentValues
+Assert-Contains $externalAgents "KOGNITION_EXTERNAL_AGENTS_ENABLED" "ExternalAgent switch is rendered when enabled"
+Assert-Contains $externalAgents 'value: "agents.partner.example:8443,*.partners.example:443"' "Controller and webhooks receive the identical allow-list"
+Assert-RegexMatch $externalAgents '(?s)name: test-release-kognition-k8s-controller\r?\n(?:(?!\r?\n---).)*?except:\s+- 10\.0\.0\.0/8(?:(?!\r?\n---).)*?port: 8443' "Controller egress on non-HTTPS allow-listed ports excludes private ranges"
+Assert-RegexNotMatch $externalAgents '(?s)name: test-release-kognition-k8s-controller\r?\n(?:(?!\r?\n---).)*?- 192\.168\.0\.0/16\s+ports:\s+(?:- port: (?!443\b)\d+\s+protocol: TCP\s+)*- port: 443\b' "The private-range exclusion rule never lists port 443, where it would not restrict anything"
+$externalAgentsHttpsOnly = Invoke-HelmTemplate -SetValues ($collaborationValues + @(
+    "networkPolicy.enabled=true",
+    "k8sController.workflowExecutor.collaboration.externalAgents.enabled=true",
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[0]=*.partners.example:443"
+))
+Assert-Contains $externalAgentsHttpsOnly 'value: "*.partners.example:443"' "The HTTPS-only allow-list is still rendered for the controller"
+Assert-RegexMatch $externalAgentsHttpsOnly '(?s)name: test-release-kognition-k8s-controller\r?\n(?:(?!\r?\n---).)*?port: 53' "The controller NetworkPolicy is rendered for the HTTPS-only case"
+Assert-RegexNotMatch $externalAgentsHttpsOnly '(?s)name: test-release-kognition-k8s-controller\r?\n(?:(?!\r?\n---).)*?except:' "An allow-list on port 443 alone renders no ExternalAgent exclusion rule"
+Assert-RegexMatch $externalAgents '(?s)KOGNITION_EXTERNAL_AGENTS_ENABLED.*?KOGNITION_EXTERNAL_AGENTS_ENABLED' "Admission webhooks receive the ExternalAgent switch as well as the controller"
+foreach ($invalid in @(
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[0]=https://agents.partner.example:8443",
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[0]=agents.partner.example",
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[0]=agents.partner.example:70000",
+    "k8sController.workflowExecutor.collaboration.externalAgents.egressAllowList[0]=localhost:8443"
+)) {
+    Assert-HelmTemplateFails -SetValues ($externalAgentValues + $invalid) -Pattern @("egressAllowList") -TestName "ExternalAgent rejects allow-list entry $invalid"
+}
+Assert-HelmTemplateFails -SetValues ($workflowExecutorValues + @("k8sController.workflowExecutor.collaboration.externalAgents.enabled=true")) -Pattern @("requires workflowExecutor.collaboration.enabled") -TestName "ExternalAgent requires collaboration"
+Assert-HelmTemplateFails -SetValues (@("mode=kubernetes", "k8sController.workflowExecutor.collaboration.enabled=true")) -Pattern @("collaboration") -TestName "Collaboration requires the native executor"
+if ($WorkflowExecutorOnly) {
+    if ($Failed -ne 0 -or $Passed -eq 0) { throw ($Errors -join "`n") }
+    Write-Output "Workflow executor chart checks passed: $Passed"
+    return
+}
+
 $makeScript = Get-Content (Join-Path $ChartPath "../../../make.ps1") -Raw
 Assert-Contains $makeScript "'./tools/kognition-install', 'bootstrap', '--plan'" "Kubernetes bootstrap uses the verified installation plan"
 Assert-Contains $makeScript "'--writers-frozen'" "Kubernetes bootstrap requires frozen writers"
@@ -153,6 +265,10 @@ foreach ($template in @("postgres-statefulset", "kb-pgvector")) {
         Assert-RegexMatch $databaseOutput ("name: " + $volume + '\s+emptyDir: \{\}') "$template declares $volume volume"
     }
 }
+
+# The pgvector init hook pod must match the kb-pgvector NetworkPolicy ingress peer or the hook hangs on upgrade.
+$pgvectorInitOutput = (& helm template test-release $ChartPath --set kbPgvector.enabled=true --show-only "templates/kb-pgvector.yaml") -join "`n"
+Assert-RegexMatch $pgvectorInitOutput '(?s)kind: Job.*?template:\s+metadata:\s+labels:[^\n]*\n(?:\s+app\.kubernetes\.io/[^\n]*\n)*?\s+app\.kubernetes\.io/part-of: kognition' "kb-pgvector init hook pod carries the part-of label required by NetworkPolicy ingress"
 
 Assert-Contains $output "kind: Deployment" "Standalone has Deployments"
 Assert-Contains $output "image: kognition-apiserver:" "Standalone uses locally built apiserver image"

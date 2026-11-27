@@ -224,6 +224,9 @@ func AgentCommunicationPolicyToK8s(in *api.AgentCommunicationPolicy) *k8s.AgentC
 	for _, ref := range in.Spec.AllowFrom {
 		out.Spec.AllowFrom = append(out.Spec.AllowFrom, localRefToK8s(ref.Name))
 	}
+	for _, ref := range in.Spec.AllowFromQualified {
+		out.Spec.AllowFromQualified = append(out.Spec.AllowFromQualified, k8s.QualifiedAgentReference{Namespace: ref.Namespace, Name: ref.Name})
+	}
 	for _, ref := range in.Spec.AllowTo {
 		out.Spec.AllowTo = append(out.Spec.AllowTo, localRefToK8s(ref.Name))
 	}
@@ -243,6 +246,9 @@ func AgentCommunicationPolicyFromK8s(in *k8s.AgentCommunicationPolicy) *api.Agen
 	}
 	for _, ref := range in.Spec.AllowFrom {
 		out.Spec.AllowFrom = append(out.Spec.AllowFrom, api.LocalObjectReference{Name: localRefFromK8s(ref)})
+	}
+	for _, ref := range in.Spec.AllowFromQualified {
+		out.Spec.AllowFromQualified = append(out.Spec.AllowFromQualified, api.AgentReference{Namespace: ref.Namespace, Name: ref.Name})
 	}
 	for _, ref := range in.Spec.AllowTo {
 		out.Spec.AllowTo = append(out.Spec.AllowTo, api.LocalObjectReference{Name: localRefFromK8s(ref)})

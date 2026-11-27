@@ -5,6 +5,7 @@ package controlplaneauth
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/auth"
 	"github.com/kognition-ai/kognition/internal/store"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 var (
@@ -20,7 +22,10 @@ var (
 	ErrUnavailable = errors.New("control-plane authorization unavailable")
 )
 
-const runtimeApprovalResource = "RuntimeApproval"
+const (
+	runtimeApprovalResource = "RuntimeApproval"
+	MaxExecutionRules       = 128
+)
 
 // Authorizer evaluates persisted standalone control-plane roles and bindings.
 type Authorizer struct {
@@ -36,7 +41,93 @@ func (a *Authorizer) AuthorizeRuntimeApproval(ctx context.Context, identity *aut
 	if !canonicalIdentity(identity) || workspace == "" || name == "" || !validVerb(verb) {
 		return ErrForbidden
 	}
+	return a.authorize(ctx, identity, func(role api.ControlPlaneRole) (bool, bool, error) {
+		allowed, denied := false, false
+		for _, rule := range role.Spec.Rules {
+			if !matchesRule(rule, workspace, name, verb) {
+				continue
+			}
+			switch rule.Effect {
+			case "deny":
+				denied = true
+			case "allow":
+				allowed = true
+			default:
+				return false, false, ErrUnavailable
+			}
+		}
+		return allowed, denied, nil
+	})
+}
 
+func (a *Authorizer) AuthorizeWorkflowUse(ctx context.Context, identity *auth.Identity, workspace, name, uid, revisionDigest string) error {
+	return a.authorizeExecution(ctx, identity, api.ControlPlaneExecutionRule{
+		Effect: "allow", Operation: api.ControlPlaneWorkflowUse, Workspace: workspace,
+		ResourceName: name, ResourceUID: uid, RevisionDigest: revisionDigest,
+	})
+}
+
+func (a *Authorizer) AuthorizeAgentInvocation(ctx context.Context, identity *auth.Identity, workspace, name, uid string) error {
+	return a.authorizeExecution(ctx, identity, api.ControlPlaneExecutionRule{
+		Effect: "allow", Operation: api.ControlPlaneAgentInvoke, Workspace: workspace,
+		ResourceName: name, ResourceUID: uid,
+	})
+}
+
+func ValidateExecutionRule(rule api.ControlPlaneExecutionRule) error {
+	if (rule.Effect != "allow" && rule.Effect != "deny") ||
+		len(validation.IsDNS1123Label(rule.Workspace)) != 0 ||
+		len(validation.IsDNS1123Subdomain(rule.ResourceName)) != 0 ||
+		rule.ResourceUID == "" || len(rule.ResourceUID) > 128 || strings.TrimSpace(rule.ResourceUID) != rule.ResourceUID ||
+		strings.ContainsAny(rule.ResourceUID, "*/\\") ||
+		strings.ContainsFunc(rule.ResourceUID, func(character rune) bool { return character <= ' ' || character > '~' }) {
+		return ErrForbidden
+	}
+	switch rule.Operation {
+	case api.ControlPlaneWorkflowUse:
+		digest, err := hex.DecodeString(rule.RevisionDigest)
+		if err != nil || len(digest) != 32 || strings.ToLower(rule.RevisionDigest) != rule.RevisionDigest {
+			return ErrForbidden
+		}
+	case api.ControlPlaneAgentInvoke:
+		if rule.RevisionDigest != "" {
+			return ErrForbidden
+		}
+	default:
+		return ErrForbidden
+	}
+	return nil
+}
+
+func (a *Authorizer) authorizeExecution(ctx context.Context, identity *auth.Identity, requested api.ControlPlaneExecutionRule) error {
+	if !canonicalIdentity(identity) || ValidateExecutionRule(requested) != nil {
+		return ErrForbidden
+	}
+	return a.authorize(ctx, identity, func(role api.ControlPlaneRole) (bool, bool, error) {
+		if len(role.Spec.ExecutionRules) > MaxExecutionRules {
+			return false, false, ErrUnavailable
+		}
+		allowed, denied := false, false
+		for _, rule := range role.Spec.ExecutionRules {
+			if ValidateExecutionRule(rule) != nil {
+				return false, false, ErrUnavailable
+			}
+			if rule.Operation != requested.Operation || rule.Workspace != requested.Workspace ||
+				rule.ResourceName != requested.ResourceName || rule.ResourceUID != requested.ResourceUID ||
+				rule.RevisionDigest != requested.RevisionDigest {
+				continue
+			}
+			allowed = allowed || rule.Effect == "allow"
+			denied = denied || rule.Effect == "deny"
+		}
+		return allowed, denied, nil
+	})
+}
+
+func (a *Authorizer) authorize(ctx context.Context, identity *auth.Identity, evaluate func(api.ControlPlaneRole) (bool, bool, error)) error {
+	if a == nil || a.store == nil {
+		return ErrUnavailable
+	}
 	bindings, err := a.store.List(ctx, "ControlPlaneRoleBinding", store.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("%w: list role bindings: %w", ErrUnavailable, err)
@@ -63,19 +154,14 @@ func (a *Authorizer) AuthorizeRuntimeApproval(ctx context.Context, identity *aut
 		if err := json.Unmarshal(roleData, &role); err != nil {
 			return fmt.Errorf("%w: decode role %q: %w", ErrUnavailable, binding.Spec.RoleRef.Name, err)
 		}
-		for _, rule := range role.Spec.Rules {
-			if !matchesRule(rule, workspace, name, verb) {
-				continue
-			}
-			switch rule.Effect {
-			case "deny":
-				return ErrForbidden
-			case "allow":
-				allowed = true
-			default:
-				return fmt.Errorf("%w: role %q has invalid effect", ErrUnavailable, role.Name)
-			}
+		roleAllowed, roleDenied, err := evaluate(role)
+		if err != nil {
+			return fmt.Errorf("%w: role %q: %w", ErrUnavailable, role.Name, err)
 		}
+		if roleDenied {
+			return ErrForbidden
+		}
+		allowed = allowed || roleAllowed
 	}
 
 	if !allowed {

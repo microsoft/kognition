@@ -1,0 +1,27 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# AutonomyReview: a request to review an agent's autonomous action or to
+# change its autonomy class. spec is immutable after creation, and the review
+# must be created without a decision (empty or Pending). The decision
+# (Approved/Denied, decidedBy, reason) is recorded afterwards on status by a
+# human reviewer through the apiserver or Studio; the controller sets
+# status.expiresAt.
+#
+# Prereq: samples/autonomy/manifests.yaml (AutonomyClasses and research-agent).
+#
+# Observe:
+#   kubectl get autonomyreviews.kognition.dev
+#   kubectl get autonomyreview research-agent-promotion -o yaml
+apiVersion: kognition.dev/v1alpha1
+kind: AutonomyReview
+metadata:
+  name: research-agent-promotion
+  namespace: default
+spec:
+  agentRef:
+    name: research-agent
+  currentClass: supervised
+  requestedClass: assisted
+  actionDescription: Promote research-agent from supervised to assisted for read-only web research.
+  evidence: No policy violations recorded in the last 30 days of supervised operation.

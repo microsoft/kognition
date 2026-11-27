@@ -1,0 +1,39 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Manually declared EvaluationRun. The Evaluation controller also creates its
+# own runs (`hello-agent-quality-g<generation>`); this one pins the dataset
+# version, graders and thresholds explicitly, and is immutable once created.
+# Re-run by creating a new object with a different name.
+#
+# Prereq: samples/simple-agent and samples/evaluation/manifests.yaml.
+#
+# Observe:
+#   kubectl get evaluationruns.kognition.dev
+#   kubectl get agentjobs.kognition.dev     # one target job per dataset case
+#   kubectl get evaluationrun hello-agent-quality-manual -o yaml
+apiVersion: kognition.dev/v1alpha1
+kind: EvaluationRun
+metadata:
+  name: hello-agent-quality-manual
+  namespace: default
+spec:
+  evaluationRef:
+    name: hello-agent-quality
+  datasetRef:
+    name: hello-agent-smoke-dataset
+    version: v1
+  targetRef:
+    kind: Agent
+    name: hello-agent
+  graders:
+    - name: task-success
+      type: task_success
+    - name: tool-reliability
+      type: tool_reliability
+  metricThresholds:
+    - metric: task_success
+      min: 1
+      required: true
+    - metric: tool_reliability
+      min: 1

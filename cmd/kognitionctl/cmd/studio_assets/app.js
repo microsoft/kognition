@@ -72,6 +72,8 @@ function studioFetch(path, options) {
 }
 
 function nsParam() {
+  // An empty namespace means "all namespaces" in kubernetes mode; omitting the param would fall back to the server default.
+  if (state.mode === "kubernetes") return `?namespace=${encodeURIComponent(state.namespace || "")}`;
   return state.namespace ? `?namespace=${encodeURIComponent(state.namespace)}` : "";
 }
 async function apiMeta() {
@@ -261,11 +263,12 @@ function toYaml(value, indent = 0) {
     return keys
       .map((k) => {
         const v = value[k];
-        if (v === undefined || v === null) return `${pad}${k}: null`;
-        if (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0) return `${pad}${k}: {}`;
-        if (Array.isArray(v) && v.length === 0) return `${pad}${k}: []`;
-        if (typeof v === "object") return `${pad}${k}:\n${toYaml(v, indent + 1)}`;
-        return `${pad}${k}: ${toYaml(v, indent + 1)}`;
+        const key = /^[A-Za-z_][A-Za-z0-9_./-]*$/.test(k) && !/^(true|false|null|yes|no|on|off|y|n)$/i.test(k) ? k : JSON.stringify(k);
+        if (v === undefined || v === null) return `${pad}${key}: null`;
+        if (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0) return `${pad}${key}: {}`;
+        if (Array.isArray(v) && v.length === 0) return `${pad}${key}: []`;
+        if (typeof v === "object") return `${pad}${key}:\n${toYaml(v, indent + 1)}`;
+        return `${pad}${key}: ${toYaml(v, indent + 1)}`;
       })
       .join("\n");
   }
@@ -373,13 +376,18 @@ async function refreshAll() {
   return results.every(Boolean);
 }
 
+let namespaceRevision = 0;
+
 async function refreshOne(plural) {
+  const revision = namespaceRevision;
   try {
     const items = await apiList(plural);
+    if (revision !== namespaceRevision) return false;
     state.lists[plural] = items;
     renderList(plural);
     return true;
   } catch (e) {
+    if (revision !== namespaceRevision) return false;
     const list = document.getElementById(`list-${plural}`);
     if (list) {
       list.replaceChildren();
@@ -563,9 +571,11 @@ function confirmDiscard() {
 // ============================================================================
 async function selectResource(plural, name, ns, skipDirtyCheck = false) {
   if (!skipDirtyCheck && !confirmDiscard()) return;
+  const revision = namespaceRevision;
   setStatus("loading…", "info");
   try {
     const obj = await apiGet(plural, name, ns);
+    if (revision !== namespaceRevision) return;
     state.draft = obj;
     state.draftKey = keyOf(plural, name, ns);
     state.existsInCluster = true;
@@ -586,7 +596,7 @@ async function selectResource(plural, name, ns, skipDirtyCheck = false) {
     stopViewerPolling();
     if (obj.kind === "WorkflowRun" || obj.kind === "EvaluationRun") startViewerPolling(plural, name, ns);
   } catch (e) {
-    setStatus(e.message, "error");
+    if (revision === namespaceRevision) setStatus(e.message, "error");
   }
 }
 
@@ -888,6 +898,7 @@ function renderEditor() {
     titleEl.textContent = "Select or create a resource";
     kindPill.textContent = "—";
     btnDeploy.disabled = true;
+    btnDeploy.title = "";
     btnDelete.disabled = true;
     btnDiscard.disabled = true;
     empty.style.display = "";
@@ -900,7 +911,8 @@ function renderEditor() {
   const name = state.draft.metadata.name || "(unnamed)";
   const ns = StudioResources.namespaced(state.draft.kind) ? state.draft.metadata.namespace || "default" : "cluster";
   titleEl.textContent = `${name}  ·  ${ns}${state.existsInCluster ? "" : "  (draft)"}${state.dirty && state.existsInCluster ? "  *" : ""}`;
-  btnDeploy.disabled = !StudioResources.editable();
+  btnDeploy.disabled = !StudioResources.editable() || deployingDrafts.has(state.draft) || teamBlocked(state.draft);
+  btnDeploy.title = teamBlocked(state.draft) ? TEAM_UNSUPPORTED_MESSAGE : "";
   btnDeploy.textContent = StudioResources.descriptor(state.draft.kind)?.treatment === "launch" ? "Launch" : "Deploy";
   btnDelete.disabled = !state.existsInCluster || !StudioResources.editable();
   btnDiscard.disabled = !state.dirty;
@@ -1232,10 +1244,30 @@ async function applyYAML() {
 // ============================================================================
 // Deploy / Delete
 // ============================================================================
+const deployingDrafts = new WeakSet();
+
+function hasWorkflowTeam(draft) {
+  return draft?.kind === "Workflow" && Array.isArray(draft.spec?.steps)
+    && draft.spec.steps.some((step) => step?.type === "collaboration" || step?.collaboration != null);
+}
+
+const TEAM_UNSUPPORTED_MESSAGE = "Team steps run only on the Kubernetes runtime";
+
+// Team steps execute through the Kubernetes controller; other Studio modes can only draft them.
+function teamBlocked(draft) {
+  return hasWorkflowTeam(draft) && state.mode !== "kubernetes";
+}
+
 async function deploy() {
-  if (!state.draft) return;
+  const draft = state.draft;
+  if (!draft || deployingDrafts.has(draft)) return;
+  if (teamBlocked(draft)) {
+    setStatus(TEAM_UNSUPPORTED_MESSAGE, "error");
+    return;
+  }
   if (!StudioResources.validate()) return;
-  const body = clone(state.draft);
+  const submittedDraft = JSON.stringify(draft);
+  const body = JSON.parse(submittedDraft);
   if (!body || !body.metadata || !body.metadata.name) {
     setStatus("metadata.name is required", "error");
     return;
@@ -1274,6 +1306,8 @@ async function deploy() {
   if (StudioResources.executionChange()
       && !confirm(`Apply ${body.kind} ${body.metadata.name}? This may start execution, indexing or recurring work and use paid providers.`)) return;
   // resourceVersion is required for PUT; backend auto-fills if missing.
+  deployingDrafts.add(draft);
+  document.getElementById("btn-deploy").disabled = true;
   setStatus("deploying…", "info");
   try {
     let result;
@@ -1282,16 +1316,31 @@ async function deploy() {
     } else {
       result = await apiCreate(plural, body, ns);
     }
-    state.draft = result;
-    state.draftKey = keyOf(plural, result.metadata.name, result.metadata.namespace);
-    state.existsInCluster = true;
-    state.dirty = false;
-    setStatus(`deployed ${state.draft.kind} ${result.metadata.name}`, "success");
+    if (state.draft === draft) {
+      const yamlArea = document.getElementById("yaml-area");
+      const pendingYAML = state.view === "yaml" && yamlArea.value !== toYaml(clone(draft)) ? yamlArea.value : null;
+      state.draftKey = keyOf(plural, result.metadata.name, result.metadata.namespace);
+      state.existsInCluster = true;
+      if (JSON.stringify(draft) === submittedDraft) {
+        state.draft = result;
+        state.dirty = false;
+      } else {
+        draft.metadata.resourceVersion = result.metadata.resourceVersion;
+        draft.metadata.uid = result.metadata.uid;
+        state.dirty = true;
+      }
+      deployingDrafts.delete(draft);
+      renderEditor();
+      if (pendingYAML !== null) yamlArea.value = pendingYAML;
+      setStatus(`deployed ${result.kind} ${result.metadata.name}${state.dirty || pendingYAML !== null ? " (newer edits not deployed)" : ""}`, "success");
+    }
     await refreshOne(plural);
-    renderEditor();
     refreshSidebarActive();
   } catch (e) {
-    setStatus(`deploy failed: ${e.message}`, "error");
+    if (state.draft === draft) setStatus(`deploy failed: ${e.message}`, "error");
+  } finally {
+    deployingDrafts.delete(draft);
+    if (state.draft === draft) document.getElementById("btn-deploy").disabled = !StudioResources.editable() || teamBlocked(draft);
   }
 }
 
@@ -2946,6 +2995,10 @@ function validateWorkflowGraph(workflow = state.draft) {
     const name = (step.name || "").trim();
     if (!name) add("error", "A workflow step is missing its name.");
     else counts.set(name, (counts.get(name) || 0) + 1);
+    if (step.type === "collaboration") {
+      for (const problem of teamProblems(step, workflow)) add("error", `${name || "Unnamed team"}: ${problem}`, name ? { step: name } : {});
+      continue;
+    }
     const reference = step.type === "tool" ? step.toolRef?.name : step.agentRef?.name;
     if (!reference) add("error", `${name || "Unnamed step"} is missing its ${step.type === "tool" ? "tool" : "agent"} reference.`, name ? { step: name } : {});
   }
@@ -3109,9 +3162,11 @@ function renderWorkflowCanvas() {
   const toolbar = document.createElement("div"); toolbar.className = "canvas-toolbar";
   const addAgentBtn = document.createElement("button"); addAgentBtn.className = "action"; addAgentBtn.textContent = "+ Agent";
   const addToolBtn = document.createElement("button"); addToolBtn.className = "action"; addToolBtn.textContent = "+ Tool";
+  const addTeamBtn = document.createElement("button"); addTeamBtn.className = "action"; addTeamBtn.textContent = "+ Team step";
   addAgentBtn.addEventListener("click", () => addStep("agent"));
   addToolBtn.addEventListener("click", () => addStep("tool"));
-  toolbar.appendChild(addAgentBtn); toolbar.appendChild(addToolBtn);
+  addTeamBtn.addEventListener("click", () => addStep("collaboration"));
+  toolbar.append(addAgentBtn, addToolBtn, addTeamBtn);
 
   const divider = document.createElement("span"); divider.className = "toolbar-divider"; toolbar.appendChild(divider);
   const commandButton = (label, title, onClick) => {
@@ -3504,7 +3559,8 @@ function buildNode(step) {
   const nameEl = document.createElement("div"); nameEl.className = "node-name"; nameEl.textContent = step.name || "(unnamed)";
   const kindEl = document.createElement("div"); kindEl.className = "node-kind"; kindEl.textContent = step.type || "agent";
   node.appendChild(nameEl); node.appendChild(kindEl);
-  const refName = (step.type === "tool" ? step.toolRef?.name : step.agentRef?.name) || "";
+  const refName = (step.type === "collaboration" ? `${step.collaboration?.members?.length || 0} members · ${step.collaboration?.strategy || "team"}`
+    : step.type === "tool" ? step.toolRef?.name : step.agentRef?.name) || "";
   if (refName) {
     const refEl = document.createElement("div"); refEl.className = "node-ref"; refEl.textContent = refName;
     node.appendChild(refEl);
@@ -4036,15 +4092,233 @@ function autoLayout(wf) {
   return pos;
 }
 
+// ----- Team (collaboration) steps ------------------------------------------
+// Mirrors the admission rules in internal/admission/workflow_collaboration_validator.go.
+const TEAM_STRATEGIES = ["Supervisor", "Parallel", "Handoff", "Peer"];
+const TEAM_STRATEGY_BLOCKS = { Supervisor: "supervisor", Parallel: "parallel", Handoff: "handoff", Peer: "peer" };
+const TEAM_ALIAS_RE = /^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$/;
+const TEAM_MAX_MEMBERS = 8;
+const TEAM_MAX_STEP_SECONDS = 24 * 3600;
+const TEAM_GUIDANCE_MAX = 2000;
+const TEAM_DESCRIPTION_MAX = 500;
+const TEAM_LIMIT_MAX = { maxTurns: 100, maxMessages: 500, maxDelegations: 100, maxDelegationDepth: 5, maxParallelTasks: 8 };
+const TEAM_STRATEGY_HINTS = {
+  Supervisor: "One coordinator delegates work to the other members and produces the final result.",
+  Parallel: "Every branch member runs concurrently; an optional synthesizer combines the results.",
+  Handoff: "One member owns the task at a time and can transfer ownership to another member.",
+  Peer: "Members delegate to each other freely; only the finalizer can complete the step.",
+};
+
+function newWorkflowTeam(strategy = "Parallel") {
+  const team = {
+    strategy, protocol: "A2A",
+    members: ["member-1", "member-2"].map((name) => ({ name, agentRef: { name: "" } })),
+    limits: { maxTurns: 4, maxMessages: 16, maxDelegations: 1, maxDelegationDepth: 1, maxParallelTasks: 2, maxTokens: 8192 },
+  };
+  applyTeamStrategy(team, strategy);
+  return team;
+}
+
+function teamMemberNames(team) {
+  return (team.members || []).map((member) => member?.name).filter(Boolean);
+}
+
+function setTeamMemberKind(member, external) {
+  if (external) {
+    delete member.agentRef; delete member.serviceRef;
+    member.externalAgentRef = { name: "" };
+  } else {
+    delete member.externalAgentRef;
+    member.agentRef = { name: "" };
+  }
+}
+
+// Rebuilds the strategy block and interactions for the current members.
+function applyTeamStrategy(team, strategy) {
+  const names = teamMemberNames(team);
+  const [first] = names;
+  for (const block of Object.values(TEAM_STRATEGY_BLOCKS)) delete team[block];
+  team.strategy = strategy;
+  if (strategy === "Parallel") {
+    delete team.allowedInteractions;
+    team.parallel = { branches: names.map((member) => ({ member })) };
+    return;
+  }
+  const others = names.slice(1);
+  if (strategy === "Peer") {
+    team.allowedInteractions = names.flatMap((from) => names.filter((to) => to !== from).map((to) => ({ from, to })));
+    team.peer = { finalizer: first };
+  } else {
+    team.allowedInteractions = others.map((to) => ({ from: first, to }));
+    if (strategy === "Supervisor") team.supervisor = { coordinator: first };
+    else team.handoff = { entryMember: first, maxHandoffs: 1 };
+  }
+  team.limits.maxDelegations = Math.min(TEAM_LIMIT_MAX.maxDelegations, Math.max(team.limits.maxDelegations || 1, others.length));
+}
+
+function addTeamMember(team) {
+  let suffix = 1;
+  while (team.members.some((member) => member.name === `member-${suffix}`)) suffix++;
+  const name = `member-${suffix}`;
+  const [first] = teamMemberNames(team);
+  team.members.push({ name, agentRef: { name: "" } });
+  if (team.strategy === "Parallel") team.parallel.branches.push({ member: name });
+  else if (team.strategy === "Peer") team.allowedInteractions.push({ from: first, to: name }, { from: name, to: first });
+  else team.allowedInteractions.push({ from: team.supervisor?.coordinator || team.handoff?.entryMember || first, to: name });
+  if (team.strategy !== "Parallel") team.limits.maxDelegations = Math.min(TEAM_LIMIT_MAX.maxDelegations, Math.max(team.limits.maxDelegations || 1, team.members.length - 1));
+}
+
+function removeTeamMember(team, name) {
+  team.members = team.members.filter((member) => member.name !== name);
+  const [first] = teamMemberNames(team);
+  if (team.parallel) {
+    team.parallel.branches = team.parallel.branches.filter((branch) => branch.member !== name);
+    if (team.parallel.synthesizer === name) delete team.parallel.synthesizer;
+  }
+  if (team.allowedInteractions) {
+    team.allowedInteractions = team.allowedInteractions.filter((item) => item.from !== name && item.to !== name);
+    if (!team.allowedInteractions.length) delete team.allowedInteractions;
+  }
+  if (team.supervisor?.coordinator === name) team.supervisor.coordinator = first;
+  if (team.handoff?.entryMember === name) team.handoff.entryMember = first;
+  if (team.peer?.finalizer === name) team.peer.finalizer = first;
+}
+
+function renameTeamMember(team, from, to) {
+  for (const member of team.members) if (member.name === from) member.name = to;
+  for (const branch of team.parallel?.branches || []) if (branch.member === from) branch.member = to;
+  for (const item of team.allowedInteractions || []) {
+    if (item.from === from) item.from = to;
+    if (item.to === from) item.to = to;
+  }
+  if (team.parallel?.synthesizer === from) team.parallel.synthesizer = to;
+  if (team.supervisor?.coordinator === from) team.supervisor.coordinator = to;
+  if (team.handoff?.entryMember === from) team.handoff.entryMember = to;
+  if (team.peer?.finalizer === from) team.peer.finalizer = to;
+}
+
+function goDurationSeconds(text) {
+  if (!GO_DURATION_RE.test(text)) return NaN;
+  const unit = { ns: 1e-9, us: 1e-6, "µs": 1e-6, ms: 1e-3, s: 1, m: 60, h: 3600 };
+  let total = 0;
+  for (const [, amount, suffix] of text.matchAll(/(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/gi)) total += Number(amount) * unit[suffix.toLowerCase()];
+  return total;
+}
+
+function teamProblems(step, workflow) {
+  const problems = [];
+  const team = step.collaboration;
+  if (!(step.input || "").trim()) problems.push("an input is required, for example {{ .Input }} to pass the run input to the team.");
+  if (!step.timeout) problems.push("a timeout is required.");
+  else {
+    const seconds = goDurationSeconds(step.timeout);
+    if (Number.isNaN(seconds)) problems.push(`timeout "${step.timeout}" is not a valid duration.`);
+    else if (seconds <= 0 || seconds > TEAM_MAX_STEP_SECONDS) problems.push("timeout must be greater than zero and at most 24h.");
+  }
+  if (!team || typeof team !== "object") return [...problems, "the team definition is missing."];
+  if (!TEAM_STRATEGIES.includes(team.strategy)) problems.push("choose a strategy.");
+  const members = Array.isArray(team.members) ? team.members : [];
+  if (members.length < 2 || members.length > TEAM_MAX_MEMBERS) problems.push(`needs between 2 and ${TEAM_MAX_MEMBERS} members.`);
+  const aliases = new Set();
+  const agents = new Map();
+  if ([...(team.guidance || "")].length > TEAM_GUIDANCE_MAX) problems.push(`guidance must not exceed ${TEAM_GUIDANCE_MAX} characters.`);
+  for (const member of members) {
+    const alias = member?.name || "";
+    if ([...(member?.description || "")].length > TEAM_DESCRIPTION_MAX) problems.push(`the description of "${alias}" must not exceed ${TEAM_DESCRIPTION_MAX} characters.`);
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u001f\u007f-\u009f]/.test(member?.description || "")) problems.push(`the description of "${alias}" must be a single line without control characters.`);
+    if (!TEAM_ALIAS_RE.test(alias)) problems.push(`member name "${alias}" must be a lowercase DNS label of at most 32 characters starting with a letter.`);
+    else if (aliases.has(alias)) problems.push(`member name "${alias}" is used more than once.`);
+    aliases.add(alias);
+    if (member?.externalAgentRef != null) {
+      const remote = member.externalAgentRef.name;
+      if (member.agentRef?.name) problems.push(`member "${alias}" must set exactly one of an agent and an external agent.`);
+      else if (!remote) problems.push(`member "${alias}" needs an external agent.`);
+      else if (member.serviceRef?.name) problems.push(`member "${alias}" cannot use an AgentService with an external agent.`);
+      else if (agents.has(`external/${remote}`)) problems.push(`members "${agents.get(`external/${remote}`)}" and "${alias}" use the same external agent.`);
+      else agents.set(`external/${remote}`, alias);
+      continue;
+    }
+    if (!member?.agentRef?.name) { problems.push(`member "${alias}" needs an agent.`); continue; }
+    const key = `${member.agentRef.namespace || workflow.metadata?.namespace || "default"}/${member.agentRef.name}`;
+    if (agents.has(key)) problems.push(`members "${agents.get(key)}" and "${alias}" use the same agent.`);
+    else agents.set(key, alias);
+  }
+  const limits = team.limits || {};
+  for (const [key, max] of Object.entries(TEAM_LIMIT_MAX)) {
+    if (!Number.isInteger(limits[key]) || limits[key] < 1 || limits[key] > max) problems.push(`limits.${key} must be between 1 and ${max}.`);
+  }
+  if (!Number.isInteger(limits.maxTokens) || limits.maxTokens < 1) problems.push("limits.maxTokens must be greater than zero.");
+
+  const known = (alias) => aliases.has(alias);
+  const outgoing = new Map();
+  const interactions = Array.isArray(team.allowedInteractions) ? team.allowedInteractions : [];
+  if (team.strategy === "Parallel") {
+    if (interactions.length) problems.push("Parallel teams do not use allowed interactions.");
+  } else {
+    if (!interactions.length) problems.push("add at least one allowed interaction.");
+    const seen = new Set();
+    for (const item of interactions) {
+      if (!known(item?.from) || !known(item?.to)) problems.push(`interaction ${item?.from || "?"} → ${item?.to || "?"} references an unknown member.`);
+      else if (item.from === item.to) problems.push(`interaction ${item.from} → ${item.to} is a self-interaction.`);
+      else {
+        const id = `${item.from}\u0000${item.to}`;
+        if (seen.has(id)) problems.push(`interaction ${item.from} → ${item.to} is repeated.`);
+        seen.add(id);
+        outgoing.set(item.from, (outgoing.get(item.from) || 0) + 1);
+      }
+    }
+  }
+  const wrongBlocks = TEAM_STRATEGIES.filter((s) => s !== team.strategy && team[TEAM_STRATEGY_BLOCKS[s]] != null);
+  if (wrongBlocks.length) problems.push(`remove the ${wrongBlocks.map((s) => TEAM_STRATEGY_BLOCKS[s]).join(", ")} settings; they do not belong to ${team.strategy}.`);
+  const requireMember = (label, alias, needsOutgoing) => {
+    if (!known(alias)) problems.push(`${label} must be one of the team members.`);
+    else if (needsOutgoing && !outgoing.get(alias)) problems.push(`${label} "${alias}" needs at least one allowed interaction from it.`);
+  };
+  if (team.strategy === "Supervisor") {
+    if (!team.supervisor) problems.push("choose a coordinator.");
+    else requireMember("the coordinator", team.supervisor.coordinator, true);
+  } else if (team.strategy === "Parallel") {
+    const branches = team.parallel?.branches;
+    if (!Array.isArray(branches) || branches.length < 2 || branches.length > TEAM_LIMIT_MAX.maxParallelTasks) {
+      problems.push(`needs between 2 and ${TEAM_LIMIT_MAX.maxParallelTasks} parallel branches.`);
+    } else {
+      const names = new Set();
+      for (const branch of branches) {
+        if (!known(branch?.member)) problems.push(`branch "${branch?.member || ""}" must be one of the team members.`);
+        else if (names.has(branch.member)) problems.push(`branch "${branch.member}" is repeated.`);
+        names.add(branch?.member);
+      }
+      const synthesizer = team.parallel.synthesizer;
+      if (synthesizer && !known(synthesizer)) problems.push("the synthesizer must be one of the team members.");
+      else if (synthesizer && names.has(synthesizer)) problems.push("the synthesizer cannot also be a branch.");
+    }
+    if (!team.parallel) problems.push("add the parallel branches.");
+  } else if (team.strategy === "Handoff") {
+    if (!team.handoff) problems.push("choose an entry member.");
+    else {
+      requireMember("the entry member", team.handoff.entryMember, true);
+      const max = team.handoff.maxHandoffs;
+      if (!Number.isInteger(max) || max < 1 || max > (limits.maxDelegations || 0)) problems.push("maxHandoffs must be between 1 and limits.maxDelegations.");
+    }
+  } else if (team.strategy === "Peer") {
+    if (!team.peer) problems.push("choose a finalizer.");
+    else requireMember("the finalizer", team.peer.finalizer, false);
+  }
+  return problems;
+}
+
+
 function addStep(type) {
   const wf = state.draft;
   recordWorkflowHistory(`add ${type} step`);
   wf.spec.steps = wf.spec.steps || [];
-  const base = type === "tool" ? "tool" : "step";
+  const base = type === "collaboration" ? "team" : type === "tool" ? "tool" : "step";
   let i = 1;
   while (wf.spec.steps.find((s) => s.name === `${base}-${i}`)) i++;
   const name = `${base}-${i}`;
-  const step = type === "tool" ? { name, type: "tool", toolRef: { name: "" } } : { name, type: "agent", agentRef: { name: "" } };
+  const step = type === "collaboration" ? { name, type, input: "{{ .Input }}", timeout: "5m", collaboration: newWorkflowTeam() }
+    : type === "tool" ? { name, type, toolRef: { name: "" } } : { name, type, agentRef: { name: "" } };
   wf.spec.steps.push(step);
   const canvas = document.getElementById("wf-canvas");
   const selectedPosition = state.selectedStep && state.canvasPositions[state.selectedStep];
@@ -4082,6 +4356,197 @@ function closeInspector() {
   document.querySelectorAll(".node.selected, svg.edges path.selected").forEach((n) => n.classList.remove("selected"));
 }
 
+// Runs a mutation that rebuilds the inspector, then refocuses the control at the same DOM position.
+function keepInspectorFocus(mutate) {
+  const controls = () => [...document.querySelectorAll("#inspector-body input, #inspector-body select, #inspector-body textarea, #inspector-body button")];
+  const index = controls().indexOf(document.activeElement);
+  mutate();
+  if (index >= 0) controls()[index]?.focus();
+}
+
+// Text input that commits on blur/Enter so renames do not re-render the inspector per keystroke.
+function commitTextField(label, value, onCommit, required) {
+  const input = document.createElement("input"); input.type = "text"; input.value = value || "";
+  // Deferred so focus has already moved to the next control when the inspector is rebuilt.
+  input.addEventListener("change", () => {
+    const committed = input.value.trim();
+    setTimeout(() => keepInspectorFocus(() => onCommit(committed)), 0);
+  });
+  return field(label, input, { required });
+}
+
+function renderWorkflowTeam(host, step) {
+  const team = step.collaboration;
+  if (!team || team.protocol !== "A2A" || !Array.isArray(team.members) || team.members.some((member) => !member?.name)
+      || !team.limits || typeof team.limits !== "object") {
+    host.appendChild(previewBanner("info", "This team definition is available in the YAML draft only."));
+    return;
+  }
+  if (state.mode !== "kubernetes") host.appendChild(previewBanner("warn", `${TEAM_UNSUPPORTED_MESSAGE}. Drafts can be edited and exported here.`));
+  const edit = (label, mutate, render = false) => editWorkflow(label, mutate, { render });
+  host.appendChild(section("Collaboration strategy", "A2A", (body) => {
+    body.appendChild(selectField("Strategy", team.strategy || "", [
+      ...(TEAM_STRATEGIES.includes(team.strategy) ? [] : [{ value: team.strategy || "", label: team.strategy || "Choose a strategy" }]),
+      ...TEAM_STRATEGIES,
+    ], (value) => edit("change team strategy", () => { applyTeamStrategy(team, value); }, true)));
+    if (TEAM_STRATEGY_HINTS[team.strategy]) {
+      const hint = document.createElement("p"); hint.className = "hint"; hint.textContent = TEAM_STRATEGY_HINTS[team.strategy];
+      body.appendChild(hint);
+    }
+  }, true));
+  const block = team[TEAM_STRATEGY_BLOCKS[team.strategy]];
+  if (!TEAM_STRATEGIES.includes(team.strategy) || !block || typeof block !== "object") {
+    host.appendChild(previewBanner("info", "Pick a strategy to generate its settings."));
+    return;
+  }
+  const isParallel = team.strategy === "Parallel";
+  if (isParallel && (!Array.isArray(block.branches) || block.branches.some((branch) => !branch?.member))) {
+    host.appendChild(previewBanner("info", "This parallel definition is available in the YAML draft only."));
+    return;
+  }
+  const memberNames = teamMemberNames(team);
+  host.appendChild(section("Team guidance", `${[...(team.guidance || "")].length} of ${TEAM_GUIDANCE_MAX}`, (body) => {
+    body.appendChild(textareaField("Guidance for the team", team.guidance || "",
+      (value) => edit("edit team guidance", () => { setOrDel(team, "guidance", value.trim() ? value : undefined); }),
+      "For example: ask the analyst to verify the facts, then the reviewer to check tone, before finalizing."));
+    const hint = document.createElement("p"); hint.className = "hint";
+    hint.textContent = "Sent to every member as trusted instructions on how to resolve the task. It guides the members; it does not change who may call whom.";
+    body.appendChild(hint);
+  }, true));
+  host.appendChild(section("Team members", `${team.members.length} of ${TEAM_MAX_MEMBERS}`, (body) => {
+    const workflowNamespace = state.draft.metadata.namespace || "default";
+    for (const member of team.members) {
+      const branch = isParallel ? team.parallel.branches.find((item) => item.member === member.name) : undefined;
+      body.appendChild(commitTextField(`Name of ${member.name}`, member.name, (value) => {
+        if (!value || value === member.name || memberNames.includes(value)) { renderEditor(); return; }
+        edit("rename team member", () => { renameTeamMember(team, member.name, value); }, true);
+      }));
+      const external = member.externalAgentRef != null;
+      body.appendChild(textField(`Description of ${member.name}`, member.description || "",
+        (value) => edit("edit team member description", () => { setOrDel(member, "description", value.trim() ? value : undefined); }),
+        false, external ? "Optional; defaults to the skills pinned on the external agent" : "What this member is good at"));
+      body.appendChild(selectField(`Kind of ${member.name}`, external ? "external" : "agent", [
+        { value: "agent", label: "Agent" }, { value: "external", label: "External agent" },
+      ], (value) => edit("change team member kind", () => { setTeamMemberKind(member, value === "external"); }, true)));
+      if (external) {
+        const remoteLabel = `External agent for ${member.name}`;
+        body.appendChild(refSelect(remoteLabel, member.externalAgentRef?.name || "",
+          (state.lists.externalagents || []).filter((remote) => (remote.metadata?.namespace || "default") === workflowNamespace),
+          (value) => edit("change team external agent", () => { member.externalAgentRef = { name: value }; }), true));
+        const hint = document.createElement("p"); hint.className = "hint";
+        hint.textContent = "Prompt data is sent to the remote endpoint. Needs an ExternalAgentGrant for this workflow and an operator allow-list entry.";
+        body.appendChild(hint);
+      }
+      const updateAgent = (value) => edit("change team agent", () => { member.agentRef = { ...member.agentRef, name: value }; });
+      const agentLabel = `Agent for ${member.name}`;
+      if (!external) {
+        const memberNamespace = member.agentRef?.namespace || workflowNamespace;
+        body.appendChild(memberNamespace === (state.namespace || "default")
+          ? refSelect(agentLabel, member.agentRef?.name || "", (state.lists.agents || []).filter(
+            (agent) => (agent.metadata?.namespace || state.namespace || "default") === memberNamespace), updateAgent, true)
+          : textField(agentLabel, member.agentRef?.name || "", updateAgent, true));
+        const namespaces = [...new Set([workflowNamespace, memberNamespace, ...state.namespaces])].filter(Boolean).sort();
+        body.appendChild(selectField(`Namespace for ${member.name}`, member.agentRef?.namespace || "", [
+          { value: "", label: `Workflow namespace (${workflowNamespace})` }, ...namespaces,
+        ], (value) => {
+          edit("change team namespace", () => {
+            member.agentRef = { ...member.agentRef, namespace: value || undefined };
+          }, true);
+        }));
+        body.appendChild(textField(`AgentService for ${member.name}`, member.serviceRef?.name || "", (value) => {
+          edit("change team service", () => { setOrDel(member, "serviceRef", value ? { name: value } : undefined); });
+        }));
+      }
+      if (branch) {
+        const label = `Optional branch for ${member.name}`;
+        const optional = checkboxField(label, branch.optional, (value) => {
+          edit("change optional team branch", () => { branch.optional = value || undefined; });
+        });
+        optional.querySelector("input").setAttribute("aria-label", label);
+        body.appendChild(optional);
+      }
+      if (team.members.length > 2 && (!branch || team.parallel.branches.length > 2)) {
+        const remove = document.createElement("button"); remove.type = "button"; remove.className = "action danger";
+        remove.textContent = `Remove ${member.name}`;
+        remove.addEventListener("click", () => edit("remove team member", () => { removeTeamMember(team, member.name); }, true));
+        body.appendChild(remove);
+      }
+    }
+    const add = document.createElement("button"); add.type = "button"; add.className = "add-row";
+    add.textContent = "+ Add member"; add.disabled = team.members.length >= TEAM_MAX_MEMBERS;
+    add.addEventListener("click", () => edit("add team member", () => { addTeamMember(team); }, true));
+    body.appendChild(add);
+  }, true));
+
+  const memberOptions = (allowNone) => [...(allowNone ? [{ value: "", label: "None" }] : []), ...memberNames];
+  const roleLabel = { Supervisor: "Coordinator", Handoff: "Entry member", Peer: "Finalizer" }[team.strategy];
+  host.appendChild(section(`${team.strategy} settings`, "", (body) => {
+    if (team.strategy === "Supervisor") {
+      body.appendChild(selectField(roleLabel, block.coordinator || "", memberOptions(false),
+        (value) => edit("change team coordinator", () => { team.supervisor.coordinator = value; }), true));
+    } else if (team.strategy === "Handoff") {
+      body.appendChild(selectField(roleLabel, block.entryMember || "", memberOptions(false),
+        (value) => edit("change team entry member", () => { team.handoff.entryMember = value; }), true));
+      body.appendChild(numberField("maxHandoffs", block.maxHandoffs, (value) => {
+        edit("edit team maxHandoffs", () => { team.handoff.maxHandoffs = value; });
+      }, "Between 1 and limits.maxDelegations"));
+    } else if (team.strategy === "Peer") {
+      body.appendChild(selectField(roleLabel, block.finalizer || "", memberOptions(false),
+        (value) => edit("change team finalizer", () => { team.peer.finalizer = value; }), true));
+    } else if (team.members.length > 2 || block.synthesizer) {
+      body.appendChild(selectField("Synthesizer", block.synthesizer || "", memberOptions(true), (value) => edit("change team synthesizer", () => {
+        const previous = team.parallel.synthesizer;
+        setOrDel(team.parallel, "synthesizer", value || undefined);
+        team.parallel.branches = team.parallel.branches.filter((branch) => branch.member !== value);
+        if (previous && previous !== value && !team.parallel.branches.some((branch) => branch.member === previous)) {
+          team.parallel.branches.push({ member: previous });
+        }
+      }, true)));
+    } else {
+      const note = document.createElement("div"); note.className = "hint";
+      note.textContent = "Every member runs as a branch. Add a third member to designate a synthesizer.";
+      body.appendChild(note);
+    }
+  }, true));
+
+  if (!isParallel) {
+    host.appendChild(section("Allowed interactions", "Which member may delegate to which. Only these A2A calls are admitted.", (body) => {
+      (team.allowedInteractions || []).forEach((item, index) => {
+        const row = document.createElement("div"); row.className = "field-grid";
+        row.appendChild(selectField(`Interaction ${index + 1} from`, item.from || "", ["", ...memberNames],
+          (value) => edit("change team interaction", () => { item.from = value; })));
+        row.appendChild(selectField(`Interaction ${index + 1} to`, item.to || "", ["", ...memberNames],
+          (value) => edit("change team interaction", () => { item.to = value; })));
+        body.appendChild(row);
+        const remove = document.createElement("button"); remove.type = "button"; remove.className = "action danger";
+        remove.textContent = `Remove interaction ${index + 1}`;
+        remove.addEventListener("click", () => edit("remove team interaction", () => {
+          team.allowedInteractions.splice(index, 1);
+        }, true));
+        body.appendChild(remove);
+      });
+      const add = document.createElement("button"); add.type = "button"; add.className = "add-row";
+      add.textContent = "+ Add interaction"; add.disabled = (team.allowedInteractions || []).length >= TEAM_MAX_MEMBERS * (TEAM_MAX_MEMBERS - 1);
+      add.addEventListener("click", () => edit("add team interaction", () => {
+        const existing = new Set((team.allowedInteractions || []).map((item) => `${item.from}\u0000${item.to}`));
+        const pair = memberNames.flatMap((from) => memberNames.filter((to) => to !== from).map((to) => ({ from, to })))
+          .find((candidate) => !existing.has(`${candidate.from}\u0000${candidate.to}`)) || { from: "", to: "" };
+        (team.allowedInteractions ||= []).push(pair);
+      }, true));
+      body.appendChild(add);
+    }, true));
+  }
+
+  const limitHints = { ...Object.fromEntries(Object.entries(TEAM_LIMIT_MAX).map(([key, max]) => [key, `1–${max}`])), maxTokens: "Token allowance for the whole team; at least 1" };
+  host.appendChild(section("Team limits", "Hard bounds enforced while the team runs.", (body) => {
+    for (const key of ["maxTurns", "maxMessages", "maxDelegations", "maxDelegationDepth", "maxParallelTasks", "maxTokens"]) {
+      body.appendChild(numberField(key, team.limits[key], (value) => {
+        edit(`edit team ${key}`, () => { team.limits[key] = value; });
+      }, limitHints[key]));
+    }
+  }, true));
+}
+
 function renderStepInspector(name) {
   const wf = state.draft;
   const step = (wf.spec.steps || []).find((s) => s.name === name);
@@ -4091,7 +4556,7 @@ function renderStepInspector(name) {
   const host = document.getElementById("inspector-body");
   host.innerHTML = "";
 
-  host.appendChild(textField("Name", step.name, (v) => {
+  host.appendChild(commitTextField("Name", step.name, (v) => {
     if (!v || v === step.name) return;
     editWorkflow("rename step", () => {
       const old = step.name;
@@ -4118,10 +4583,20 @@ function renderStepInspector(name) {
 
   host.appendChild(selectField("Type", step.type || "agent", [
     { value: "agent", label: "agent" }, { value: "tool", label: "tool" },
+    { value: "collaboration", label: "Team" },
   ], (v) => {
     editWorkflow("change step type", () => {
       step.type = v;
+      if (v !== "collaboration") delete step.collaboration;
       if (v === "tool") { delete step.agentRef; step.toolRef = step.toolRef || { name: "" }; }
+      else if (v === "collaboration") {
+        delete step.agentRef;
+        delete step.toolRef;
+        delete step.retry;
+        step.timeout ||= "5m";
+        step.input ||= "{{ .Input }}";
+        step.collaboration ||= newWorkflowTeam();
+      }
       else { delete step.toolRef; step.agentRef = step.agentRef || { name: "" }; }
     }, { render: true });
   }));
@@ -4130,6 +4605,8 @@ function renderStepInspector(name) {
     host.appendChild(refSelect("Tool", step.toolRef?.name || "", state.lists.tools || [], (v) => {
       editWorkflow("change step tool", () => { step.toolRef = { name: v }; }, { render: true });
     }, true));
+  } else if (step.type === "collaboration") {
+    renderWorkflowTeam(host, step);
   } else {
     host.appendChild(refSelect("Agent", step.agentRef?.name || "", state.lists.agents || [], (v) => {
       editWorkflow("change step agent", () => { step.agentRef = { name: v }; }, { render: true });
@@ -4166,7 +4643,7 @@ function renderStepInspector(name) {
   rBody.appendChild(numberField("BackoffMultiplier", retry.backoffMultiplier, (v) => editRetry("backoffMultiplier", v)));
   rBody.appendChild(textField("MaxBackoff", retry.maxBackoff || "", (v) => editRetry("maxBackoff", v || undefined), false, "30s"));
   retrySec.appendChild(rBody);
-  host.appendChild(retrySec);
+  if (step.type !== "collaboration") host.appendChild(retrySec);
 
   // Memory claim override
   const memSec = document.createElement("details"); memSec.className = "form-section";
@@ -4299,6 +4776,10 @@ function renderPreview(host) {
   host.innerHTML = "";
   if (!state.draft) return;
   const kind = state.draft.kind;
+  if (teamBlocked(state.draft)) {
+    host.appendChild(previewBanner("warn", `${TEAM_UNSUPPORTED_MESSAGE}.`));
+    return;
+  }
   if (kind !== "Agent" && kind !== "Workflow" && kind !== "Tool" && kind !== "Evaluation") {
     host.appendChild(previewBanner("info", `Preview is available for Agents, Workflows, Tools, and Evaluations. ${escapeHtml(kind)} can't be invoked.`));
     return;
@@ -5333,7 +5814,7 @@ function renderRunStatus(run, openKeyPrefix, ns) {
       return NaN;
     };
     for (let i = 0; i < steps.length; i++) {
-      list.appendChild(renderStepCard(steps[i], stepSpecByName[steps[i].name], endTimeFor(i), prefix));
+      list.appendChild(renderStepCard(steps[i], stepSpecByName[steps[i].name], endTimeFor(i), prefix, { runName, ns: runNs, terminal: isTerminal }));
     }
     wrap.appendChild(list);
   }
@@ -5361,7 +5842,7 @@ function renderRunStatus(run, openKeyPrefix, ns) {
   return wrap;
 }
 
-function renderStepCard(step, spec, endTimeMs, openKeyPrefix) {
+function renderStepCard(step, spec, endTimeMs, openKeyPrefix, runCtx) {
   const card = document.createElement("div");
   card.className = "run-step-card";
 
@@ -5418,7 +5899,181 @@ function renderStepCard(step, spec, endTimeMs, openKeyPrefix) {
     const openKey = `${openKeyPrefix || "run"}#${step.name || ""}#output`;
     card.appendChild(renderCollapsibleBlock("Output", step.output, openKey));
   }
+  if (spec && spec.collaboration && runCtx && runCtx.runName && !StudioTutorial.isPractice()) {
+    card.appendChild(renderCollaborationPanel(step.name, runCtx, openKeyPrefix));
+  }
   return card;
+}
+
+// Collaboration traces are cached per run; the preview DOM is rebuilt on every
+// poll, so the cache keeps the panel from flashing and bounds the requests.
+const collabCache = new Map();
+const COLLAB_REFRESH_MS = 3000;
+
+function collabCacheKey(ctx) {
+  return `${ctx.ns}/${ctx.runName}`;
+}
+
+function refreshCollabTrace(ctx, onUpdate) {
+  const key = collabCacheKey(ctx);
+  const entry = collabCache.get(key) || { trace: null, error: "", fetchedAt: 0, pending: false, final: false };
+  collabCache.set(key, entry);
+  if (entry.pending || (entry.final && entry.trace)) return entry;
+  if (entry.fetchedAt && Date.now() - entry.fetchedAt < COLLAB_REFRESH_MS) return entry;
+  entry.pending = true;
+  const url = `/api/workflowruns/${encodeURIComponent(ctx.runName)}/collaboration?namespace=${encodeURIComponent(ctx.ns || "")}`;
+  studioFetch(url)
+    .then(async (r) => {
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`;
+        try { msg = (await r.json()).error || msg; } catch (_) { /* keep status text */ }
+        throw new Error(msg);
+      }
+      return r.json();
+    })
+    .then((trace) => {
+      entry.trace = trace;
+      entry.error = "";
+      // A finished run no longer changes, so stop polling once the ledger was read.
+      entry.final = !!ctx.terminal;
+    })
+    .catch((e) => { entry.error = String((e && e.message) || e); })
+    .finally(() => {
+      entry.pending = false;
+      entry.fetchedAt = Date.now();
+      onUpdate();
+    });
+  return entry;
+}
+
+function renderCollaborationPanel(stepName, ctx, openKeyPrefix) {
+  const host = document.createElement("div");
+  host.className = "collab-panel";
+  const paint = () => {
+    // A poll tick may have replaced this node; the replacement reads the cache.
+    if (!host.isConnected) return;
+    const entry = collabCache.get(collabCacheKey(ctx));
+    fillCollaborationPanel(host, stepName, entry, openKeyPrefix);
+  };
+  const entry = refreshCollabTrace(ctx, paint);
+  fillCollaborationPanel(host, stepName, entry, openKeyPrefix);
+  return host;
+}
+
+function collabFmtDuration(startISO, endISO) {
+  const a = Date.parse(startISO), b = Date.parse(endISO);
+  if (isNaN(a) || isNaN(b)) return "";
+  return `${Math.max(0, Math.round((b - a) / 1000))}s`;
+}
+
+function fillCollaborationPanel(host, stepName, entry, openKeyPrefix) {
+  host.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "run-field-label";
+  title.textContent = "Collaboration";
+  host.appendChild(title);
+
+  const trace = entry && entry.trace;
+  const info = trace && (trace.steps || []).find((s) => s.step === stepName);
+  const note = (text, cls) => {
+    const n = document.createElement("div");
+    n.className = `run-step-note ${cls || ""}`.trim();
+    n.textContent = text;
+    host.appendChild(n);
+  };
+  if (!trace) {
+    note(entry && entry.error ? `Trace unavailable: ${entry.error}` : "Loading trace…", entry && entry.error ? "bad" : "");
+    return;
+  }
+  if (!info) { note("No trace for this step yet."); return; }
+  if (!info.available) { note(info.message || "No trace available."); return; }
+
+  const c = info.counters || {}, lim = info.limits || {};
+  const of = (used, max) => (max ? `${used} of ${max}` : `${used}`);
+  const summary = document.createElement("div");
+  summary.className = "collab-summary";
+  const parts = [`<span class="collab-strategy">${escapeHtml(info.strategy || "")}</span>`, `<span class="run-phase ${phaseClassFor(info.phase)}">${escapeHtml(info.phase || "")}</span>`];
+  if (info.finalBy) parts.push(`final answer by <strong>${escapeHtml(info.finalBy)}</strong>`);
+  parts.push(`<span class="muted">turns ${escapeHtml(of(c.turns || 0, lim.maxTurns))} · delegations ${escapeHtml(of(c.delegations || 0, lim.maxDelegations))} · messages ${c.messages || 0} · tokens ${escapeHtml(of(c.tokensUsed || 0, lim.maxTokens))}</span>`);
+  summary.innerHTML = parts.join(" ");
+  host.appendChild(summary);
+
+  const members = info.members || [];
+  const chips = document.createElement("div");
+  chips.className = "collab-members";
+  for (const m of members) {
+    const chip = document.createElement("span");
+    let status = "not involved";
+    let cls = "idle";
+    if (m.final) { status = "answered"; cls = "final"; }
+    else if (m.contributed) { status = "contributed"; cls = "contrib"; }
+    else if (m.involved) { status = "ran"; cls = "ran"; }
+    chip.className = `collab-chip ${cls}`;
+    const detail = [`agent ${m.agent || "?"}`, `${m.tasks} task(s)`, `${m.turns} turn(s)`];
+    if (m.tokens) detail.push(`${m.tokens} tokens`);
+    chip.title = detail.join(" · ");
+    chip.innerHTML = `<strong>${escapeHtml(m.alias)}</strong> <span class="collab-role">${escapeHtml(m.role)}</span> <span class="collab-status">${escapeHtml(status)}</span>`;
+    chips.appendChild(chip);
+  }
+  host.appendChild(chips);
+
+  const idle = members.filter((m) => !m.involved).map((m) => m.alias);
+  if (info.strategy === "Supervisor" && info.phase === "Succeeded" && members.length > 1 && (c.delegations || 0) === 0 && idle.length) {
+    note(`The coordinator answered without delegating, so ${idle.join(", ")} did not take part.`);
+  } else if (info.reason && info.phase !== "Succeeded") {
+    note(info.reason, "bad");
+  }
+
+  const tasks = info.tasks || [];
+  const dispatches = info.dispatches || [];
+  if (!tasks.length && !dispatches.length) return;
+  const details = document.createElement("details");
+  details.className = "collab-trace";
+  const openKey = `${openKeyPrefix || "run"}#${stepName}#collab-trace`;
+  if (state.preview.openBlocks[openKey]) details.open = true;
+  details.addEventListener("toggle", () => {
+    if (details.open) state.preview.openBlocks[openKey] = true;
+    else delete state.preview.openBlocks[openKey];
+  });
+  const sum = document.createElement("summary");
+  sum.textContent = `Trace (${tasks.length} task(s), ${dispatches.length} dispatch(es))`;
+  details.appendChild(sum);
+
+  for (const t of tasks) {
+    const row = document.createElement("div");
+    row.className = "collab-task";
+    const route = t.requester ? `${t.requester} → ${t.recipient}` : t.recipient;
+    row.innerHTML = `<div class="collab-task-head"><span class="run-phase ${phaseClassFor(t.state)}">${escapeHtml(t.state)}</span> <strong>${escapeHtml(t.id)}</strong> <span>${escapeHtml(route)}</span>${t.final ? ' <span class="collab-chip final">final</span>' : ""}<span class="muted"> · ${t.turns} turn(s)</span></div>`;
+    if (t.reason) {
+      const why = document.createElement("div"); why.className = "run-step-note bad"; why.textContent = t.reason;
+      row.appendChild(why);
+    }
+    for (const d of dispatches.filter((x) => x.taskId === t.id)) {
+      const line = document.createElement("div");
+      line.className = "collab-dispatch muted";
+      const bits = [`${d.kind} ${d.id} → ${d.recipient}`, d.status];
+      if (d.job) {
+        bits.push(`job ${d.job.name}`);
+        if (d.job.phase) bits.push(d.job.phase);
+        if (d.job.totalTokens) bits.push(`${d.job.totalTokens} tokens`);
+        const took = collabFmtDuration(d.job.startTime, d.job.completionTime);
+        if (took) bits.push(took);
+      }
+      line.textContent = bits.join(" · ");
+      row.appendChild(line);
+      if (d.reason || (d.job && d.job.message)) {
+        const why = document.createElement("div"); why.className = "run-step-note bad"; why.textContent = d.reason || d.job.message;
+        row.appendChild(why);
+      }
+    }
+    const goalKey = `${openKey}#${t.id}#goal`;
+    row.appendChild(renderCollapsibleBlock(`Goal${t.goal && t.goal.truncated ? " (truncated)" : ""}`, (t.goal && t.goal.text) || "", goalKey));
+    if (t.result) {
+      row.appendChild(renderCollapsibleBlock(`Result${t.result.truncated ? " (truncated)" : ""}`, t.result.text || "", `${openKey}#${t.id}#result`));
+    }
+    details.appendChild(row);
+  }
+  host.appendChild(details);
 }
 
 function renderCollapsibleBlock(label, text, openKey) {
@@ -5651,8 +6306,20 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     state.namespace = e.target.value;
+    namespaceRevision++;
+    stopViewerPolling();
+    state.draft = null;
+    state.draftKey = null;
+    state.existsInCluster = false;
+    state.dirty = false;
+    state.selectedStep = null;
+    state.selectedEdge = null;
+    resetWorkflowHistory();
+    closeInspector();
+    setStatus("", "");
+    renderEditor();
     await refreshAll();
-    if (state.draft) renderEditor();
+    refreshSidebarActive();
   });
 
   const createTrigger = document.getElementById("btn-create");

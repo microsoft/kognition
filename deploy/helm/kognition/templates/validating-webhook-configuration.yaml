@@ -19,7 +19,7 @@ metadata:
 webhooks:
   - name: validate.kognition.dev
     admissionReviewVersions: ["v1"]
-    sideEffects: None
+    sideEffects: NoneOnDryRun
     failurePolicy: {{ .Values.webhook.failurePolicy }}
     timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
     clientConfig:
@@ -52,7 +52,9 @@ webhooks:
           - secretrefs
           - tools
           - workflows
+          {{- if not .Values.k8sController.workflowExecutor.enabled }}
           - workflowruns
+          {{- end }}
           - approvaldecisions
           - autonomyreviews
           - autonomyreviews/status
@@ -92,4 +94,57 @@ webhooks:
         operations: ["CREATE", "UPDATE", "DELETE"]
         resources: ["*"]
         scope: "*"
+  {{- if .Values.k8sController.workflowExecutor.enabled }}
+  - name: workflow-submission.kognition.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: NoneOnDryRun
+    failurePolicy: Fail
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    clientConfig:
+      {{- include "kognition.resourceWebhookCABundle" . | nindent 6 }}
+      service:
+        name: {{ include "kognition.fullname" . }}-workflow-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate
+        port: 443
+    rules:
+      - apiGroups: ["kognition.dev"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["workflowruns"]
+        scope: Namespaced
+  {{- end }}
+  - name: workflow-records.kognition.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: NoneOnDryRun
+    failurePolicy: Fail
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    matchConditions:
+      - name: protected-workflow-record
+        expression: >-
+          (has(request.name) && (
+            request.name.startsWith('kognition-workflow-executor-binding-') ||
+            request.name.startsWith('kognition-workflow-run-submission-') ||
+            request.name.startsWith('kognition-workflow-run-acceptance-'))) ||
+          [object, oldObject].exists(candidate, candidate != null && (
+            (has(candidate.metadata.generateName) &&
+              (candidate.metadata.generateName.startsWith('kognition-workflow-executor-binding-') ||
+               candidate.metadata.generateName.startsWith('kognition-workflow-run-submission-') ||
+               candidate.metadata.generateName.startsWith('kognition-workflow-run-acceptance-'))) ||
+            (has(candidate.metadata.labels) && 'kognition.dev/internal-record' in candidate.metadata.labels &&
+              candidate.metadata.labels['kognition.dev/internal-record'] in
+                ['workflow-executor-binding', 'workflow-run-submission', 'workflow-run-acceptance'])))
+    clientConfig:
+      {{- include "kognition.resourceWebhookCABundle" . | nindent 6 }}
+      service:
+        name: {{ include "kognition.fullname" . }}-{{ if .Values.k8sController.workflowExecutor.enabled }}workflow-{{ end }}webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate
+        port: 443
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["configmaps"]
+        scope: Namespaced
 {{- end }}

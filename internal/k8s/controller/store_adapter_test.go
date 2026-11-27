@@ -17,6 +17,8 @@ import (
 
 	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -30,9 +32,244 @@ import (
 
 	k8s "github.com/kognition-ai/kognition/api/k8s/v1alpha1"
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
+	"github.com/kognition-ai/kognition/internal/controlplaneauth"
+	"github.com/kognition-ai/kognition/internal/convert"
 	"github.com/kognition-ai/kognition/internal/k8s/dispatcher"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval/conformancetest"
 	"github.com/kognition-ai/kognition/internal/store"
 )
+
+type executorTokenReviewer struct {
+	response *authenticationv1.TokenReview
+	err      error
+	spec     authenticationv1.TokenReviewSpec
+}
+
+func (reviewer *executorTokenReviewer) Create(_ context.Context, review *authenticationv1.TokenReview, _ metav1.CreateOptions) (*authenticationv1.TokenReview, error) {
+	reviewer.spec = review.Spec
+	return reviewer.response, reviewer.err
+}
+
+type executorAccessReviewer struct {
+	response *authorizationv1.SubjectAccessReview
+	err      error
+	spec     authorizationv1.SubjectAccessReviewSpec
+	calls    int
+}
+
+func (reviewer *executorAccessReviewer) Create(_ context.Context, review *authorizationv1.SubjectAccessReview, _ metav1.CreateOptions) (*authorizationv1.SubjectAccessReview, error) {
+	reviewer.calls++
+	reviewer.spec = review.Spec
+	return reviewer.response, reviewer.err
+}
+
+func TestExecutorKubernetesAuthenticationAndNamedInvocation(t *testing.T) {
+	ctx := context.Background()
+	keys := kubernetesRuntimeApprovalTestKeys(t)
+	proposal, payload := conformancetest.ExecutorApprovalProposal(t, keys, "native-permission")
+	action, err := runtimeapproval.WorkflowExecutorActionFromApproval(proposal, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action.Executor = api.ControlPlaneRoleSubject{Method: "tokenreview", Issuer: "kubernetes.io/tokenreview", Subject: "system:serviceaccount:control:executor"}
+	tokens := &executorTokenReviewer{response: &authenticationv1.TokenReview{Status: authenticationv1.TokenReviewStatus{
+		Authenticated: true, Audiences: []string{WorkflowExecutorKubernetesAudience},
+		User: authenticationv1.UserInfo{Username: action.Executor.Subject, UID: "executor-uid", Groups: []string{"executors"},
+			Extra: map[string]authenticationv1.ExtraValue{"attested": {"value"}, "authentication.kubernetes.io/pod-name": {"executor-pod"}, "authentication.kubernetes.io/pod-uid": {"pod-uid"}}}}}}
+	access := &executorAccessReviewer{response: &authorizationv1.SubjectAccessReview{Status: authorizationv1.SubjectAccessReviewStatus{Allowed: true}}}
+	adapter := NewStoreAdapterWithControlNamespace(newFakeClient(t), "control")
+	if _, err := adapter.AuthenticatedWorkflowExecutor(ctx); err == nil {
+		t.Fatal("unconfigured executor authenticated")
+	}
+	config := WorkflowExecutorKubernetesAuthorization{TokenReviews: tokens, AccessReviews: access,
+		Credential: func(context.Context) (string, error) { return "transient-credential", nil }, Subject: action.Executor.Subject, WorkloadUID: "pod-uid",
+		ServiceAccountUID: "executor-uid", PodNamespace: "control", PodName: "executor-pod",
+		Pods: newFakeClient(t, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "executor-pod", Namespace: "control", UID: "pod-uid"}, Spec: corev1.PodSpec{ServiceAccountName: "executor"},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}})}
+	if err := adapter.ConfigureWorkflowExecutorAuthorization(config); err != nil {
+		t.Fatal(err)
+	}
+	if principal, err := adapter.AuthenticatedWorkflowExecutor(ctx); err != nil || principal != action.Executor {
+		t.Fatalf("authenticated executor = %+v %v", principal, err)
+	}
+	if tokens.spec.Token != "transient-credential" || len(tokens.spec.Audiences) != 1 || tokens.spec.Audiences[0] != WorkflowExecutorKubernetesAudience {
+		t.Fatal("executor authentication did not require its dedicated audience")
+	}
+	if err := adapter.ConfigureWorkflowExecutorReader(newFakeClient(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.AuthorizeWorkflowExecutorTarget(ctx, action); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("live target absence = %v", err)
+	}
+	want := authorizationv1.ResourceAttributes{Namespace: "team-a", Verb: "invoke", Group: "kognition.dev", Resource: "agents", Name: "analyst"}
+	if access.spec.User != action.Executor.Subject || access.spec.UID != "executor-uid" || access.spec.ResourceAttributes == nil || *access.spec.ResourceAttributes != want ||
+		len(access.spec.Groups) != 1 || access.spec.Groups[0] != "executors" || access.spec.Extra["attested"][0] != "value" {
+		t.Fatalf("invocation SAR did not retain the authenticated principal and exact target: %+v", access.spec)
+	}
+	revision := int64(1)
+	agent := &k8s.Agent{ObjectMeta: metav1.ObjectMeta{Name: action.Target.Name, Namespace: action.Target.Namespace, UID: types.UID(action.Target.UID), ResourceVersion: "1"},
+		Spec: k8s.AgentSpec{Runtime: &k8s.AgentRuntimeSpec{Class: "native"}}, Status: k8s.AgentStatus{Phase: string(api.PhaseReady), RevisionCount: 1, Runtime: &k8s.AgentRuntimeStatus{Ready: "True", ReadyReplicas: 1, AvailableReplicas: 1}}}
+	service := &k8s.AgentService{ObjectMeta: metav1.ObjectMeta{Name: action.Service.Name, Namespace: action.Service.Namespace, UID: types.UID(action.Service.UID), ResourceVersion: "1"},
+		Spec:   k8s.AgentServiceSpec{AgentRef: k8s.LocalObjectReference{Name: action.Target.Name}, RevisionPin: &revision},
+		Status: k8s.AgentServiceStatus{Phase: string(api.PhaseReady), ActiveRevision: 1, ReadyInstances: 1}}
+	workflow := api.Workflow{ObjectMeta: api.ObjectMeta{Name: action.Workflow.Name, Namespace: action.Workflow.Namespace, UID: action.Workflow.UID, ResourceVersion: action.Workflow.ResourceVersion}, Spec: api.WorkflowSpec{Steps: []api.WorkflowStep{{Name: action.Activation.Step, Type: api.WorkflowStepTypeCollaboration, Collaboration: &api.WorkflowCollaboration{Strategy: api.CollaborationStrategySupervisor, Protocol: api.CollaborationProtocolA2A, Members: []api.CollaborationMember{{Name: "analyst", AgentRef: api.AgentReference{Name: action.Target.Name}, ServiceRef: &api.LocalObjectReference{Name: action.Service.Name}}}, Supervisor: &api.CollaborationSupervisor{Coordinator: "analyst"}, Limits: api.CollaborationLimits{MaxTurns: 1, MaxMessages: 1, MaxDelegations: 1, MaxDelegationDepth: 1, MaxParallelTasks: 1, MaxTokens: 64}}}}}}
+	live := newFakeClient(t, agent, service, convert.WorkflowToK8s(&workflow))
+	if err := adapter.ConfigureWorkflowExecutorReader(live); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.AuthorizeWorkflowExecutorTarget(ctx, action); err != nil {
+		t.Fatalf("authorized live native target rejected: %v", err)
+	}
+	for _, reference := range []*api.RuntimeApprovalReference{&action.Target, &action.Service} {
+		raw, err := adapter.GetWorkflowExecutorResource(ctx, reference.Kind, reference.Namespace, reference.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reference.ConfigurationDigest, err = runtimeapproval.WorkflowExecutorSpecDigest(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	workflowRaw, err := adapter.GetWorkflowExecutorResource(ctx, "Workflow", action.Workflow.Namespace, action.Workflow.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action.WorkflowRevisionDigest, err = runtimeapproval.WorkflowExecutorSpecDigest(workflowRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := runtimeapproval.WorkflowExecutorAuthority{PolicyVersion: runtimeapproval.WorkflowExecutorPolicyVersion, Reference: action.ExecutionBinding, Workflow: action.Workflow, WorkflowRevisionDigest: action.WorkflowRevisionDigest, Executor: action.Executor, Enabled: true, NotBefore: time.Now().UTC().Add(-time.Minute), ExpiresAt: time.Now().UTC().Add(time.Hour), ControllerUIDs: []string{"pod-uid"}, ApprovedBy: action.Initiator,
+		Limits: runtimeapproval.WorkflowExecutorLimits{MaxEffects: 8, MaxPayloadBytes: 32768, MaxDurationSeconds: 3600, MaxMembers: 8, MaxTurns: 100, MaxMessages: 500, MaxDelegations: 100, MaxHandoffDepth: 5, MaxParallelTasks: 8, ContentRetentionSeconds: 604800, ReplayRetentionSeconds: 7776000}, Targets: []runtimeapproval.WorkflowExecutorTarget{{Agent: action.Target, Service: action.Service, Operation: runtimeapproval.WorkflowExecutorInitiate, InitialDecision: api.RuntimeApprovalDecisionPending}}}
+	if err := adapter.AuthorizeWorkflowExecutorStep(ctx, authority, action); err != nil {
+		t.Fatalf("native pinned-step member preflight failed: %v", err)
+	}
+	missingStep := action
+	missingStep.Activation.Step = "undeclared"
+	beforeMissingStep := access.calls
+	if err := adapter.AuthorizeWorkflowExecutorStep(ctx, authority, missingStep); err == nil || access.calls != beforeMissingStep {
+		t.Fatalf("undeclared step reached member invocation checks: %v", err)
+	}
+	access.response.Status.Denied = true
+	if err := adapter.AuthorizeWorkflowExecutorStep(ctx, authority, action); !errors.Is(err, controlplaneauth.ErrForbidden) {
+		t.Fatalf("native member preflight bypassed named invoke denial: %v", err)
+	}
+	access.response.Status.Denied = false
+	foreign := action
+	foreign.Target.Namespace, foreign.Service.Namespace = "team-b", "team-b"
+	beforeForeign := access.calls
+	if err := adapter.AuthorizeWorkflowExecutorTarget(ctx, foreign); !errors.Is(err, controlplaneauth.ErrForbidden) || access.calls != beforeForeign {
+		t.Fatalf("foreign target proceeded without a reference grant: %v", err)
+	}
+	foreignAgent, foreignService := agent.DeepCopy(), service.DeepCopy()
+	foreignAgent.Namespace, foreignService.Namespace = "team-b", "team-b"
+	agentGrant := &k8s.CrossNamespaceGrant{ObjectMeta: metav1.ObjectMeta{Name: "agents", Namespace: "team-b", UID: "agent-grant", ResourceVersion: "1"}, Spec: k8s.CrossNamespaceGrantSpec{From: "team-b", To: "team-a", Resources: []k8s.GrantResource{{Kind: "Agent", Name: foreign.Target.Name}}}}
+	serviceGrant := &k8s.CrossNamespaceGrant{ObjectMeta: metav1.ObjectMeta{Name: "services", Namespace: "team-b", UID: "service-grant", ResourceVersion: "1"}, Spec: k8s.CrossNamespaceGrantSpec{From: "team-b", To: "team-a", Resources: []k8s.GrantResource{{Kind: "AgentService", Name: foreign.Service.Name}}}}
+	foreignReader := newFakeClient(t, foreignAgent, foreignService, agentGrant)
+	if err := adapter.ConfigureWorkflowExecutorReader(foreignReader); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.AuthorizeWorkflowExecutorTarget(ctx, foreign); !errors.Is(err, controlplaneauth.ErrForbidden) || access.calls != beforeForeign {
+		t.Fatalf("Agent grant replaced service grant: %v", err)
+	}
+	serviceGrant.ResourceVersion = ""
+	if err := foreignReader.Create(ctx, serviceGrant); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.AuthorizeWorkflowExecutorTarget(ctx, foreign); err != nil || access.spec.ResourceAttributes.Namespace != "team-b" {
+		t.Fatalf("independently granted foreign target: %v", err)
+	}
+	access.response.Status.Denied = true
+	if err := adapter.AuthorizeWorkflowExecutorTarget(ctx, foreign); !errors.Is(err, controlplaneauth.ErrForbidden) {
+		t.Fatalf("reference grants replaced named invoke authority: %v", err)
+	}
+	access.response.Status.Denied = false
+	if err := foreignReader.Delete(ctx, serviceGrant); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.AuthorizeWorkflowExecutorTarget(ctx, foreign); !errors.Is(err, controlplaneauth.ErrForbidden) {
+		t.Fatalf("service grant revocation ignored: %v", err)
+	}
+	if err := adapter.ConfigureWorkflowExecutorReader(live); err != nil {
+		t.Fatal(err)
+	}
+	agent.Status.Phase = string(api.PhasePending)
+	if err := live.Status().Update(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.AuthorizeWorkflowExecutorTarget(ctx, action); err == nil {
+		t.Fatal("live readiness change was ignored")
+	}
+	agent.Status.Phase = string(api.PhaseReady)
+	if err := live.Status().Update(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	action.Target.ResourceVersion, err = strconv.ParseInt(agent.ResourceVersion, 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.AuthorizeWorkflowExecutorTarget(ctx, action); err != nil {
+		t.Fatalf("healthy baseline before permission denials: %v", err)
+	}
+	for name, mutate := range map[string]func(){
+		"wrong workload UID": func() { tokens.response.Status.User.UID = "recreated-executor" },
+		"missing bound pod":  func() { delete(tokens.response.Status.User.Extra, "authentication.kubernetes.io/pod-uid") },
+		"copied service account credential": func() {
+			tokens.response.Status.User.Extra["authentication.kubernetes.io/pod-uid"] = authenticationv1.ExtraValue{"other-pod"}
+		},
+		"ambiguous pod proof": func() {
+			tokens.response.Status.User.Extra["authentication.kubernetes.io/pod-name"] = authenticationv1.ExtraValue{"executor-pod", "other-pod"}
+		},
+		"wrong subject":             func() { tokens.response.Status.User.Username = "submitter" },
+		"wrong audience":            func() { tokens.response.Status.Audiences = []string{"general-api"} },
+		"unauthenticated":           func() { tokens.response.Status.Authenticated = false },
+		"token evaluation error":    func() { tokens.response.Status.Error = "unavailable" },
+		"nil token review":          func() { tokens.response = nil },
+		"token review unavailable":  func() { tokens.err = errors.New("unavailable") },
+		"denied overrides allow":    func() { access.response.Status.Denied = true },
+		"not allowed":               func() { access.response.Status.Allowed = false },
+		"access evaluation error":   func() { access.response.Status.EvaluationError = "unavailable" },
+		"nil access review":         func() { access.response = nil },
+		"access review unavailable": func() { access.err = errors.New("unavailable") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			originalToken, originalAccess := tokens.response.DeepCopy(), access.response.DeepCopy()
+			defer func() {
+				tokens.response, access.response = originalToken, originalAccess
+				tokens.err, access.err = nil, nil
+			}()
+			mutate()
+			if err := adapter.AuthorizeWorkflowExecutorTarget(ctx, action); err == nil || errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("invalid authentication/permission reached target read: %v", err)
+			}
+		})
+	}
+	if controllerUID, err := adapter.AuthenticatedWorkflowControllerUID(ctx); err != nil || controllerUID != "pod-uid" {
+		t.Fatalf("controller incarnation: %s %v", controllerUID, err)
+	}
+	pod := &corev1.Pod{}
+	if err := config.Pods.Get(ctx, client.ObjectKey{Namespace: "control", Name: "executor-pod"}, pod); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Pods.(client.Client).Delete(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	pod.UID, pod.ResourceVersion = "recreated-pod", ""
+	if err := config.Pods.(client.Client).Create(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.AuthenticatedWorkflowControllerUID(ctx); !errors.Is(err, controlplaneauth.ErrForbidden) {
+		t.Fatalf("recreated controller inherited authority: %v", err)
+	}
+	pod.UID = "pod-uid"
+	if err := config.Pods.(client.Client).Update(ctx, pod); err != nil {
+		t.Fatal(err)
+	}
+	access.response.Status.Denied = true
+	if err := adapter.AuthorizeWorkflowExecutorTarget(ctx, action); !errors.Is(err, controlplaneauth.ErrForbidden) {
+		t.Fatalf("revoked SAR = %v", err)
+	}
+}
 
 func newScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
@@ -70,6 +307,49 @@ func newFakeClient(t *testing.T, objs ...client.Object) client.Client {
 		&k8s.TrustProfile{},
 		&k8s.RuntimeApproval{},
 	).Build()
+}
+
+func TestExecutorResourceReaderRequiresLiveConfiguration(t *testing.T) {
+	ctx := context.Background()
+	cachedAgent := &k8s.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "analyst", UID: "cached-agent", ResourceVersion: "1"}}
+	adapter := NewStoreAdapterWithControlNamespace(newFakeClient(t, cachedAgent), "kognition-system")
+	if _, err := adapter.GetWorkflowExecutorResource(ctx, "Agent", "team-a", "analyst"); err == nil {
+		t.Fatal("unconfigured executor reader fell back to the cached client")
+	}
+	if err := adapter.ConfigureWorkflowExecutorReader(nil); err == nil {
+		t.Fatal("nil live reader accepted")
+	}
+	liveAgent := cachedAgent.DeepCopy()
+	liveAgent.UID, liveAgent.ResourceVersion = "live-agent", "2"
+	liveService := &k8s.AgentService{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "analyst", UID: "live-service", ResourceVersion: "3"}}
+	if err := adapter.ConfigureWorkflowExecutorReader(newFakeClient(t, liveAgent, liveService)); err != nil {
+		t.Fatal(err)
+	}
+	for kind, expected := range map[string]api.ObjectMeta{
+		"Agent":        {Name: "analyst", Namespace: "team-a", UID: "live-agent", ResourceVersion: 2},
+		"AgentService": {Name: "analyst", Namespace: "team-a", UID: "live-service", ResourceVersion: 3},
+	} {
+		data, err := adapter.GetWorkflowExecutorResource(ctx, kind, "team-a", "analyst")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var resource struct {
+			Metadata api.ObjectMeta `json:"metadata"`
+		}
+		if err := json.Unmarshal(data, &resource); err != nil {
+			t.Fatal(err)
+		}
+		if resource.Metadata.Name != expected.Name || resource.Metadata.Namespace != expected.Namespace ||
+			resource.Metadata.UID != expected.UID || resource.Metadata.ResourceVersion != expected.ResourceVersion {
+			t.Fatalf("%s returned cached or changed identity: %+v", kind, resource.Metadata)
+		}
+	}
+	if _, err := adapter.GetWorkflowExecutorResource(ctx, "Agent", "team-b", "analyst"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("foreign namespace read = %v", err)
+	}
+	if _, err := adapter.GetWorkflowExecutorResource(ctx, "Workflow", "team-a", "analyst"); err == nil {
+		t.Fatal("executor reader accepted an unsupported resource kind")
+	}
 }
 
 func TestToolGrantRateReservationIsSharedAcrossStoreAdapters(t *testing.T) {
@@ -964,6 +1244,49 @@ func TestStoreAdapter_Update_AutonomyClassSkipsStatusSubresource(t *testing.T) {
 	}
 	if updated.Spec.Level != 60 {
 		t.Fatalf("updated level = %d, want 60", updated.Spec.Level)
+	}
+}
+
+func TestStoreAdapter_StatusWriteDoesNotRewriteNonCanonicalSpec(t *testing.T) {
+	ctx := context.Background()
+	// The API server keeps the duration as written ("5m"); the internal form is "5m0s".
+	existing := &k8s.ExternalAgent{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "partner"},
+		Spec: k8s.ExternalAgentSpec{
+			Protocol:      "A2A",
+			Endpoint:      "agents.example.com:443",
+			Card:          k8s.ExternalAgentCard{Digest: "sha256:" + strings.Repeat("a", 64)},
+			CredentialRef: k8s.LocalObjectReference{Name: "token"},
+			Limits:        &k8s.ExternalAgentLimits{TaskTimeout: "5m"},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(existing).WithStatusSubresource(&k8s.ExternalAgent{}).Build()
+	faults := &storeAdapterFaultClient{Client: base, updateErr: errors.New("the controller may only write status")}
+	sa := NewStoreAdapter(faults)
+
+	data, err := sa.Get(ctx, "ExternalAgent", "team-a", "partner")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	var desired api.ExternalAgent
+	if err := json.Unmarshal(data, &desired); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	desired.Status.ObservedGeneration = 1
+	updateData, _ := json.Marshal(desired)
+
+	if _, err := sa.UpdateAndGet(ctx, "ExternalAgent", "team-a", "partner", updateData, desired.ResourceVersion); err != nil {
+		t.Fatalf("status write reached the spec: %v", err)
+	}
+	var stored k8s.ExternalAgent
+	if err := base.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: "partner"}, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status.ObservedGeneration != 1 {
+		t.Fatalf("observedGeneration = %d, want 1", stored.Status.ObservedGeneration)
+	}
+	if stored.Spec.Limits.TaskTimeout != "5m" {
+		t.Fatalf("taskTimeout rewritten to %q", stored.Spec.Limits.TaskTimeout)
 	}
 }
 

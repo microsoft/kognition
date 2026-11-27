@@ -38,7 +38,7 @@ const maxRequestBytes = 1 << 20
 // MemoryInvocationIDHeader carries the caller-stable ADR-0014 Gate 3
 // invocation ID used to deduplicate RuntimeApproval resources across retries.
 // Gate 3 write requests without this header are rejected.
-const MemoryInvocationIDHeader = "X-Kognition-Memory-Invocation-Id"
+const MemoryInvocationIDHeader = runtimeauth.MemoryInvocationIDHeader
 
 // Server authenticates runtime memory requests, evaluates current policy, and
 // forwards authorized data-plane calls to the backing memory service.
@@ -385,6 +385,9 @@ func (s *Server) authorize(ctx context.Context, claims *runtimeauth.MemoryCapabi
 	agent, err := loadResource[v1alpha1.Agent](ctx, s.store, "Agent", claims.Namespace, claims.AgentName)
 	if err != nil {
 		return result, fmt.Errorf("load agent: %w", err)
+	}
+	if err := runtimeauth.RequireAgentWorkloadPeer(ctx, agent); err != nil {
+		return result, err
 	}
 	if identity.ObjectMeta.DeletionTimestamp != nil || identity.Status.Phase != v1alpha1.PhaseReady ||
 		strings.TrimSpace(identity.Spec.SPIFFEID) == "" ||

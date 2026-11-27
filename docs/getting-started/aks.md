@@ -133,6 +133,7 @@ $ControllerDigest = 'sha256:<controller-image-digest>'
     -Namespace kognition-system -WorkloadNamespace team-a `
     -ImageRegistry $Registry -ImageTag $ImageTag `
     -ControllerImageDigest $ControllerDigest `
+    -CreateWorkflowBindingAdminGroup `
     -StateDirectory .\.local\aks-kognition-install -Exclusive
 ```
 
@@ -148,6 +149,7 @@ pwsh -NoProfile -File ./deploy/aks/Install-RuntimeBase.ps1 \
     -Namespace kognition-system -WorkloadNamespace team-a \
     -ImageRegistry "$registry" -ImageTag "$image_tag" \
     -ControllerImageDigest "$controller_digest" \
+    -CreateWorkflowBindingAdminGroup \
     -StateDirectory ./.local/aks-kognition-install -Exclusive
 ```
 
@@ -157,6 +159,27 @@ values in both environments. Do not substitute a bare Helm install.
 
 This wrapper uses the same checked fresh installer. It does not provision Azure
 resources, publish images or configure inference endpoints.
+
+### Workflow binding administrators
+
+`-CreateWorkflowBindingAdminGroup` enables Workflow execution and makes
+[Initialize-BindingAdminGroup.ps1](../../deploy/aks/Initialize-BindingAdminGroup.ps1)
+create (or reuse) the Microsoft Entra security group
+`kognition-workflow-binding-admins`. It adds the signed-in Azure CLI user and
+passes the group's object ID to the chart as the only binding administrator.
+
+- Run it with an Azure CLI account that may create Entra groups. Without that
+  permission, ask an Entra administrator to create the group and pass its object
+  ID with `-WorkflowBindingAdminGroupId <guid>` instead.
+- The cluster must use AKS-managed Entra integration (the repository's
+  [Bicep foundation](../../infra/modules/cluster.bicep) does). AKS then presents
+  group object IDs to Kubernetes, which the admission webhook matches. On a
+  cluster without Entra integration no user can administer bindings.
+- Add other operators with `az ad group member add --group <object-id> --member-id <user-object-id>`.
+  Membership is the approval authority; keep it small and reviewed.
+- Omit both options to install without Workflow execution.
+- Add `-EnableWorkflowCollaboration` to also enable Workflow collaboration steps
+  (see [Workflow collaboration](../workflow-collaboration.md)). It requires a binding administrator group.
 
 ## 4. Verify and configure an agent
 

@@ -4,16 +4,32 @@
 package traceability
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	k8sapi "github.com/kognition-ai/kognition/api/k8s/v1alpha1"
+	api "github.com/kognition-ai/kognition/api/v1alpha1"
+	"github.com/kognition-ai/kognition/internal/convert"
 	"github.com/kognition-ai/kognition/internal/k8s/activation"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval/conformancetest"
+	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	schemacel "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel"
+	schemapruning "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/pruning"
+	schemavalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
+	kubejson "k8s.io/apimachinery/pkg/util/json"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/apimachinery/pkg/util/yaml"
 
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -23,6 +39,175 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
+
+func runtimeApprovalSchemaCheck(test *testing.T, path string) (*structuralschema.Structural, func(map[string]any) field.ErrorList) {
+	test.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		test.Fatal(err)
+	}
+	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096)
+	var definition apiextensionsv1.CustomResourceDefinition
+	for definition.Name == "" {
+		if err := decoder.Decode(&definition); err != nil {
+			test.Fatal(err)
+		}
+	}
+	internal := &apiextensions.JSONSchemaProps{}
+	if err := apiextensionsv1.Convert_v1_JSONSchemaProps_To_apiextensions_JSONSchemaProps(definition.Spec.Versions[0].Schema.OpenAPIV3Schema, internal, nil); err != nil {
+		test.Fatal(err)
+	}
+	structure, err := structuralschema.NewStructural(internal)
+	if err != nil {
+		test.Fatal(err)
+	}
+	openapi, _, err := schemavalidation.NewSchemaValidator(internal)
+	if err != nil {
+		test.Fatal(err)
+	}
+	cel := schemacel.NewValidator(structure, true, 1000000)
+	validate := func(object map[string]any) field.ErrorList {
+		errors := schemavalidation.ValidateCustomResource(field.NewPath("root"), object, openapi)
+		if cel != nil {
+			additional, _ := cel.Validate(context.Background(), field.NewPath("root"), structure, object, nil, 10000000)
+			errors = append(errors, additional...)
+		}
+		return errors
+	}
+	return structure, validate
+}
+
+func TestRuntimeApprovalExecutorSchemaDiscrimination(test *testing.T) {
+	structure, validate := runtimeApprovalSchemaCheck(test, "../../deploy/helm/kognition/crds/kognition.dev_runtimeapprovals.yaml")
+	keys, err := runtimeapproval.NewStaticBindingKeyStore([]runtimeapproval.BindingKey{{Version: 1,
+		Algorithm: runtimeapproval.BindingAlgorithmV1, Domain: runtimeapproval.BindingDomainV1,
+		Status: runtimeapproval.BindingKeyActive, Material: []byte("0123456789abcdef0123456789abcdef")}})
+	if err != nil {
+		test.Fatal(err)
+	}
+	approval, _ := conformancetest.ExecutorApprovalProposal(test, keys, "executor-schema")
+	approval.Spec.CreatedAt = time.Now().UTC().Truncate(time.Second)
+	approval.Spec.ExpiresAt = approval.Spec.ExecutorAction.ExpiresAt
+	encoded, err := json.Marshal(convert.RuntimeApprovalToK8s(&approval))
+	if err != nil {
+		test.Fatal(err)
+	}
+	var executor map[string]any
+	if err := kubejson.Unmarshal(encoded, &executor); err != nil {
+		test.Fatal(err)
+	}
+	if errors := validate(executor); len(errors) != 0 {
+		test.Fatalf("valid executor schema rejected: %v", errors)
+	}
+	for name, change := range map[string]func(map[string]any){
+		"mixed Agent": func(spec map[string]any) { spec["agentRef"] = spec["executorAction"].(map[string]any)["target"] },
+		"wrong actor": func(spec map[string]any) { spec["actorKind"] = "Agent" },
+		"legacy domain": func(spec map[string]any) {
+			spec["binding"].(map[string]any)["domain"] = runtimeapproval.BindingDomainV1
+		},
+		"changed activation": func(spec map[string]any) { spec["workflowContext"].(map[string]any)["ownerEpoch"] = int64(2) },
+		"extended authority": func(spec map[string]any) {
+			spec["expiresAt"] = approval.Spec.ExpiresAt.Add(time.Hour).Format(time.RFC3339)
+		},
+		"wrong service":     func(spec map[string]any) { spec["targetRef"].(map[string]any)["uid"] = "replacement" },
+		"wildcard revision": func(spec map[string]any) { spec["executorAction"].(map[string]any)["workflowRevisionDigest"] = "*" },
+	} {
+		test.Run(name, func(test *testing.T) {
+			var changed map[string]any
+			if err := kubejson.Unmarshal(encoded, &changed); err != nil {
+				test.Fatal(err)
+			}
+			change(changed["spec"].(map[string]any))
+			if errors := validate(changed); len(errors) == 0 {
+				test.Fatalf("invalid %s passed schema/CEL validation", name)
+			}
+		})
+	}
+	executor["spec"].(map[string]any)["executorAction"].(map[string]any)["skipPolicy"] = true
+	schemapruning.Prune(executor, structure, true)
+	if _, retained := executor["spec"].(map[string]any)["executorAction"].(map[string]any)["skipPolicy"]; !retained {
+		test.Fatal("schema pruned unknown governance before strict admission could reject it")
+	}
+	reference := func(kind string) api.RuntimeApprovalReference {
+		return api.RuntimeApprovalReference{Kind: kind,
+			Scope: "Namespaced", Namespace: "team-a", Name: "fixture", UID: "fixture-uid", ResourceVersion: 1}
+	}
+	legacy := api.RuntimeApproval{Spec: api.RuntimeApprovalSpec{Workspace: "team-a", InvocationID: "legacy",
+		InitialDecision: api.RuntimeApprovalDecisionPending, Plane: api.RuntimeApprovalPlaneTool, Operation: "call",
+		AgentRef: reference("Agent"), AgentIdentityRef: reference("AgentIdentity"), AgentInstanceRef: reference("AgentInstance"),
+		SessionRef: "session", TargetRef: reference("Tool"), AutonomyClassRef: api.RuntimeApprovalReference{Kind: "AutonomyClass",
+			Scope: "Cluster", Name: "supervised", UID: "class-uid", ResourceVersion: 1},
+		Binding: api.RuntimeActionBinding{Format: runtimeapproval.BindingFormatV1, Domain: runtimeapproval.BindingDomainV1,
+			Algorithm: runtimeapproval.BindingAlgorithmV1, Epoch: 1, KeyVersion: 1, Tag: strings.Repeat("A", 43)},
+		CreatedAt: approval.Spec.CreatedAt, ExpiresAt: approval.Spec.ExpiresAt}, Status: runtimeapproval.InitialStatus(api.RuntimeApprovalDecisionPending)}
+	legacyData, err := json.Marshal(convert.RuntimeApprovalToK8s(&legacy))
+	if err != nil {
+		test.Fatal(err)
+	}
+	var legacyObject map[string]any
+	if err := kubejson.Unmarshal(legacyData, &legacyObject); err != nil {
+		test.Fatal(err)
+	}
+	if errors := validate(legacyObject); len(errors) != 0 {
+		test.Fatalf("legacy Agent schema regressed: %v", errors)
+	}
+}
+
+func TestRuntimeApprovalExecutorArtifactSchemas(test *testing.T) {
+	keys, err := runtimeapproval.NewStaticBindingKeyStore([]runtimeapproval.BindingKey{{Version: 1,
+		Algorithm: runtimeapproval.BindingAlgorithmV1, Domain: runtimeapproval.BindingDomainV1,
+		Status: runtimeapproval.BindingKeyActive, Material: []byte("0123456789abcdef0123456789abcdef")}})
+	if err != nil {
+		test.Fatal(err)
+	}
+	approval, _ := conformancetest.ExecutorApprovalProposal(test, keys, "executor-artifact-schema")
+	now := time.Now().UTC().Truncate(time.Second)
+	approval.Spec.CreatedAt, approval.Spec.ExpiresAt = now, approval.Spec.ExecutorAction.ExpiresAt
+	native := convert.RuntimeApprovalToK8s(&approval)
+	executor := native.Spec.ExecutorAction.Executor
+	ticket := k8sapi.RuntimeApprovalQuotaTicket{
+		TypeMeta: metav1.TypeMeta{APIVersion: api.APIVersion, Kind: "RuntimeApprovalQuotaTicket"},
+		Spec: k8sapi.RuntimeApprovalQuotaTicketSpec{ActorKind: api.RuntimeApprovalActorExecutor, ExecutorRef: &executor,
+			Workspace: approval.Spec.Workspace, InvocationID: approval.Spec.InvocationID, Binding: native.Spec.Binding,
+			Phase: k8sapi.RuntimeApprovalQuotaTicketPhaseLive, ChargedBytes: 1024, CreatedAt: metav1.NewTime(now)},
+	}
+	tombstone := k8sapi.RuntimeApprovalTombstone{
+		TypeMeta: metav1.TypeMeta{APIVersion: api.APIVersion, Kind: "RuntimeApprovalTombstone"},
+		Spec: k8sapi.RuntimeApprovalTombstoneSpec{ActorKind: api.RuntimeApprovalActorExecutor, ExecutorAction: native.Spec.ExecutorAction,
+			WorkflowContext: native.Spec.WorkflowContext, Workspace: approval.Spec.Workspace, InvocationID: approval.Spec.InvocationID,
+			Plane: api.RuntimeApprovalPlaneWorkflow, Operation: runtimeapproval.WorkflowExecutorInitiate, RuntimeApprovalUID: "approval-uid",
+			InitialDecision: api.RuntimeApprovalDecisionPending, Binding: native.Spec.Binding, DecisionState: api.RuntimeApprovalDecisionApproved,
+			ExecutionState: api.RuntimeApprovalExecutionCompleted, ExecutionDisposition: runtimeapproval.ExecutionDispositionSucceeded,
+			CreatedAt: native.Spec.CreatedAt, ExpiresAt: native.Spec.ExpiresAt, CompactedAt: metav1.NewTime(now.Add(time.Minute)),
+			RetentionDeadline: metav1.NewTime(now.Add(90 * 24 * time.Hour))},
+	}
+	for _, scenario := range []struct {
+		name, file string
+		object     any
+	}{
+		{"quota", "kognition.dev_runtimeapprovalquotatickets.yaml", ticket},
+		{"tombstone", "kognition.dev_runtimeapprovaltombstones.yaml", tombstone},
+	} {
+		test.Run(scenario.name, func(test *testing.T) {
+			_, validate := runtimeApprovalSchemaCheck(test, "../../deploy/helm/kognition/crds/"+scenario.file)
+			encoded, err := json.Marshal(scenario.object)
+			if err != nil {
+				test.Fatal(err)
+			}
+			var object map[string]any
+			if err := kubejson.Unmarshal(encoded, &object); err != nil {
+				test.Fatal(err)
+			}
+			if errors := validate(object); len(errors) != 0 {
+				test.Fatalf("valid executor %s rejected: %v", scenario.name, errors)
+			}
+			object["spec"].(map[string]any)["agentRef"] = map[string]any{"kind": "Agent", "scope": "Namespaced", "namespace": "team-a", "name": "forged", "uid": "forged-uid", "resourceVersion": int64(1)}
+			if errors := validate(object); len(errors) == 0 {
+				test.Fatalf("mixed executor/Agent %s accepted", scenario.name)
+			}
+		})
+	}
+}
 
 func TestResourceWebhooksSupportExplicitReviewedCA(test *testing.T) {
 	certificate := []byte("reviewed CA fixture; deployed acceptance validates the actual TLS chain")
@@ -53,8 +238,8 @@ func TestResourceWebhooksSupportExplicitReviewedCA(test *testing.T) {
 			}
 		}
 	}
-	if found != 2 || hooks != 3 {
-		test.Fatal("all mutation, validation and audit webhook trust surfaces are required")
+	if found != 2 || hooks != 4 {
+		test.Fatal("all mutation, validation, audit and workflow-record webhook trust surfaces are required")
 	}
 }
 

@@ -48,7 +48,7 @@ spec:
       restartPolicy: OnFailure
       securityContext:
         {{- toYaml .Values.dbPodSecurityContext | nindent 8 }}
-      {{- with .Values.imagePullSecrets }}
+      {{- with concat (default (list) .Values.global.imagePullSecrets) (default (list) .Values.imagePullSecrets) | uniq }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}

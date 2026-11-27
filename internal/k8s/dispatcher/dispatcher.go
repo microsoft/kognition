@@ -615,6 +615,10 @@ func (d *K8sDispatcher) issueToolSessionCapability(agent *v1alpha1.Agent, instan
 }
 
 func (d *K8sDispatcher) issueModelSessionCapability(ctx context.Context, agent *v1alpha1.Agent, model *v1alpha1.Model, instance *v1alpha1.AgentInstance, sessionID, solution string, solutionRev int64) (string, error) {
+	return d.issueBoundModelSessionCapability(ctx, agent, model, instance, sessionID, solution, solutionRev, nil, time.Time{})
+}
+
+func (d *K8sDispatcher) issueBoundModelSessionCapability(ctx context.Context, agent *v1alpha1.Agent, model *v1alpha1.Model, instance *v1alpha1.AgentInstance, sessionID, solution string, solutionRev int64, task *runtimeauth.ModelSessionWorkflowTask, notAfter time.Time) (string, error) {
 	if d.config.ModelGatewayURL == "" {
 		return "", nil
 	}
@@ -664,14 +668,15 @@ func (d *K8sDispatcher) issueModelSessionCapability(ctx context.Context, agent *
 	if invocation != nil {
 		invocationBinding = &invocation.Binding
 	}
-	capability, err := d.config.ModelSessionCapabilityIssuer.Issue(runtimeauth.ModelSessionCapabilityBinding{
-		Namespace: instance.ObjectMeta.Namespace, AgentName: agent.ObjectMeta.Name, AgentIdentityName: identityName,
+	capability, err := d.config.ModelSessionCapabilityIssuer.IssueUntil(runtimeauth.ModelSessionCapabilityBinding{
+		WorkflowTask: task,
+		Namespace:    instance.ObjectMeta.Namespace, AgentName: agent.ObjectMeta.Name, AgentIdentityName: identityName,
 		InstanceName: instance.ObjectMeta.Name, InstanceUID: instance.ObjectMeta.UID, SessionID: sessionID, Solution: solution, SolutionRev: solutionRev,
 		WorkflowName: instance.ObjectMeta.Annotations[observability.AnnotationWorkflowName], StepName: instance.ObjectMeta.Annotations[observability.AnnotationStepName],
 		ModelName: model.ObjectMeta.Name, ModelResourceVersion: model.ObjectMeta.ResourceVersion,
 		CandidateBinding:         candidateBinding,
 		InvocationProfileBinding: invocationBinding,
-	})
+	}, notAfter)
 	if err != nil {
 		return "", fmt.Errorf("issue runtime model session capability: %w", err)
 	}
@@ -726,6 +731,9 @@ func (d *K8sDispatcher) issueKnowledgeSessionCapability(ctx context.Context, nam
 
 func (d *K8sDispatcher) issueAgentDelegationSessionCapability(agent *v1alpha1.Agent, instance *v1alpha1.AgentInstance, sessionID, solution string, solutionRev int64) (string, error) {
 	if d.config.AgentCommunicationGatewayURL == "" {
+		return "", nil
+	}
+	if _, member := instance.ObjectMeta.Annotations[intctrl.CollaborationDispatchAnnotation]; member {
 		return "", nil
 	}
 	if d.config.AgentDelegationSessionCapabilityIssuer == nil {

@@ -1711,62 +1711,9 @@ function Target-PortForward {
     Invoke-Native 'kubectl' @('port-forward', '-n', $Namespace, "svc/$Release-apiserver", '8080:8080')
 }
 
-function Update-KognitionObservabilitySettings {
-    param([bool]$Enabled)
-
-    & helm status $Release --namespace $Namespace 2>$null | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Helm release '$Release' is not installed in namespace '$Namespace' yet."
-        Write-Host 'Install Kognition with: .\make.ps1 install MODE=kubernetes'
-        Write-Host 'Then rerun: .\make.ps1 observability-install'
-        return
-    }
-
-    $helmArgs = @(
-        'upgrade', $Release, $Chart,
-        '--namespace', $Namespace,
-        '--reuse-values',
-        '--set', "observability.openTelemetry.enabled=$($Enabled.ToString().ToLower())",
-        '--set', "observability.openTelemetry.endpoint=$(if ($Enabled) { $JaegerOTLPEndpoint } else { '' })",
-        '--set', ("observability.metrics.serviceMonitor.enabled=$($Enabled.ToString().ToLower())"),
-        '--set', ("observability.grafanaDashboards.enabled=$($Enabled.ToString().ToLower())"),
-        '--set', ("toolGateway.monitoring.serviceMonitor.enabled=$($Enabled.ToString().ToLower())"),
-        '--set', ("toolGateway.monitoring.prometheusRule.enabled=$($Enabled.ToString().ToLower())"),
-        '--set', ("toolGateway.monitoring.grafanaDashboard.enabled=$($Enabled.ToString().ToLower())"),
-        '--set', 'observability.metrics.serviceMonitor.labels.release=kognition-observability',
-        '--set-string', 'observability.grafanaDashboards.labels.grafana_dashboard=1',
-        '--set', 'toolGateway.monitoring.serviceMonitor.labels.release=kognition-observability',
-        '--set', 'toolGateway.monitoring.prometheusRule.labels.release=kognition-observability',
-        '--set-string', 'toolGateway.monitoring.grafanaDashboard.labels.grafana_dashboard=1'
-    )
-    if ($Enabled) {
-        $helmArgs += @(
-            '--set', 'observability.openTelemetry.protocol=grpc',
-            '--set', 'observability.openTelemetry.serviceName=kognition',
-            '--set', 'observability.openTelemetry.environment=dev'
-        )
-    }
-    Write-Host "helm $($helmArgs -join ' ')"
-    Invoke-Native 'helm' $helmArgs
-    & kubectl -n $Namespace get "deployment/$Release-k8s-controller" 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        Invoke-Native 'kubectl' @('-n', $Namespace, 'rollout', 'status', "deployment/$Release-k8s-controller", '--timeout=120s')
-    } else {
-        & kubectl -n $Namespace get "deployment/$Release-controller-manager" 2>$null | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Invoke-Native 'kubectl' @('-n', $Namespace, 'rollout', 'status', "deployment/$Release-controller-manager", '--timeout=120s')
-        }
-    }
-    if ($Enabled) { Refresh-AgentRuntimes }
-}
-
 function Target-ObservabilityInstall {
     Resolve-Tool 'kubectl' | Out-Null
     Resolve-Tool 'helm' | Out-Null
-    & helm status $Release --namespace $Namespace 2>$null | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Kognition Helm release '$Release' is not installed in namespace '$Namespace'. Install Kognition with: .\make.ps1 install MODE=kubernetes; then rerun: .\make.ps1 observability-install"
-    }
     $manifest = Join-Path $RepoRoot 'deploy/observability/jaeger.yaml'
     $prometheusValues = Join-Path $RepoRoot 'deploy/observability/prometheus-values.yaml'
     if (-not (Test-Path $manifest)) { throw "Jaeger manifest not found at $manifest" }
@@ -1785,9 +1732,7 @@ function Target-ObservabilityInstall {
     Invoke-Native 'helm' @('upgrade', '--install', 'kognition-observability', 'prometheus-community/kube-prometheus-stack', '--version', $PrometheusStackVersion, '--namespace', $ObservabilityNamespace, '--values', $prometheusValues, '--wait', '--timeout', '10m')
     Invoke-Native 'kubectl' @('-n', $ObservabilityNamespace, 'rollout', 'status', 'deployment/kognition-observability-grafana', '--timeout=180s')
     Invoke-Native 'kubectl' @('-n', $ObservabilityNamespace, 'wait', '--for=condition=Available', 'deployment', '-l', 'app=kube-prometheus-stack-operator,release=kognition-observability', '--timeout=180s')
-    Update-KognitionObservabilitySettings -Enabled $true
-
-    Write-Host 'Observability bundle installed.'
+    Write-Host 'Observability bundle installed. Kognition release unchanged. See docs/observability.md to configure telemetry.'
     Write-Host 'Jaeger UI: .\make.ps1 jaeger-ui, then open http://localhost:16686'
     Write-Host 'Grafana UI: .\make.ps1 grafana-ui, then open http://localhost:3000'
 }
@@ -1809,7 +1754,6 @@ function Target-ObservabilityUninstall {
     }
     if (Get-Command helm -ErrorAction SilentlyContinue) {
         & helm uninstall 'kognition-observability' --namespace $ObservabilityNamespace 2>$null
-        Update-KognitionObservabilitySettings -Enabled $false
     }
 }
 
@@ -1925,7 +1869,7 @@ function Target-Help {
                 '  uninstall            Uninstall everything (release, CRDs, namespace)',
                 '  fresh-kubernetes-demo  Legacy alias for a checked new Kubernetes installation; no reset',
                 '  observability         Alias for observability-install',
-                '  observability-install Install Jaeger, Prometheus, Grafana, and Kognition monitoring integrations',
+                '  observability-install Install Jaeger, Prometheus Operator, and Grafana',
                 '  observability-uninstall Remove the development observability bundle and disable integrations',
                 '  jaeger               Alias for jaeger-install',
                 '  jaeger-install       Backward-compatible alias for observability-install',
@@ -1967,7 +1911,6 @@ function Target-Help {
                 '  RELEASE=<name>            Helm release name (default: kognition)',
                 '  OBSERVABILITY_NAMESPACE=<ns>  Development observability namespace (default: kognition-observability)',
                 '  PROMETHEUS_STACK_VERSION=<version> Pinned kube-prometheus-stack chart version (default: 88.5.2)',
-                '  JAEGER_OTLP_ENDPOINT=<host:port>  OTLP endpoint for Kognition pods',
                 '  FRESH_IMAGE_TAG=<tag>      Use prebuilt, uniquely tagged Kubernetes images',
                 '  MODE=<mode>               install mode: standalone|kubernetes (default: standalone)',
                 '  SAMPLE=<name>             Sample to install/uninstall',
@@ -1992,7 +1935,6 @@ $ObservabilityNamespace = if ($parsed.Vars.ContainsKey('OBSERVABILITY_NAMESPACE'
 $PrometheusStackVersion = if ($parsed.Vars.ContainsKey('PROMETHEUS_STACK_VERSION')) { $parsed.Vars['PROMETHEUS_STACK_VERSION'] } else { '88.5.2' }
 $Release        = if ($parsed.Vars.ContainsKey('RELEASE'))         { $parsed.Vars['RELEASE'] }         else { 'kognition' }
 $Chart          = Join-Path $RepoRoot 'deploy/helm/kognition'
-$JaegerOTLPEndpoint = if ($parsed.Vars.ContainsKey('JAEGER_OTLP_ENDPOINT')) { $parsed.Vars['JAEGER_OTLP_ENDPOINT'] } else { "jaeger-collector.$ObservabilityNamespace.svc.cluster.local:4317" }
 
 if (-not $parsed.Target) {
     Target-Help

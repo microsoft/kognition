@@ -1212,6 +1212,87 @@ summary:focus-visible {
   background: rgba(248, 81, 73, 0.10);
   color: var(--bad);
 }
+.collab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-3);
+}
+.collab-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+.collab-strategy {
+  font-weight: 600;
+  color: var(--accent);
+}
+.collab-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.collab-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.15rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.76rem;
+}
+.collab-chip .collab-role,
+.collab-chip .collab-status {
+  color: var(--text-dim);
+}
+.collab-chip.final {
+  border-color: var(--good);
+  background: rgba(63, 185, 80, 0.12);
+}
+.collab-chip.final .collab-status {
+  color: var(--good);
+}
+.collab-chip.contrib {
+  border-color: var(--accent);
+}
+.collab-chip.ran {
+  border-color: var(--warn);
+}
+.collab-chip.idle {
+  opacity: 0.6;
+  border-style: dashed;
+}
+details.collab-trace > summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+.collab-task {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+  padding: 0.4rem 0.5rem;
+  border-left: 2px solid var(--border);
+  font-size: 0.8rem;
+}
+.collab-task-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.collab-dispatch {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.74rem;
+  word-break: break-all;
+}
 details.run-step-output {
   border: 1px dashed var(--border);
   border-radius: 4px;

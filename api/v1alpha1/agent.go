@@ -3,7 +3,34 @@
 
 package v1alpha1
 
-import "time"
+import (
+	"errors"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const DefaultAgentInvocationTimeout = 30 * time.Second
+
+func ParseAgentInvocationTimeout(raw string) (time.Duration, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, nil
+	}
+	if timeout, err := time.ParseDuration(value); err == nil && timeout > 0 {
+		return timeout, nil
+	}
+	seconds, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, err
+	}
+	nanoseconds := seconds * float64(time.Second)
+	if !(nanoseconds >= 1 && nanoseconds < float64(math.MaxInt64)) {
+		return 0, errors.New("timeout must be a positive, representable duration")
+	}
+	return time.Duration(nanoseconds), nil
+}
 
 // Agent declares a cognitive agent workload.
 type Agent struct {

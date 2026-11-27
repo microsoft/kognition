@@ -7,27 +7,33 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	jsonpatch "github.com/evanphx/json-patch/v5"
 	"go.uber.org/zap"
 	admissionv1 "k8s.io/api/admission/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	k8s "github.com/kognition-ai/kognition/api/k8s/v1alpha1"
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	intadmission "github.com/kognition-ai/kognition/internal/admission"
+	"github.com/kognition-ai/kognition/internal/controlplaneauth"
 	"github.com/kognition-ai/kognition/internal/convert"
 	k8saudit "github.com/kognition-ai/kognition/internal/k8s/audit"
 	"github.com/kognition-ai/kognition/internal/observability"
 	"github.com/kognition-ai/kognition/internal/runtimeapproval"
+	"github.com/kognition-ai/kognition/internal/store"
 )
 
 type webhookClaimantReader struct{}
@@ -72,6 +78,821 @@ func testScheme() *runtime.Scheme {
 func testLogger() *zap.Logger {
 	l, _ := zap.NewDevelopment()
 	return l
+}
+
+func TestWorkflowAcceptanceConfigurationFailsClosedWithoutReceipt(t *testing.T) {
+	handler := NewHandler(intadmission.NewChain(nil, nil), testScheme(), zap.NewNop(), WithWorkflowBindingAdministrators("control", []string{"operators"}, []string{"executor"}))
+	for _, operation := range []admissionv1.Operation{admissionv1.Create, admissionv1.Update, admissionv1.Delete} {
+		for _, username := range []string{"author", "executor", "operator"} {
+			for name, metadata := range map[string]metav1.ObjectMeta{
+				"reserved name":             {Name: "kognition-workflow-run-acceptance-record", Namespace: "control"},
+				"reserved generated name":   {Name: "ordinary", Namespace: "control", GenerateName: "kognition-workflow-run-acceptance-"},
+				"reserved label":            {Name: "ordinary", Namespace: "control", Labels: map[string]string{"kognition.dev/internal-record": "workflow-run-acceptance"}},
+				"submission name":           {Name: "kognition-workflow-run-submission-record", Namespace: "control"},
+				"submission generated name": {Name: "ordinary", Namespace: "control", GenerateName: "kognition-workflow-run-submission-"},
+				"submission label":          {Name: "ordinary", Namespace: "control", Labels: map[string]string{"kognition.dev/internal-record": "workflow-run-submission"}},
+			} {
+				t.Run(string(operation)+"/"+username+"/"+name, func(t *testing.T) {
+					oldJSON, err := json.Marshal(corev1.ConfigMap{ObjectMeta: metadata})
+					if err != nil {
+						t.Fatal(err)
+					}
+					current := metadata.DeepCopy()
+					if operation == admissionv1.Update {
+						current.Labels = nil
+						current.GenerateName = ""
+					}
+					currentJSON, err := json.Marshal(corev1.ConfigMap{ObjectMeta: *current})
+					if err != nil {
+						t.Fatal(err)
+					}
+					request := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{UID: "receipt-write", Operation: operation, Kind: metav1.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, Namespace: "control", Name: metadata.Name,
+						UserInfo: authenticationv1.UserInfo{Username: username, Groups: []string{"operators"}}, Object: runtime.RawExtension{Raw: currentJSON}}}
+					if operation != admissionv1.Create {
+						request.OldObject.Raw = oldJSON
+					}
+					if response := handler.Handle(context.Background(), request); response.Allowed || response.Result.Code != http.StatusForbidden {
+						t.Fatalf("unqualified native acceptance allowed: %+v", response)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestWorkflowRunSubmissionRequiresQualifiedReceipt(t *testing.T) {
+	for _, mode := range []handlerMode{modeCombined, modeMutate, modeValidate} {
+		for _, username := range []string{"author", "executor", "operator"} {
+			for _, protected := range []bool{false, true} {
+				run := k8s.WorkflowRun{ObjectMeta: metav1.ObjectMeta{Name: "investigation", Namespace: "team", UID: "actual-run-uid"},
+					Spec: k8s.WorkflowRunSpec{WorkflowRef: k8s.LocalObjectReference{Name: "investigation"}}}
+				if protected {
+					run.Annotations = map[string]string{runtimeapproval.WorkflowRunAcceptanceRequiredAnnotation: "true", "kognition.dev/initiator": "operator"}
+				}
+				raw, err := json.Marshal(run)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{UID: "actual-admission-request-uid", Operation: admissionv1.Create,
+					Kind: metav1.GroupVersionKind{Group: "kognition.dev", Version: "v1alpha1", Kind: "WorkflowRun"}, Namespace: "team", Name: run.Name,
+					UserInfo: authenticationv1.UserInfo{Username: username, UID: "actual-submitter-uid", Groups: []string{"operators"}}, Object: runtime.RawExtension{Raw: raw}}}
+				handler := newHandlerForMode(intadmission.NewChain(nil, nil), testScheme(), zap.NewNop(), mode,
+					WithWorkflowBindingAdministrators("control", []string{"operators"}, []string{"executor"}))
+				response := handler.Handle(context.Background(), request)
+				if protected {
+					if response.Allowed || response.Result == nil || response.Result.Code != http.StatusForbidden {
+						t.Fatalf("protected native submission without receipt allowed for mode=%v actor=%s: %+v", mode, username, response)
+					}
+					request.Operation = admissionv1.Update
+					request.OldObject.Raw = raw
+					if response := handler.Handle(context.Background(), request); !response.Allowed {
+						t.Fatalf("existing protected run update was blocked: %+v", response)
+					}
+				} else if !response.Allowed {
+					t.Fatalf("ordinary native submission was blocked: %+v", response)
+				}
+			}
+		}
+	}
+}
+
+type workflowUseReviewFixture struct {
+	request     *authorizationv1.SubjectAccessReview
+	status      authorizationv1.SubjectAccessReviewStatus
+	err         error
+	after       func()
+	nilResponse bool
+}
+
+func (reviewer *workflowUseReviewFixture) Create(_ context.Context, request *authorizationv1.SubjectAccessReview, _ metav1.CreateOptions) (*authorizationv1.SubjectAccessReview, error) {
+	reviewer.request = request.DeepCopy()
+	if reviewer.after != nil {
+		reviewer.after()
+	}
+	if reviewer.nilResponse {
+		return nil, reviewer.err
+	}
+	return &authorizationv1.SubjectAccessReview{Status: reviewer.status}, reviewer.err
+}
+
+func TestWorkflowUseAdmissionAuthorization(t *testing.T) {
+	workflow := &k8s.Workflow{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "investigation", UID: "actual-workflow-uid", ResourceVersion: "2"},
+		Spec: k8s.WorkflowSpec{Steps: []k8s.WorkflowStep{{Name: "review", AgentRef: k8s.LocalObjectReference{Name: "analyst"}}}}}
+	raw, err := json.Marshal(convert.WorkflowFromK8s(workflow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := runtimeapproval.WorkflowExecutorSpecDigest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := api.RuntimeApprovalReference{Kind: "Workflow", Scope: "Namespaced", Namespace: workflow.Namespace, Name: workflow.Name, UID: string(workflow.UID), ResourceVersion: 2}
+	submitter := authenticationv1.UserInfo{Username: "actual-submitter", UID: "submitter-uid", Groups: []string{"workflow-users"},
+		Extra: map[string]authenticationv1.ExtraValue{"authentication.kubernetes.io/pod-uid": {"submitter-pod-uid"}}}
+	reader := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(workflow.DeepCopy()).Build()
+	reviewer := &workflowUseReviewFixture{status: authorizationv1.SubjectAccessReviewStatus{Allowed: true}}
+	authorizer := &WorkflowUseAdmissionAuthorizer{Reader: reader, AccessReviews: reviewer}
+	if err := authorizer.Authorize(context.Background(), submitter, reference, digest); err != nil {
+		t.Fatalf("healthy named Workflow/use failed: %v", err)
+	}
+	request := reviewer.request
+	if request == nil || request.Spec.User != "actual-submitter" || request.Spec.UID != "submitter-uid" || len(request.Spec.Groups) != 1 || request.Spec.Groups[0] != "workflow-users" ||
+		len(request.Spec.Extra["authentication.kubernetes.io/pod-uid"]) != 1 || request.Spec.Extra["authentication.kubernetes.io/pod-uid"][0] != "submitter-pod-uid" ||
+		request.Spec.ResourceAttributes == nil || *request.Spec.ResourceAttributes != (authorizationv1.ResourceAttributes{Namespace: "team", Group: "kognition.dev", Resource: "workflows", Name: "investigation", Verb: "use"}) {
+		t.Fatalf("actual submitter or named Workflow/use scope was replaced: %+v", request)
+	}
+	for name, status := range map[string]authorizationv1.SubjectAccessReviewStatus{
+		"denied": {}, "deny precedence": {Allowed: true, Denied: true}, "evaluation error": {Allowed: true, EvaluationError: "policy unavailable"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reviewer.status = status
+			if err := authorizer.Authorize(context.Background(), submitter, reference, digest); err == nil {
+				t.Fatal("Workflow/use authorization did not fail closed")
+			}
+		})
+	}
+	reviewer.status = authorizationv1.SubjectAccessReviewStatus{Allowed: true}
+	reviewer.err = errors.New("review unavailable")
+	if err := authorizer.Authorize(context.Background(), submitter, reference, digest); !errors.Is(err, controlplaneauth.ErrUnavailable) {
+		t.Fatalf("review failure was not unavailable: %v", err)
+	}
+	reviewer.err = nil
+	reviewer.nilResponse = true
+	if err := authorizer.Authorize(context.Background(), submitter, reference, digest); !errors.Is(err, controlplaneauth.ErrUnavailable) {
+		t.Fatalf("missing review response was not unavailable: %v", err)
+	}
+	reviewer.nilResponse = false
+	if err := (*WorkflowUseAdmissionAuthorizer)(nil).Authorize(context.Background(), submitter, reference, digest); !errors.Is(err, runtimeapproval.ErrWorkflowDispatchUnsupported) {
+		t.Fatalf("unconfigured native authorization was accepted: %v", err)
+	}
+	for _, invalidDigest := range []string{"", strings.Repeat("0", 64), strings.ToUpper(digest)} {
+		reviewer.request = nil
+		if err := authorizer.Authorize(context.Background(), submitter, reference, invalidDigest); err == nil || reviewer.request != nil {
+			t.Fatalf("changed or malformed Workflow digest reached authorization: %v %+v", err, reviewer.request)
+		}
+	}
+	for name, change := range map[string]func(*api.RuntimeApprovalReference, *authenticationv1.UserInfo){
+		"missing Workflow UID": func(reference *api.RuntimeApprovalReference, _ *authenticationv1.UserInfo) { reference.UID = "" },
+		"changed revision": func(reference *api.RuntimeApprovalReference, _ *authenticationv1.UserInfo) {
+			reference.ResourceVersion++
+		},
+		"wildcard Workflow": func(reference *api.RuntimeApprovalReference, _ *authenticationv1.UserInfo) { reference.Name = "*" },
+		"anonymous": func(_ *api.RuntimeApprovalReference, user *authenticationv1.UserInfo) {
+			user.Username = "system:anonymous"
+		},
+		"unauthenticated group": func(_ *api.RuntimeApprovalReference, user *authenticationv1.UserInfo) {
+			user.Groups = []string{"system:unauthenticated"}
+		},
+		"unbounded groups": func(_ *api.RuntimeApprovalReference, user *authenticationv1.UserInfo) {
+			user.Groups = make([]string, 65)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			currentReference, currentUser := reference, *submitter.DeepCopy()
+			change(&currentReference, &currentUser)
+			reviewer.request = nil
+			if err := authorizer.Authorize(context.Background(), currentUser, currentReference, digest); err == nil || reviewer.request != nil {
+				t.Fatalf("invalid submission reached authorization: %v %+v", err, reviewer.request)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reviewer.after = cancel
+	if err := authorizer.Authorize(ctx, submitter, reference, digest); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation after review was ignored: %v", err)
+	}
+	reviewer.after = func() {
+		if err := reader.Delete(context.Background(), workflow.DeepCopy()); err != nil {
+			t.Fatal(err)
+		}
+		recreated := workflow.DeepCopy()
+		recreated.UID, recreated.ResourceVersion = "replacement-workflow-uid", ""
+		if err := reader.Create(context.Background(), recreated); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := authorizer.Authorize(context.Background(), submitter, reference, digest); !errors.Is(err, controlplaneauth.ErrForbidden) {
+		t.Fatalf("Workflow recreation during authorization was accepted: %v", err)
+	}
+}
+
+func TestWorkflowBindingConfigurationRequiresProtectedAdministration(t *testing.T) {
+	handler := NewHandler(intadmission.NewChain(nil, nil), testScheme(), zap.NewNop())
+	object := corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name: "kognition-workflow-executor-binding-investigation", Namespace: "kognition-system",
+		Labels: map[string]string{"kognition.dev/internal-record": "workflow-executor-binding"},
+	}, Data: map[string]string{"binding.json": `{}`}}
+	raw, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []admissionv1.Operation{admissionv1.Create, admissionv1.Update, admissionv1.Delete} {
+		t.Run(string(operation), func(t *testing.T) {
+			request := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+				UID: "binding-write", Operation: operation, Kind: metav1.GroupVersionKind{Version: "v1", Kind: "ConfigMap"},
+				Namespace: object.Namespace, Name: object.Name,
+				UserInfo: authenticationv1.UserInfo{Username: "operator", UID: "operator-uid", Groups: []string{"binding-administrators"}},
+			}}
+			if operation != admissionv1.Delete {
+				request.Object.Raw = raw
+			}
+			if operation != admissionv1.Create {
+				request.OldObject.Raw = raw
+			}
+			response := handler.Handle(context.Background(), request)
+			if response.Allowed || response.Result == nil || response.Result.Code != http.StatusForbidden {
+				t.Fatalf("unconfigured private binding administration: allowed=%v result=%+v", response.Allowed, response.Result)
+			}
+		})
+	}
+}
+
+func TestWorkflowBindingConfigurationOperatorBoundary(t *testing.T) {
+	executor := "system:serviceaccount:kognition-system:workflow-executor"
+	groups := []string{"binding-administrators"}
+	executors := []string{executor}
+	auditBackend := &auditStore{}
+	handler := NewHandler(intadmission.NewChain(nil, nil), testScheme(), zap.NewNop(),
+		WithWorkflowBindingAdministrators("kognition-system", groups, executors),
+		WithWorkflowBindingReader(fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(workflowBindingDefinitionFixture()).Build()),
+		WithAuditLog(observability.NewCognitiveAuditLog(auditBackend)))
+	groups[0], executors[0] = "authors", "another-executor"
+	tests := []struct {
+		name    string
+		change  func(*admission.Request, *corev1.ConfigMap, *corev1.ConfigMap)
+		allowed bool
+	}{
+		{name: "operator", allowed: true},
+		{name: "author", change: func(request *admission.Request, _, _ *corev1.ConfigMap) {
+			request.UserInfo.Groups = []string{"authors"}
+		}},
+		{name: "executor in operator group", change: func(request *admission.Request, _, _ *corev1.ConfigMap) {
+			request.UserInfo.Username = executor
+		}},
+		{name: "anonymous", change: func(request *admission.Request, _, _ *corev1.ConfigMap) {
+			request.UserInfo.Username = "system:anonymous"
+		}},
+		{name: "unauthenticated group", change: func(request *admission.Request, _, _ *corev1.ConfigMap) {
+			request.UserInfo.Groups = append(request.UserInfo.Groups, "system:unauthenticated")
+		}},
+		{name: "wrong namespace", change: func(request *admission.Request, object, old *corev1.ConfigMap) {
+			request.Namespace, object.Namespace, old.Namespace = "workers", "workers", "workers"
+		}},
+		{name: "forged metadata namespace", change: func(_ *admission.Request, object, old *corev1.ConfigMap) {
+			object.Namespace, old.Namespace = "workers", "workers"
+		}},
+		{name: "changed metadata name", change: func(_ *admission.Request, object, old *corev1.ConfigMap) {
+			object.Name, old.Name = "replacement", "replacement"
+		}},
+		{name: "unlabeled reserved name", change: func(request *admission.Request, object, old *corev1.ConfigMap) {
+			request.UserInfo.Groups = []string{"authors"}
+			object.Labels, old.Labels = nil, nil
+		}},
+		{name: "unrelated ConfigMap", allowed: true, change: func(request *admission.Request, object, old *corev1.ConfigMap) {
+			request.Name, object.Name, old.Name = "ordinary", "ordinary", "ordinary"
+			object.Labels, old.Labels = nil, nil
+			request.UserInfo.Groups = []string{"authors"}
+		}},
+	}
+	for _, test := range tests {
+		for _, operation := range []admissionv1.Operation{admissionv1.Create, admissionv1.Update, admissionv1.Delete} {
+			t.Run(test.name+"/"+string(operation), func(t *testing.T) {
+				object := workflowBindingConfigurationFixture(t)
+				old := *object.DeepCopy()
+				request := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+					UID: "binding-write", Operation: operation, Kind: metav1.GroupVersionKind{Version: "v1", Kind: "ConfigMap"},
+					Namespace: object.Namespace, Name: object.Name,
+					UserInfo: authenticationv1.UserInfo{Username: "operator", Groups: []string{"binding-administrators"}},
+				}}
+				if test.change != nil {
+					test.change(&request, &object, &old)
+				}
+				var err error
+				if operation != admissionv1.Delete {
+					request.Object.Raw, err = json.Marshal(object)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if operation != admissionv1.Create {
+					request.OldObject.Raw, err = json.Marshal(old)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				response := handler.Handle(context.Background(), request)
+				expected := test.allowed && (operation != admissionv1.Delete || test.name == "unrelated ConfigMap")
+				if response.Allowed != expected || !expected && (response.Result == nil || response.Result.Code != http.StatusForbidden) {
+					t.Fatalf("binding write allowed=%v want=%v result=%+v", response.Allowed, expected, response.Result)
+				}
+			})
+		}
+	}
+	object := corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "labeled-record", Namespace: "kognition-system",
+		Labels: map[string]string{"kognition.dev/internal-record": "workflow-executor-binding"}}}
+	oldRaw, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object.Labels = nil
+	newRaw, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := handler.Handle(context.Background(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		UID: "strip-label", Operation: admissionv1.Update, Kind: metav1.GroupVersionKind{Version: "v1", Kind: "ConfigMap"},
+		Namespace: object.Namespace, Name: object.Name, Object: runtime.RawExtension{Raw: newRaw}, OldObject: runtime.RawExtension{Raw: oldRaw},
+		UserInfo: authenticationv1.UserInfo{Username: "author", Groups: []string{"authors"}},
+	}})
+	if response.Allowed || response.Result == nil || response.Result.Code != http.StatusForbidden {
+		t.Fatalf("prior protected label bypassed administration: allowed=%v result=%+v", response.Allowed, response.Result)
+	}
+	if len(auditBackend.entries) != 2 {
+		t.Fatalf("operator binding audit count = %d, want 2", len(auditBackend.entries))
+	}
+	for index, entry := range auditBackend.entries {
+		if entry.AgentIdentity != "operator" || entry.Workspace != "kognition-system" || entry.SubjectKind != "ConfigMap" ||
+			entry.SubjectRef != "kognition-system/"+runtimeapproval.WorkflowExecutorBindingObjectName("team-a", "approved") ||
+			entry.Verb != []string{"attempt_create", "attempt_update"}[index] {
+			t.Fatalf("operator binding audit attribution: %+v", entry)
+		}
+	}
+}
+
+func TestWorkflowBindingConfigurationRequiresDurableAudit(t *testing.T) {
+	object := workflowBindingConfigurationFixture(t)
+	raw, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unavailable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unavailable-%v", unavailable), func(t *testing.T) {
+			options := []Option{WithWorkflowBindingAdministrators("kognition-system", []string{"binding-administrators"}, []string{"system:serviceaccount:kognition-system:workflow-executor"}), WithWorkflowBindingReader(fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(workflowBindingDefinitionFixture()).Build())}
+			if unavailable {
+				options = append(options, WithAuditLog(observability.NewCognitiveAuditLog(&auditStore{err: errors.New("audit unavailable")})))
+			}
+			handler := NewHandler(intadmission.NewChain(nil, nil), testScheme(), zap.NewNop(), options...)
+			response := handler.Handle(context.Background(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+				UID: "binding-write", Operation: admissionv1.Create, Kind: metav1.GroupVersionKind{Version: "v1", Kind: "ConfigMap"},
+				Namespace: object.Namespace, Name: object.Name, Object: runtime.RawExtension{Raw: raw},
+				UserInfo: authenticationv1.UserInfo{Username: "operator", Groups: []string{"binding-administrators"}},
+			}})
+			if response.Allowed || response.Result == nil || response.Result.Code != http.StatusInternalServerError {
+				t.Fatalf("unaudited binding write: allowed=%v result=%+v", response.Allowed, response.Result)
+			}
+		})
+	}
+}
+
+func workflowBindingDefinitionFixture() *k8s.Workflow {
+	return &k8s.Workflow{ObjectMeta: metav1.ObjectMeta{Name: "investigate", Namespace: "team-a", UID: "investigate-uid", ResourceVersion: "1"}, Spec: k8s.WorkflowSpec{Steps: []k8s.WorkflowStep{{Name: "analysis", AgentRef: k8s.LocalObjectReference{Name: "analyst"}}}}}
+}
+
+func workflowBindingConfigurationFixture(t *testing.T) corev1.ConfigMap {
+	t.Helper()
+	reference := func(kind, name string) api.RuntimeApprovalReference {
+		return api.RuntimeApprovalReference{Kind: kind, Scope: "Namespaced", Namespace: "team-a", Name: name, UID: name + "-uid", ResourceVersion: 1}
+	}
+	authority := runtimeapproval.WorkflowExecutorAuthority{PolicyVersion: runtimeapproval.WorkflowExecutorPolicyVersion, Reference: api.RuntimeApprovalReference{Kind: "WorkflowExecutionBinding", Scope: "Namespaced", Namespace: "team-a", Name: "approved"},
+		Workflow: reference("Workflow", "investigate"), WorkflowRevisionDigest: strings.Repeat("a", 64), Enabled: true,
+		Executor:       api.ControlPlaneRoleSubject{Method: "tokenreview", Issuer: "kubernetes.io/tokenreview", Subject: "system:serviceaccount:kognition-system:workflow-executor"},
+		ApprovedBy:     api.ControlPlaneRoleSubject{Method: "tokenreview", Issuer: "kubernetes.io/tokenreview", Subject: "operator"},
+		ControllerUIDs: []string{"controller-uid"}, NotBefore: time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC), ExpiresAt: time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC),
+		Limits: runtimeapproval.WorkflowExecutorLimits{MaxEffects: 8, MaxPayloadBytes: 32768, MaxDurationSeconds: 3600, MaxMembers: 8, MaxTurns: 100, MaxMessages: 500, MaxDelegations: 100, MaxHandoffDepth: 5, MaxParallelTasks: 8, ContentRetentionSeconds: 604800, ReplayRetentionSeconds: 7776000},
+		Targets: []runtimeapproval.WorkflowExecutorTarget{{Agent: reference("Agent", "analyst"), Service: reference("AgentService", "analyst"),
+			Operation: runtimeapproval.WorkflowExecutorInitiate, InitialDecision: api.RuntimeApprovalDecisionPending}}}
+	definition, err := json.Marshal(convert.WorkflowFromK8s(workflowBindingDefinitionFixture()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority.WorkflowRevisionDigest, err = runtimeapproval.WorkflowExecutorSpecDigest(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: runtimeapproval.WorkflowExecutorBindingObjectName("team-a", "approved"), Namespace: "kognition-system",
+		Labels: map[string]string{"kognition.dev/internal-record": "workflow-executor-binding"}}, Data: map[string]string{"binding.json": string(raw)}}
+}
+
+type workflowSubmissionBindingsFixture struct {
+	authority runtimeapproval.WorkflowExecutorAuthority
+}
+
+type workflowSubmissionReceiptsFixture struct {
+	receipts map[string]runtimeapproval.NativeWorkflowSubmissionReceipt
+}
+
+func (fixture *workflowSubmissionReceiptsFixture) CreateNativeWorkflowSubmissionReceipt(_ context.Context, receipt runtimeapproval.NativeWorkflowSubmissionReceipt) error {
+	key := runtimeapproval.NativeWorkflowSubmissionObjectName(receipt.Run.Namespace, receipt.Run.UID)
+	if _, found := fixture.receipts[key]; found {
+		return store.ErrAlreadyExists
+	}
+	fixture.receipts[key] = receipt
+	return nil
+}
+
+func (fixture *workflowSubmissionReceiptsFixture) GetNativeWorkflowSubmissionReceipt(_ context.Context, workspace, runUID string) (runtimeapproval.NativeWorkflowSubmissionReceipt, error) {
+	receipt, found := fixture.receipts[runtimeapproval.NativeWorkflowSubmissionObjectName(workspace, runUID)]
+	if !found {
+		return runtimeapproval.NativeWorkflowSubmissionReceipt{}, store.ErrNotFound
+	}
+	return receipt, nil
+}
+
+func (reader *workflowSubmissionBindingsFixture) GetWorkflowExecutorAuthority(_ context.Context, reference api.RuntimeApprovalReference) (runtimeapproval.WorkflowExecutorAuthority, error) {
+	if reference != reader.authority.Reference {
+		return runtimeapproval.WorkflowExecutorAuthority{}, controlplaneauth.ErrForbidden
+	}
+	return reader.authority, nil
+}
+
+func workflowSubmissionFixture(t *testing.T) (*WorkflowRunSubmissionService, admission.Request, *workflowSubmissionBindingsFixture, *workflowUseReviewFixture) {
+	t.Helper()
+	configuration := workflowBindingConfigurationFixture(t)
+	authority, err := runtimeapproval.DecodeWorkflowExecutorAuthority([]byte(configuration.Data["binding.json"]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority.Reference.UID, authority.Reference.ResourceVersion = "actual-binding-uid", 3
+	bindings := &workflowSubmissionBindingsFixture{authority: authority}
+	reviewer := &workflowUseReviewFixture{status: authorizationv1.SubjectAccessReviewStatus{Allowed: true}}
+	reader := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(workflowBindingDefinitionFixture()).Build()
+	now := authority.NotBefore.Add(time.Hour)
+	service := &WorkflowRunSubmissionService{Authorizer: &WorkflowUseAdmissionAuthorizer{Reader: reader, AccessReviews: reviewer}, Bindings: bindings,
+		Receipts: &workflowSubmissionReceiptsFixture{receipts: map[string]runtimeapproval.NativeWorkflowSubmissionReceipt{}}, Clock: func() (time.Time, error) { return now, nil }}
+	service.Keys, err = runtimeapproval.NewStaticBindingKeyStore([]runtimeapproval.BindingKey{{Version: 1, Algorithm: runtimeapproval.BindingAlgorithmV1,
+		Domain: runtimeapproval.BindingDomainV1, Status: runtimeapproval.BindingKeyActive, Material: []byte("0123456789abcdef0123456789abcdef")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := k8s.WorkflowRun{ObjectMeta: metav1.ObjectMeta{Name: "investigation-run", Namespace: authority.Workflow.Namespace, UID: "actual-resource-uid",
+		Annotations: map[string]string{runtimeapproval.WorkflowRunAcceptanceRequiredAnnotation: "true", "kognition.dev/initiator": "forged-operator"}},
+		Spec: k8s.WorkflowRunSpec{WorkflowRef: k8s.LocalObjectReference{Name: authority.Workflow.Name}}}
+	raw, err := json.Marshal(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{UID: "actual-admission-uid", Operation: admissionv1.Create,
+		Kind: metav1.GroupVersionKind{Group: "kognition.dev", Version: "v1alpha1", Kind: "WorkflowRun"}, Namespace: run.Namespace, Name: run.Name,
+		UserInfo: authenticationv1.UserInfo{Username: "actual-submitter", UID: "actual-submitter-uid", Groups: []string{"workflow-users"},
+			Extra: map[string]authenticationv1.ExtraValue{"authentication.kubernetes.io/pod-uid": {"actual-submitter-pod"}}}, Object: runtime.RawExtension{Raw: raw}}}
+	return service, request, bindings, reviewer
+}
+
+func workflowSubmissionPersistedRun(t *testing.T, request admission.Request, receipt runtimeapproval.NativeWorkflowSubmissionReceipt) api.WorkflowRun {
+	t.Helper()
+	var native k8s.WorkflowRun
+	if err := json.Unmarshal(request.Object.Raw, &native); err != nil {
+		t.Fatal(err)
+	}
+	native.ResourceVersion = "4"
+	return *convert.WorkflowRunFromK8s(&native)
+}
+
+func TestWorkflowSubmissionReceiptUsesActualSubmitterAtFinalAcceptance(t *testing.T) {
+	service, request, bindings, reviewer := workflowSubmissionFixture(t)
+	receipt, err := service.Issue(context.Background(), request, bindings.authority.Reference)
+	if err != nil {
+		t.Fatalf("healthy authenticated issuance failed: %v", err)
+	}
+	if receipt.Run.UID != "actual-resource-uid" || receipt.AdmissionUID != "actual-admission-uid" || receipt.Submitter.Username != "actual-submitter" ||
+		receipt.Submitter.UID != "actual-submitter-uid" || receipt.Submitter.Extra["authentication.kubernetes.io/pod-uid"][0] != "actual-submitter-pod" {
+		t.Fatalf("actual resource or authenticated submitter was replaced: %+v", receipt)
+	}
+	run := workflowSubmissionPersistedRun(t, request, receipt)
+	raw, err := json.Marshal(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewer.request = nil
+	acceptance, err := service.AuthorizeAcceptance(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("healthy signed evidence did not authorize acceptance: %v", err)
+	}
+	if acceptance.RunUID != "actual-resource-uid" || acceptance.Run.ResourceVersion != 4 || acceptance.Initiator.Subject != "actual-submitter" ||
+		acceptance.Executor != bindings.authority.Executor || acceptance.ExpiresAt.Sub(acceptance.AcceptedAt) != time.Hour ||
+		reviewer.request == nil || reviewer.request.Spec.User != "actual-submitter" || reviewer.request.Spec.UID != "actual-submitter-uid" || reviewer.request.Spec.ResourceAttributes.Name != "investigate" {
+		t.Fatalf("final acceptance reused executor identity, caller annotations, or wrong scope: %+v %+v", acceptance, reviewer.request)
+	}
+}
+
+func TestWorkflowSubmissionReceiptFinalizationFailsClosed(t *testing.T) {
+	for _, scenario := range []string{"revoked use", "binding revoked", "binding revision", "expired", "recreated run", "copied run", "edited request", "started run", "forged evidence", "binding revoked during review", "missing authorizer reader", "missing access reviewer"} {
+		t.Run(scenario, func(t *testing.T) {
+			service, request, bindings, reviewer := workflowSubmissionFixture(t)
+			receipt, err := service.Issue(context.Background(), request, bindings.authority.Reference)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := workflowSubmissionPersistedRun(t, request, receipt)
+			switch scenario {
+			case "revoked use":
+				reviewer.status = authorizationv1.SubjectAccessReviewStatus{}
+			case "binding revoked":
+				bindings.authority.Enabled = false
+			case "binding revision":
+				bindings.authority.Reference.ResourceVersion++
+			case "expired":
+				service.Clock = func() (time.Time, error) { return receipt.ExpiresAt, nil }
+			case "recreated run":
+				run.UID = "replacement-run-uid"
+			case "copied run":
+				run.Name = "another-run"
+			case "edited request":
+				run.Spec.WorkflowRef.Name = "another-workflow"
+			case "started run":
+				run.Status.StartTime = &receipt.IssuedAt
+			case "forged evidence":
+				receipt.Submitter.Username = "operator"
+				encoded, err := json.Marshal(receipt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				run.Annotations[runtimeapproval.NativeWorkflowSubmissionAnnotation] = string(encoded)
+			case "binding revoked during review":
+				reviewer.after = func() { bindings.authority.Enabled = false }
+			case "missing authorizer reader":
+				service.Authorizer.Reader = nil
+			case "missing access reviewer":
+				service.Authorizer.AccessReviews = nil
+			}
+			raw, err := json.Marshal(run)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if acceptance, err := service.AuthorizeAcceptance(context.Background(), raw); err == nil || acceptance.RunUID != "" {
+				t.Fatalf("invalid native evidence authorized acceptance: %+v %v", acceptance, err)
+			}
+		})
+	}
+}
+
+func TestWorkflowSubmissionReceiptAdmissionLifecycle(t *testing.T) {
+	for _, scenario := range []string{"healthy", "changed submitter", "changed submitter UID", "revoked use", "revoked binding", "caller supplied receipt", "started run", "edited binding", "healthy update", "added evidence on update", "edited binding on update"} {
+		t.Run(scenario, func(t *testing.T) {
+			service, request, bindings, reviewer := workflowSubmissionFixture(t)
+			var native k8s.WorkflowRun
+			if err := json.Unmarshal(request.Object.Raw, &native); err != nil {
+				t.Fatal(err)
+			}
+			bindingJSON, err := json.Marshal(bindings.authority.Reference)
+			if err != nil {
+				t.Fatal(err)
+			}
+			native.Annotations[runtimeapproval.NativeWorkflowExecutionBindingAnnotation] = string(bindingJSON)
+			native.UID = ""
+			request.Object.Raw, err = json.Marshal(native)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutator := newHandlerForMode(intadmission.NewChain(nil, nil), testScheme(), zap.NewNop(), modeMutate, WithWorkflowRunSubmissions(service))
+			validator := newHandlerForMode(intadmission.NewChain(nil, nil), testScheme(), zap.NewNop(), modeValidate, WithWorkflowRunSubmissions(service))
+			response := mutator.Handle(context.Background(), request)
+			if !response.Allowed {
+				t.Fatalf("qualified mutation failed: %+v", response.Result)
+			}
+			if err := response.Complete(request); err != nil {
+				t.Fatal(err)
+			}
+			patched := request.Object.Raw
+			if len(response.Patch) != 0 {
+				patch, err := jsonpatch.DecodePatch(response.Patch)
+				if err != nil {
+					t.Fatal(err)
+				}
+				patched, err = patch.Apply(request.Object.Raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := json.Unmarshal(patched, &native); err != nil {
+				t.Fatal(err)
+			}
+			if native.UID != "" || native.Annotations[runtimeapproval.NativeWorkflowSubmissionAnnotation] != "" || len(service.Receipts.(*workflowSubmissionReceiptsFixture).receipts) != 0 {
+				t.Fatal("mutation invented a UID or issued premature evidence")
+			}
+			request.Object.Raw = patched
+			request.UID = "reinvoked-mutating-admission-uid"
+			if !mutator.Handle(context.Background(), request).Allowed {
+				t.Fatal("read-only mutation reinvocation rejected healthy preflight")
+			}
+			native.UID = "actual-resource-uid"
+			patched, err = json.Marshal(native)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.UID = "separate-validating-admission-uid"
+			request.Object.Raw = patched
+			if !validator.Handle(context.Background(), request).Allowed {
+				t.Fatal("validation did not retain authenticated evidence for the actual resource UID")
+			}
+			request.UID = "retry-validating-admission-uid"
+			allowed := false
+			handler := validator
+			switch scenario {
+			case "healthy":
+				allowed = true
+			case "changed submitter":
+				request.UserInfo.Username = "another-submitter"
+			case "changed submitter UID":
+				request.UserInfo.UID = "replacement-submitter-uid"
+			case "revoked use":
+				reviewer.status = authorizationv1.SubjectAccessReviewStatus{}
+			case "revoked binding":
+				bindings.authority.Enabled = false
+			case "caller supplied receipt":
+				native.Annotations[runtimeapproval.NativeWorkflowSubmissionAnnotation] = "forged"
+			case "started run":
+				started := metav1.NewTime(time.Now())
+				native.Status.StartTime = &started
+			case "edited binding":
+				delete(native.Annotations, runtimeapproval.NativeWorkflowExecutionBindingAnnotation)
+			case "healthy update", "added evidence on update", "edited binding on update":
+				request.Operation = admissionv1.Update
+				request.OldObject.Raw = patched
+				native.ResourceVersion = "4"
+				allowed = scenario == "healthy update"
+				if scenario == "added evidence on update" {
+					native.Annotations[runtimeapproval.NativeWorkflowSubmissionAnnotation] = "forged"
+				}
+				if scenario == "edited binding on update" {
+					delete(native.Annotations, runtimeapproval.NativeWorkflowExecutionBindingAnnotation)
+				}
+			}
+			request.Object.Raw, err = json.Marshal(native)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response = handler.Handle(context.Background(), request)
+			if response.Allowed != allowed {
+				t.Fatalf("%s: allowed=%v result=%+v", scenario, response.Allowed, response.Result)
+			}
+		})
+	}
+}
+
+func TestWorkflowSubmissionReceiptPrivateWritesRequireVerifiedExecutor(t *testing.T) {
+	for _, submission := range []bool{true, false} {
+		for _, scenario := range []string{"healthy", "author", "operator", "wrong service account UID", "wrong pod UID", "unverified writer", "final writer lost", "revoked use", "revoked binding", "tampered evidence", "mutable record", "extra data", "wrong name", "wrong namespace", "update", "delete"} {
+			t.Run(fmt.Sprintf("submission-%v/%s", submission, scenario), func(t *testing.T) {
+				service, request, bindings, reviewer := workflowSubmissionFixture(t)
+				receipt, err := service.Issue(context.Background(), request, bindings.authority.Reference)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writer := authenticationv1.UserInfo{Username: bindings.authority.Executor.Subject, UID: "actual-executor-sa-uid", Groups: []string{"system:authenticated"},
+					Extra: map[string]authenticationv1.ExtraValue{"authentication.kubernetes.io/pod-name": {"executor-pod"}, "authentication.kubernetes.io/pod-uid": {"controller-uid"}}}
+				service.RecordNamespace = "control"
+				service.CurrentWriter = func(context.Context) (authenticationv1.UserInfo, error) { return *writer.DeepCopy(), nil }
+				immutable := true
+				object := corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "control", Name: runtimeapproval.NativeWorkflowSubmissionObjectName(receipt.Run.Namespace, receipt.Run.UID),
+					Labels: map[string]string{"kognition.dev/internal-record": "workflow-run-submission"}}, Immutable: &immutable, Data: map[string]string{}}
+				encoded, err := json.Marshal(receipt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				object.Data["receipt.json"] = string(encoded)
+				if !submission {
+					run := workflowSubmissionPersistedRun(t, request, receipt)
+					native := convert.WorkflowRunToK8s(&run)
+					native.ResourceVersion = ""
+					if err := service.Authorizer.Reader.(client.Client).Create(context.Background(), native); err != nil {
+						t.Fatal(err)
+					}
+					run = *convert.WorkflowRunFromK8s(native)
+					raw, err := json.Marshal(run)
+					if err != nil {
+						t.Fatal(err)
+					}
+					acceptance, err := service.AuthorizeAcceptance(context.Background(), raw)
+					if err != nil {
+						t.Fatal(err)
+					}
+					encoded, err = json.Marshal(acceptance)
+					if err != nil {
+						t.Fatal(err)
+					}
+					object.Name = runtimeapproval.WorkflowRunAcceptanceObjectName(run.Namespace, run.UID)
+					object.Labels["kognition.dev/internal-record"] = "workflow-run-acceptance"
+					object.Data = map[string]string{"acceptance.json": string(encoded)}
+				}
+				request.Operation = admissionv1.Create
+				request.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+				request.Namespace, request.Name = object.Namespace, object.Name
+				request.UserInfo = *writer.DeepCopy()
+				switch scenario {
+				case "author", "operator":
+					request.UserInfo.Username = scenario
+				case "wrong service account UID":
+					request.UserInfo.UID = "replacement-sa-uid"
+				case "wrong pod UID":
+					request.UserInfo.Extra["authentication.kubernetes.io/pod-uid"] = authenticationv1.ExtraValue{"replacement-pod-uid"}
+				case "unverified writer":
+					service.CurrentWriter = nil
+				case "final writer lost":
+					calls := 0
+					service.CurrentWriter = func(context.Context) (authenticationv1.UserInfo, error) {
+						calls++
+						if calls > 1 {
+							return authenticationv1.UserInfo{}, errors.New("workload proof lost")
+						}
+						return *writer.DeepCopy(), nil
+					}
+				case "revoked use":
+					reviewer.status = authorizationv1.SubjectAccessReviewStatus{}
+				case "revoked binding":
+					bindings.authority.Enabled = false
+				case "tampered evidence":
+					for key, raw := range object.Data {
+						object.Data[key] = strings.Replace(raw, "actual-submitter", "forged-submitter", 1)
+					}
+				case "mutable record":
+					object.Immutable = nil
+				case "extra data":
+					object.Data["unexpected"] = "value"
+				case "wrong name":
+					object.Name += "-copied"
+					request.Name = object.Name
+				case "wrong namespace":
+					object.Namespace, request.Namespace = "another-control", "another-control"
+				case "update":
+					request.Operation = admissionv1.Update
+				case "delete":
+					request.Operation = admissionv1.Delete
+				}
+				request.Object.Raw, err = json.Marshal(object)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if request.Operation != admissionv1.Create {
+					request.OldObject.Raw = request.Object.Raw
+				}
+				handler := NewHandler(intadmission.NewChain(nil, nil), testScheme(), zap.NewNop(), WithWorkflowRunSubmissions(service))
+				response := handler.Handle(context.Background(), request)
+				if response.Allowed != (scenario == "healthy") {
+					t.Fatalf("private evidence %s allowed=%v result=%+v", scenario, response.Allowed, response.Result)
+				}
+			})
+		}
+	}
+}
+
+func TestWorkflowBindingConfigurationVerifiesLiveWorkflow(t *testing.T) {
+	for _, scenario := range []string{"healthy", "recreated", "revision", "missing", "digest"} {
+		t.Run(scenario, func(t *testing.T) {
+			definition := workflowBindingDefinitionFixture()
+			if scenario == "recreated" {
+				definition.UID = "replacement"
+			}
+			if scenario == "revision" {
+				definition.ResourceVersion = "2"
+			}
+			if scenario == "digest" {
+				definition.Spec.Steps[0].Name = "changed"
+			}
+			builder := fake.NewClientBuilder().WithScheme(testScheme())
+			if scenario != "missing" {
+				builder = builder.WithObjects(definition)
+			}
+			handler := NewHandler(intadmission.NewChain(nil, nil), testScheme(), zap.NewNop(), WithWorkflowBindingAdministrators("kognition-system", []string{"binding-administrators"}, []string{"system:serviceaccount:kognition-system:workflow-executor"}), WithWorkflowBindingReader(builder.Build()), WithAuditLog(observability.NewCognitiveAuditLog(&auditStore{})))
+			object := workflowBindingConfigurationFixture(t)
+			raw, err := json.Marshal(object)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := handler.Handle(context.Background(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{UID: "binding-write", Operation: admissionv1.Create, Kind: metav1.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, Namespace: object.Namespace, Name: object.Name, Object: runtime.RawExtension{Raw: raw}, UserInfo: authenticationv1.UserInfo{Username: "operator", Groups: []string{"binding-administrators"}}}})
+			if response.Allowed != (scenario == "healthy") {
+				t.Fatalf("live %s Workflow: %+v", scenario, response)
+			}
+		})
+	}
+}
+
+func TestWorkflowBindingConfigurationRejectsMalformedPayload(t *testing.T) {
+	handler := NewHandler(intadmission.NewChain(nil, nil), testScheme(), zap.NewNop(),
+		WithWorkflowBindingAdministrators("kognition-system", []string{"binding-administrators"}, []string{"system:serviceaccount:kognition-system:workflow-executor"}),
+		WithAuditLog(observability.NewCognitiveAuditLog(&auditStore{})))
+	for _, field := range []string{"credentials", "serviceAccount", "unexpected", "reference"} {
+		t.Run(field, func(t *testing.T) {
+			object := workflowBindingConfigurationFixture(t)
+			raw := object.Data["binding.json"]
+			object.Data["binding.json"] = `{"` + field + `":true,` + raw[1:]
+			encoded, err := json.Marshal(object)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := handler.Handle(context.Background(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{UID: "binding-write", Operation: admissionv1.Create,
+				Kind: metav1.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, Namespace: object.Namespace, Name: object.Name,
+				Object: runtime.RawExtension{Raw: encoded}, UserInfo: authenticationv1.UserInfo{Username: "operator", Groups: []string{"binding-administrators"}}}})
+			if response.Allowed || response.Result == nil || response.Result.Code != http.StatusBadRequest {
+				t.Fatalf("malformed binding allowed: %+v", response.Result)
+			}
+		})
+	}
 }
 
 func TestHandlerConvertsAutonomyFoundationTypes(t *testing.T) {

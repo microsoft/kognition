@@ -82,6 +82,8 @@ func TestRegisteredResourcesDeepCopyWithoutSharedStorage(t *testing.T) {
 		&ToolInvocationRun{}, &ToolInvocationRunList{},
 		&Workflow{}, &WorkflowList{},
 		&WorkflowRun{}, &WorkflowRunList{},
+		&ExternalAgent{}, &ExternalAgentList{},
+		&ExternalAgentGrant{}, &ExternalAgentGrantList{},
 	}
 	gvks := make([]schema.GroupVersionKind, 0, len(expectedObjects))
 	for _, object := range expectedObjects {

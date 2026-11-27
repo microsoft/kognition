@@ -114,7 +114,11 @@ func (s *StoreAdapter) createOrGetRuntimeApproval(ctx context.Context, keys runt
 	proposed.ObjectMeta.CreationTimestamp = now
 	proposed.ObjectMeta.ResourceVersion = 0
 	proposed.Spec.CreatedAt = now
-	proposed.Spec.ExpiresAt = now.Add(ttl)
+	deadline, err := runtimeapproval.RuntimeApprovalDeadline(proposed, now, ttl)
+	if err != nil {
+		return false, api.RuntimeApproval{}, err
+	}
+	proposed.Spec.ExpiresAt = deadline
 	object := convert.RuntimeApprovalToK8s(&proposed)
 	object.ResourceVersion = ""
 	object.CreationTimestamp = metav1.Time{}

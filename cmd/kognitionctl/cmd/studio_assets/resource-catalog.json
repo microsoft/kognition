@@ -863,6 +863,29 @@
               },
               "type": "array"
             },
+            "allowFromQualified": {
+              "items": {
+                "properties": {
+                  "name": {
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "pattern": "^(\\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?)$",
+                    "type": "string"
+                  },
+                  "namespace": {
+                    "maxLength": 63,
+                    "minLength": 1,
+                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
             "allowTo": {
               "items": {
                 "description": "LocalObjectReference references a resource by name within the same namespace.",
@@ -910,6 +933,31 @@
                 ],
                 "type": "object"
               },
+              "type": "array"
+            },
+            "allowFromQualified": {
+              "items": {
+                "properties": {
+                  "name": {
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "pattern": "^(\\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?)$",
+                    "type": "string"
+                  },
+                  "namespace": {
+                    "maxLength": 63,
+                    "minLength": 1,
+                    "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "namespace",
+                  "name"
+                ],
+                "type": "object"
+              },
+              "maxItems": 256,
               "type": "array"
             },
             "allowTo": {
@@ -3205,6 +3253,39 @@
       "properties": {
         "spec": {
           "properties": {
+            "executionRules": {
+              "items": {
+                "properties": {
+                  "effect": {
+                    "type": "string"
+                  },
+                  "operation": {
+                    "type": "string"
+                  },
+                  "resourceName": {
+                    "type": "string"
+                  },
+                  "resourceUID": {
+                    "type": "string"
+                  },
+                  "revisionDigest": {
+                    "type": "string"
+                  },
+                  "workspace": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "effect",
+                  "operation",
+                  "workspace",
+                  "resourceName",
+                  "resourceUID"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
             "rules": {
               "items": {
                 "properties": {
@@ -4051,6 +4132,383 @@
             "targetRef"
           ],
           "type": "object"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "kind": "ExternalAgent",
+    "plural": "externalagents",
+    "namespaced": true,
+    "group": "Build",
+    "treatment": "author",
+    "schema": {
+      "properties": {
+        "spec": {
+          "description": "ExternalAgentSpec defines the remote endpoint, its pinned card and limits.\nProtocol, endpoint, card digest and credential reference are immutable; a new\nendpoint, card or credential is a new resource.",
+          "properties": {
+            "card": {
+              "description": "Card pins the Agent Card the platform will accept.",
+              "properties": {
+                "digest": {
+                  "description": "Digest is \"sha256:\" plus the lowercase hex SHA-256 of the RFC 8785\ncanonical form of the Agent Card with its signatures removed.",
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "skills": {
+                  "description": "Skills optionally restricts the card skills the platform will use.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "digest"
+              ],
+              "type": "object"
+            },
+            "credentialRef": {
+              "description": "CredentialRef names a SecretRef in the same namespace holding a bearer token.",
+              "properties": {
+                "name": {
+                  "description": "Name is the name of the referenced resource.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            },
+            "endpoint": {
+              "description": "Endpoint is a static DNS host:port. TLS is always used. IP literals,\nschemes, userinfo and paths are rejected.",
+              "maxLength": 260,
+              "minLength": 3,
+              "pattern": "^[A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?)+\\.?:[0-9]{1,5}$",
+              "type": "string"
+            },
+            "limits": {
+              "description": "Limits bound every task sent to the agent. Unset values take defaults.",
+              "properties": {
+                "maxConcurrentTasks": {
+                  "maximum": 16,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxRequestBytes": {
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxResponseBytes": {
+                  "maximum": 4194304,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxTokensPerTask": {
+                  "maximum": 131072,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "taskTimeout": {
+                  "description": "TaskTimeout is a Go duration between 1s and 30m.",
+                  "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "protocol": {
+              "description": "Protocol is required. Only A2A is supported in v1.",
+              "enum": [
+                "A2A"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol",
+            "endpoint",
+            "card",
+            "credentialRef"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "kubernetesSchema": {
+      "properties": {
+        "spec": {
+          "description": "ExternalAgentSpec defines the remote endpoint, its pinned card and limits.\nProtocol, endpoint, card digest and credential reference are immutable; a new\nendpoint, card or credential is a new resource.",
+          "properties": {
+            "card": {
+              "description": "Card pins the Agent Card the platform will accept.",
+              "properties": {
+                "digest": {
+                  "description": "Digest is \"sha256:\" plus the lowercase hex SHA-256 of the RFC 8785\ncanonical form of the Agent Card with its signatures removed.",
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "skills": {
+                  "description": "Skills optionally restricts the card skills the platform will use.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 32,
+                  "type": "array",
+                  "x-kubernetes-list-type": "set"
+                }
+              },
+              "required": [
+                "digest"
+              ],
+              "type": "object"
+            },
+            "credentialRef": {
+              "description": "CredentialRef names a SecretRef in the same namespace holding a bearer token.",
+              "properties": {
+                "name": {
+                  "description": "Name is the name of the referenced resource.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            },
+            "endpoint": {
+              "description": "Endpoint is a static DNS host:port. TLS is always used. IP literals,\nschemes, userinfo and paths are rejected.",
+              "maxLength": 260,
+              "minLength": 3,
+              "pattern": "^[A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?)+\\.?:[0-9]{1,5}$",
+              "type": "string"
+            },
+            "limits": {
+              "description": "Limits bound every task sent to the agent. Unset values take defaults.",
+              "properties": {
+                "maxConcurrentTasks": {
+                  "format": "int32",
+                  "maximum": 16,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxRequestBytes": {
+                  "format": "int64",
+                  "maximum": 1048576,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxResponseBytes": {
+                  "format": "int64",
+                  "maximum": 4194304,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxTokensPerTask": {
+                  "format": "int64",
+                  "maximum": 131072,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "taskTimeout": {
+                  "description": "TaskTimeout is a Go duration between 1s and 30m.",
+                  "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "protocol": {
+              "description": "Protocol is required. Only A2A is supported in v1.",
+              "enum": [
+                "A2A"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "card",
+            "credentialRef",
+            "endpoint",
+            "protocol"
+          ],
+          "type": "object",
+          "x-kubernetes-validations": [
+            {
+              "message": "protocol, endpoint, card.digest and credentialRef are immutable",
+              "rule": "self.protocol == oldSelf.protocol \u0026\u0026 self.endpoint == oldSelf.endpoint \u0026\u0026 self.card.digest == oldSelf.card.digest \u0026\u0026 self.credentialRef.name == oldSelf.credentialRef.name"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "kind": "ExternalAgentGrant",
+    "plural": "externalagentgrants",
+    "namespaced": true,
+    "group": "Govern",
+    "treatment": "author",
+    "schema": {
+      "properties": {
+        "spec": {
+          "description": "ExternalAgentGrantSpec selects which Workflows may use which ExternalAgent.",
+          "properties": {
+            "conditions": {
+              "description": "Conditions optionally time-bounds the grant.",
+              "properties": {
+                "validFrom": {
+                  "type": "string"
+                },
+                "validUntil": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "externalAgentRef": {
+              "description": "ExternalAgentRef is the ExternalAgent in the grant's namespace.",
+              "properties": {
+                "name": {
+                  "description": "Name is the name of the referenced resource.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            },
+            "verbs": {
+              "description": "Verbs is the non-empty set of granted actions; only invoke exists.",
+              "items": {
+                "description": "ExternalAgentGrantVerb identifies an action permitted by an ExternalAgentGrant.",
+                "enum": [
+                  "invoke"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "workflowRef": {
+              "description": "WorkflowRef directly names a Workflow.",
+              "properties": {
+                "name": {
+                  "description": "Name is the name of the referenced resource.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            },
+            "workflowSelector": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "WorkflowSelector selects Workflows by label (matchLabels semantics).",
+              "type": "object"
+            }
+          },
+          "required": [
+            "externalAgentRef",
+            "verbs"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "kubernetesSchema": {
+      "properties": {
+        "spec": {
+          "description": "ExternalAgentGrantSpec selects which Workflows may use which ExternalAgent.",
+          "properties": {
+            "conditions": {
+              "description": "Conditions optionally time-bounds the grant.",
+              "properties": {
+                "validFrom": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "validUntil": {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "externalAgentRef": {
+              "description": "ExternalAgentRef is the ExternalAgent in the grant's namespace.",
+              "properties": {
+                "name": {
+                  "description": "Name is the name of the referenced resource.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "externalAgentRef.name must not be empty",
+                  "rule": "size(self.name) \u003e 0"
+                }
+              ]
+            },
+            "verbs": {
+              "description": "Verbs is the non-empty set of granted actions; only invoke exists.",
+              "items": {
+                "description": "ExternalAgentGrantVerb identifies an action permitted by an ExternalAgentGrant.",
+                "enum": [
+                  "invoke"
+                ],
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array",
+              "x-kubernetes-list-type": "set"
+            },
+            "workflowRef": {
+              "description": "WorkflowRef directly names a Workflow.",
+              "properties": {
+                "name": {
+                  "description": "Name is the name of the referenced resource.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            },
+            "workflowSelector": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "WorkflowSelector selects Workflows by label (matchLabels semantics).",
+              "minProperties": 1,
+              "type": "object"
+            }
+          },
+          "required": [
+            "externalAgentRef",
+            "verbs"
+          ],
+          "type": "object",
+          "x-kubernetes-validations": [
+            {
+              "message": "exactly one of workflowRef and workflowSelector is required",
+              "rule": "has(self.workflowRef) != has(self.workflowSelector)"
+            }
+          ]
         }
       },
       "type": "object"
@@ -7058,6 +7516,12 @@
       "properties": {
         "spec": {
           "properties": {
+            "actorKind": {
+              "enum": [
+                "WorkflowExecutor"
+              ],
+              "type": "string"
+            },
             "agentIdentityRef": {
               "properties": {
                 "configurationDigest": {
@@ -7300,7 +7764,8 @@
                 },
                 "domain": {
                   "enum": [
-                    "kognition.dev/runtime-approval/action/v1"
+                    "kognition.dev/runtime-approval/action/v1",
+                    "kognition.dev/workflow-executor/action/v1"
                   ],
                   "type": "string"
                 },
@@ -7310,7 +7775,8 @@
                 },
                 "format": {
                   "enum": [
-                    "kognition-runtime-action-v1"
+                    "kognition-runtime-action-v1",
+                    "kognition-workflow-executor-action-v1"
                   ],
                   "type": "string"
                 },
@@ -7337,6 +7803,310 @@
             "createdAt": {
               "type": "string"
             },
+            "executorAction": {
+              "properties": {
+                "context": {
+                  "properties": {
+                    "activationID": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "attempt": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "bindingDigest": {
+                      "maxLength": 64,
+                      "minLength": 64,
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "ownerEpoch": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "runUID": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "step": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workspace": {
+                      "maxLength": 63,
+                      "minLength": 1,
+                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workspace",
+                    "runUID",
+                    "step",
+                    "activationID",
+                    "attempt",
+                    "ownerEpoch",
+                    "bindingDigest"
+                  ],
+                  "type": "object"
+                },
+                "executionBinding": {
+                  "properties": {
+                    "configurationDigest": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "namespace": {
+                      "maxLength": 253,
+                      "type": "string"
+                    },
+                    "resourceVersion": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "scope": {
+                      "enum": [
+                        "Namespaced",
+                        "Cluster"
+                      ],
+                      "type": "string"
+                    },
+                    "uid": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "scope",
+                    "name",
+                    "uid",
+                    "resourceVersion"
+                  ],
+                  "type": "object"
+                },
+                "executor": {
+                  "properties": {
+                    "issuer": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "method": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "subject": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "issuer",
+                    "subject"
+                  ],
+                  "type": "object"
+                },
+                "expiresAt": {
+                  "type": "string"
+                },
+                "initiator": {
+                  "properties": {
+                    "issuer": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "method": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "subject": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "issuer",
+                    "subject"
+                  ],
+                  "type": "object"
+                },
+                "service": {
+                  "properties": {
+                    "configurationDigest": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "namespace": {
+                      "maxLength": 253,
+                      "type": "string"
+                    },
+                    "resourceVersion": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "scope": {
+                      "enum": [
+                        "Namespaced",
+                        "Cluster"
+                      ],
+                      "type": "string"
+                    },
+                    "uid": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "scope",
+                    "name",
+                    "uid",
+                    "resourceVersion"
+                  ],
+                  "type": "object"
+                },
+                "target": {
+                  "properties": {
+                    "configurationDigest": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "namespace": {
+                      "maxLength": 253,
+                      "type": "string"
+                    },
+                    "resourceVersion": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "scope": {
+                      "enum": [
+                        "Namespaced",
+                        "Cluster"
+                      ],
+                      "type": "string"
+                    },
+                    "uid": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "scope",
+                    "name",
+                    "uid",
+                    "resourceVersion"
+                  ],
+                  "type": "object"
+                },
+                "workflow": {
+                  "properties": {
+                    "configurationDigest": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "namespace": {
+                      "maxLength": 253,
+                      "type": "string"
+                    },
+                    "resourceVersion": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "scope": {
+                      "enum": [
+                        "Namespaced",
+                        "Cluster"
+                      ],
+                      "type": "string"
+                    },
+                    "uid": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "scope",
+                    "name",
+                    "uid",
+                    "resourceVersion"
+                  ],
+                  "type": "object"
+                },
+                "workflowRevisionDigest": {
+                  "maxLength": 64,
+                  "minLength": 64,
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "executor",
+                "initiator",
+                "workflow",
+                "workflowRevisionDigest",
+                "executionBinding",
+                "target",
+                "service",
+                "context",
+                "expiresAt"
+              ],
+              "type": "object"
+            },
             "expiresAt": {
               "type": "string"
             },
@@ -7361,7 +8131,8 @@
               "enum": [
                 "Tool",
                 "Memory",
-                "Communication"
+                "Communication",
+                "Workflow"
               ],
               "type": "string"
             },
@@ -7460,6 +8231,55 @@
               ],
               "type": "object"
             },
+            "workflowContext": {
+              "properties": {
+                "activationID": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "attempt": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "bindingDigest": {
+                  "maxLength": 64,
+                  "minLength": 64,
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "ownerEpoch": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runUID": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "step": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "workspace": {
+                  "maxLength": 63,
+                  "minLength": 1,
+                  "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "workspace",
+                "runUID",
+                "step",
+                "activationID",
+                "attempt",
+                "ownerEpoch",
+                "bindingDigest"
+              ],
+              "type": "object"
+            },
             "workspace": {
               "maxLength": 253,
               "minLength": 1,
@@ -7475,7 +8295,6 @@
             "agentRef",
             "agentIdentityRef",
             "agentInstanceRef",
-            "sessionRef",
             "targetRef",
             "autonomyClassRef",
             "binding",
@@ -7491,6 +8310,12 @@
       "properties": {
         "spec": {
           "properties": {
+            "actorKind": {
+              "enum": [
+                "WorkflowExecutor"
+              ],
+              "type": "string"
+            },
             "agentIdentityRef": {
               "properties": {
                 "kind": {
@@ -7532,7 +8357,8 @@
                 "scope",
                 "uid"
               ],
-              "type": "object"
+              "type": "object",
+              "x-kubernetes-preserve-unknown-fields": true
             },
             "agentInstanceRef": {
               "properties": {
@@ -7727,7 +8553,8 @@
                 },
                 "domain": {
                   "enum": [
-                    "kognition.dev/runtime-approval/action/v1"
+                    "kognition.dev/runtime-approval/action/v1",
+                    "kognition.dev/workflow-executor/action/v1"
                   ],
                   "type": "string"
                 },
@@ -7738,7 +8565,8 @@
                 },
                 "format": {
                   "enum": [
-                    "kognition-runtime-action-v1"
+                    "kognition-runtime-action-v1",
+                    "kognition-workflow-executor-action-v1"
                   ],
                   "type": "string"
                 },
@@ -7767,6 +8595,335 @@
               "format": "date-time",
               "type": "string"
             },
+            "executorAction": {
+              "properties": {
+                "context": {
+                  "properties": {
+                    "activationID": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "attempt": {
+                      "format": "int64",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "bindingDigest": {
+                      "maxLength": 64,
+                      "minLength": 64,
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "ownerEpoch": {
+                      "format": "int64",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "runUID": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "step": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "workspace": {
+                      "maxLength": 63,
+                      "minLength": 1,
+                      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "workspace",
+                    "runUID",
+                    "step",
+                    "activationID",
+                    "attempt",
+                    "ownerEpoch",
+                    "bindingDigest"
+                  ],
+                  "type": "object",
+                  "x-kubernetes-preserve-unknown-fields": true
+                },
+                "executionBinding": {
+                  "properties": {
+                    "kind": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "namespace": {
+                      "maxLength": 253,
+                      "type": "string"
+                    },
+                    "resourceVersion": {
+                      "format": "int64",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "scope": {
+                      "enum": [
+                        "Namespaced",
+                        "Cluster"
+                      ],
+                      "type": "string"
+                    },
+                    "uid": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "name",
+                    "resourceVersion",
+                    "scope",
+                    "uid"
+                  ],
+                  "type": "object",
+                  "x-kubernetes-preserve-unknown-fields": true
+                },
+                "executor": {
+                  "properties": {
+                    "issuer": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "method": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "subject": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "issuer",
+                    "subject"
+                  ],
+                  "type": "object",
+                  "x-kubernetes-preserve-unknown-fields": true,
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "executor principals must use canonical non-bootstrap identities",
+                      "rule": "!(self.method in ['anonymous', 'token'])"
+                    }
+                  ]
+                },
+                "expiresAt": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "initiator": {
+                  "properties": {
+                    "issuer": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "method": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "subject": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "issuer",
+                    "subject"
+                  ],
+                  "type": "object",
+                  "x-kubernetes-preserve-unknown-fields": true,
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "executor principals must use canonical non-bootstrap identities",
+                      "rule": "!(self.method in ['anonymous', 'token'])"
+                    }
+                  ]
+                },
+                "service": {
+                  "properties": {
+                    "kind": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "namespace": {
+                      "maxLength": 253,
+                      "type": "string"
+                    },
+                    "resourceVersion": {
+                      "format": "int64",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "scope": {
+                      "enum": [
+                        "Namespaced",
+                        "Cluster"
+                      ],
+                      "type": "string"
+                    },
+                    "uid": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "name",
+                    "resourceVersion",
+                    "scope",
+                    "uid"
+                  ],
+                  "type": "object",
+                  "x-kubernetes-preserve-unknown-fields": true
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "namespace": {
+                      "maxLength": 253,
+                      "type": "string"
+                    },
+                    "resourceVersion": {
+                      "format": "int64",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "scope": {
+                      "enum": [
+                        "Namespaced",
+                        "Cluster"
+                      ],
+                      "type": "string"
+                    },
+                    "uid": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "name",
+                    "resourceVersion",
+                    "scope",
+                    "uid"
+                  ],
+                  "type": "object",
+                  "x-kubernetes-preserve-unknown-fields": true
+                },
+                "workflow": {
+                  "properties": {
+                    "kind": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "namespace": {
+                      "maxLength": 253,
+                      "type": "string"
+                    },
+                    "resourceVersion": {
+                      "format": "int64",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "scope": {
+                      "enum": [
+                        "Namespaced",
+                        "Cluster"
+                      ],
+                      "type": "string"
+                    },
+                    "uid": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "name",
+                    "resourceVersion",
+                    "scope",
+                    "uid"
+                  ],
+                  "type": "object",
+                  "x-kubernetes-preserve-unknown-fields": true
+                },
+                "workflowRevisionDigest": {
+                  "maxLength": 64,
+                  "minLength": 64,
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "executor",
+                "initiator",
+                "workflow",
+                "workflowRevisionDigest",
+                "executionBinding",
+                "target",
+                "service",
+                "context",
+                "expiresAt"
+              ],
+              "type": "object",
+              "x-kubernetes-preserve-unknown-fields": true,
+              "x-kubernetes-validations": [
+                {
+                  "message": "executor authority must identify its exact namespaced Workflow and protected binding",
+                  "rule": "self.workflow.kind == 'Workflow' \u0026\u0026 self.workflow.scope == 'Namespaced' \u0026\u0026 self.workflow.__namespace__ == self.context.workspace \u0026\u0026 self.executionBinding.kind == 'WorkflowExecutionBinding' \u0026\u0026 self.executionBinding.scope == 'Namespaced' \u0026\u0026 self.executionBinding.__namespace__ == self.context.workspace"
+                },
+                {
+                  "message": "executor target must identify an exact Agent and serving binding in one namespace",
+                  "rule": "self.target.kind == 'Agent' \u0026\u0026 self.target.scope == 'Namespaced' \u0026\u0026 has(self.target.__namespace__) \u0026\u0026 self.target.__namespace__ != '' \u0026\u0026 self.service.kind == 'AgentService' \u0026\u0026 self.service.scope == 'Namespaced' \u0026\u0026 self.service.__namespace__ == self.target.__namespace__"
+                }
+              ]
+            },
             "expiresAt": {
               "format": "date-time",
               "type": "string"
@@ -7792,7 +8949,8 @@
               "enum": [
                 "Tool",
                 "Memory",
-                "Communication"
+                "Communication",
+                "Workflow"
               ],
               "type": "string"
             },
@@ -7887,6 +9045,58 @@
               ],
               "type": "object"
             },
+            "workflowContext": {
+              "properties": {
+                "activationID": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "attempt": {
+                  "format": "int64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "bindingDigest": {
+                  "maxLength": 64,
+                  "minLength": 64,
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "ownerEpoch": {
+                  "format": "int64",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "runUID": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "step": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "workspace": {
+                  "maxLength": 63,
+                  "minLength": 1,
+                  "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "workspace",
+                "runUID",
+                "step",
+                "activationID",
+                "attempt",
+                "ownerEpoch",
+                "bindingDigest"
+              ],
+              "type": "object",
+              "x-kubernetes-preserve-unknown-fields": true
+            },
             "workspace": {
               "maxLength": 253,
               "minLength": 1,
@@ -7894,10 +9104,6 @@
             }
           },
           "required": [
-            "agentIdentityRef",
-            "agentInstanceRef",
-            "agentRef",
-            "autonomyClassRef",
             "binding",
             "createdAt",
             "expiresAt",
@@ -7905,23 +9111,35 @@
             "invocationID",
             "operation",
             "plane",
-            "sessionRef",
             "targetRef",
             "workspace"
           ],
           "type": "object",
+          "x-kubernetes-preserve-unknown-fields": true,
           "x-kubernetes-validations": [
             {
+              "message": "executor and Agent approval fields must use distinct complete actor representations",
+              "rule": "has(self.actorKind) ? (has(self.executorAction) \u0026\u0026 has(self.workflowContext) \u0026\u0026 self.plane == 'Workflow' \u0026\u0026 self.operation == 'initiate' \u0026\u0026 !has(self.agentRef) \u0026\u0026 !has(self.agentIdentityRef) \u0026\u0026 !has(self.agentInstanceRef) \u0026\u0026 !has(self.autonomyClassRef) \u0026\u0026 !has(self.trustProfileRef) \u0026\u0026 !has(self.sessionRef) \u0026\u0026 !has(self.authorizationRefs)) : (!has(self.executorAction) \u0026\u0026 self.plane != 'Workflow' \u0026\u0026 has(self.agentRef) \u0026\u0026 has(self.agentIdentityRef) \u0026\u0026 has(self.agentInstanceRef) \u0026\u0026 has(self.autonomyClassRef) \u0026\u0026 has(self.sessionRef))"
+            },
+            {
+              "message": "executor approval cannot change its activation, target, or authority expiry",
+              "rule": "!has(self.executorAction) || (self.workflowContext.workspace == self.executorAction.context.workspace \u0026\u0026 self.workflowContext.runUID == self.executorAction.context.runUID \u0026\u0026 self.workflowContext.step == self.executorAction.context.step \u0026\u0026 self.workflowContext.activationID == self.executorAction.context.activationID \u0026\u0026 self.workflowContext.attempt == self.executorAction.context.attempt \u0026\u0026 self.workflowContext.ownerEpoch == self.executorAction.context.ownerEpoch \u0026\u0026 self.workflowContext.bindingDigest == self.executorAction.context.bindingDigest \u0026\u0026 self.workspace == self.executorAction.context.workspace \u0026\u0026 self.targetRef.kind == self.executorAction.service.kind \u0026\u0026 self.targetRef.scope == self.executorAction.service.scope \u0026\u0026 self.targetRef.__namespace__ == self.executorAction.service.__namespace__ \u0026\u0026 self.targetRef.name == self.executorAction.service.name \u0026\u0026 self.targetRef.uid == self.executorAction.service.uid \u0026\u0026 self.targetRef.resourceVersion == self.executorAction.service.resourceVersion \u0026\u0026 self.expiresAt \u003c= self.executorAction.expiresAt)"
+            },
+            {
+              "message": "action binding domain must match the actual actor type",
+              "rule": "has(self.actorKind) ? (self.binding.format == 'kognition-workflow-executor-action-v1' \u0026\u0026 self.binding.domain == 'kognition.dev/workflow-executor/action/v1') : (self.binding.format == 'kognition-runtime-action-v1' \u0026\u0026 self.binding.domain == 'kognition.dev/runtime-approval/action/v1')"
+            },
+            {
               "message": "agentRef must be namespaced to the RuntimeApproval workspace",
-              "rule": "self.agentRef.scope == 'Namespaced' \u0026\u0026 self.agentRef.__namespace__ == self.workspace"
+              "rule": "!has(self.agentRef) || (self.agentRef.scope == 'Namespaced' \u0026\u0026 self.agentRef.__namespace__ == self.workspace)"
             },
             {
               "message": "agentIdentityRef must be namespaced to the RuntimeApproval workspace",
-              "rule": "self.agentIdentityRef.scope == 'Namespaced' \u0026\u0026 self.agentIdentityRef.__namespace__ == self.workspace"
+              "rule": "!has(self.agentIdentityRef) || (self.agentIdentityRef.scope == 'Namespaced' \u0026\u0026 self.agentIdentityRef.__namespace__ == self.workspace)"
             },
             {
               "message": "agentInstanceRef must be namespaced to the RuntimeApproval workspace",
-              "rule": "self.agentInstanceRef.scope == 'Namespaced' \u0026\u0026 self.agentInstanceRef.__namespace__ == self.workspace"
+              "rule": "!has(self.agentInstanceRef) || (self.agentInstanceRef.scope == 'Namespaced' \u0026\u0026 self.agentInstanceRef.__namespace__ == self.workspace)"
             },
             {
               "message": "trustProfileRef must be namespaced to the RuntimeApproval workspace",
@@ -7929,7 +9147,7 @@
             },
             {
               "message": "autonomyClassRef must be cluster-scoped",
-              "rule": "self.autonomyClassRef.scope == 'Cluster' \u0026\u0026 !has(self.autonomyClassRef.__namespace__)"
+              "rule": "!has(self.autonomyClassRef) || (self.autonomyClassRef.scope == 'Cluster' \u0026\u0026 !has(self.autonomyClassRef.__namespace__))"
             },
             {
               "message": "authorizationRefs must have a valid workspace or cluster scope",
@@ -9684,6 +10902,260 @@
                     ],
                     "type": "object"
                   },
+                  "collaboration": {
+                    "description": "Collaboration configures the step when type=\"collaboration\" and must be\nempty for every other type.",
+                    "properties": {
+                      "allowedInteractions": {
+                        "description": "AllowedInteractions lists the delegation requests members may make. It does\nnot replace communication policy or add Workflow dependency edges.",
+                        "items": {
+                          "description": "CollaborationInteraction permits one member to delegate to another.",
+                          "properties": {
+                            "from": {
+                              "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "to": {
+                              "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "from",
+                            "to"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "guidance": {
+                        "description": "Guidance is author-written text on how the team should resolve the task, for\nexample the order of work or what each member should check. Every member\nreceives it as trusted instructions. It guides the members; it does not\ngrant or restrict interactions, which allowedInteractions controls.",
+                        "maxLength": 2000,
+                        "type": "string"
+                      },
+                      "handoff": {
+                        "description": "CollaborationHandoff configures the Handoff strategy.",
+                        "properties": {
+                          "entryMember": {
+                            "description": "EntryMember is the first owner.",
+                            "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                            "type": "string"
+                          },
+                          "maxHandoffs": {
+                            "description": "MaxHandoffs bounds ownership transfers. It cannot exceed limits.maxDelegations.",
+                            "maximum": 100,
+                            "minimum": 1,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "entryMember",
+                          "maxHandoffs"
+                        ],
+                        "type": "object"
+                      },
+                      "limits": {
+                        "description": "Limits bounds the step. Every field is required and finite.",
+                        "properties": {
+                          "maxDelegationDepth": {
+                            "maximum": 5,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxDelegations": {
+                            "maximum": 100,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxMessages": {
+                            "maximum": 500,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxParallelTasks": {
+                            "maximum": 8,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxTokens": {
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxTurns": {
+                            "maximum": 100,
+                            "minimum": 1,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "maxTurns",
+                          "maxMessages",
+                          "maxDelegations",
+                          "maxDelegationDepth",
+                          "maxParallelTasks",
+                          "maxTokens"
+                        ],
+                        "type": "object"
+                      },
+                      "members": {
+                        "description": "Members are the participating Agents, addressed by step-local alias.",
+                        "items": {
+                          "description": "CollaborationMember binds a step-local alias to an Agent or to an ExternalAgent.",
+                          "properties": {
+                            "agentRef": {
+                              "description": "AgentRef references the member Agent.",
+                              "properties": {
+                                "name": {
+                                  "description": "Name is the Agent name.",
+                                  "maxLength": 253,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "namespace": {
+                                  "description": "Namespace is the Agent namespace. An empty value means the Workflow namespace.",
+                                  "maxLength": 63,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "name"
+                              ],
+                              "type": "object"
+                            },
+                            "description": {
+                              "description": "Description states what the member is good at. Members that may involve this\nmember see it when choosing whom to delegate to, and the member sees it as\nits own role. An ExternalAgent member without a description is described by\nthe skills pinned on its ExternalAgent.",
+                              "maxLength": 500,
+                              "type": "string"
+                            },
+                            "externalAgentRef": {
+                              "description": "ExternalAgentRef references a remote A2A agent declared by an ExternalAgent in\nthe Workflow namespace. Data sent to it leaves the platform, so an\nExternalAgentGrant is required.",
+                              "properties": {
+                                "name": {
+                                  "description": "Name is the name of the referenced resource.",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "name"
+                              ],
+                              "type": "object"
+                            },
+                            "name": {
+                              "description": "Name is the stable step-local alias.",
+                              "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "serviceRef": {
+                              "description": "ServiceRef optionally pins one AgentService, in the Agent namespace, when\nthe Agent has several serving configurations. It is not valid with externalAgentRef.",
+                              "properties": {
+                                "name": {
+                                  "description": "Name is the name of the referenced resource.",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "name"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "agentRef"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "parallel": {
+                        "description": "CollaborationParallel configures the Parallel strategy.",
+                        "properties": {
+                          "branches": {
+                            "description": "Branches are the members that run concurrently.",
+                            "items": {
+                              "description": "CollaborationBranch is one parallel branch.",
+                              "properties": {
+                                "member": {
+                                  "description": "Member is the member alias that runs the branch.",
+                                  "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "optional": {
+                                  "description": "Optional branches may fail without failing the step. They are recorded in\nthe result manifest.",
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "member"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          "synthesizer": {
+                            "description": "Synthesizer optionally combines the branch results. It must not be a branch.",
+                            "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "branches"
+                        ],
+                        "type": "object"
+                      },
+                      "peer": {
+                        "description": "CollaborationPeer configures the Peer strategy.",
+                        "properties": {
+                          "finalizer": {
+                            "description": "Finalizer is the only member that can complete the step.",
+                            "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finalizer"
+                        ],
+                        "type": "object"
+                      },
+                      "protocol": {
+                        "description": "Protocol selects the inter-agent protocol profile.",
+                        "enum": [
+                          "A2A"
+                        ],
+                        "type": "string"
+                      },
+                      "strategy": {
+                        "description": "Strategy selects the coordination strategy. Exactly the matching strategy\nblock must be present.",
+                        "enum": [
+                          "Supervisor",
+                          "Parallel",
+                          "Handoff",
+                          "Peer"
+                        ],
+                        "type": "string"
+                      },
+                      "supervisor": {
+                        "description": "CollaborationSupervisor configures the Supervisor strategy.",
+                        "properties": {
+                          "coordinator": {
+                            "description": "Coordinator is the member alias that delegates and produces the final artifact.",
+                            "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "coordinator"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "strategy",
+                      "protocol",
+                      "members",
+                      "limits"
+                    ],
+                    "type": "object"
+                  },
                   "condition": {
                     "description": "Condition is a CEL expression that gates step dispatch.\nIf present and evaluates to false, the step is set to Skipped.",
                     "type": "string"
@@ -9763,7 +11235,8 @@
                     "description": "Type selects the dispatch mechanism for this step. Defaults to \"agent\".",
                     "enum": [
                       "agent",
-                      "tool"
+                      "tool",
+                      "collaboration"
                     ],
                     "type": "string"
                   }
@@ -9978,6 +11451,303 @@
                     ],
                     "type": "object"
                   },
+                  "collaboration": {
+                    "description": "Collaboration configures the step when type=\"collaboration\" and must be\nempty for every other type.",
+                    "properties": {
+                      "allowedInteractions": {
+                        "description": "AllowedInteractions lists the delegation requests members may make. It does\nnot replace communication policy or add Workflow dependency edges.",
+                        "items": {
+                          "description": "CollaborationInteraction permits one member to delegate to another.",
+                          "properties": {
+                            "from": {
+                              "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "to": {
+                              "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "from",
+                            "to"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 56,
+                        "type": "array"
+                      },
+                      "guidance": {
+                        "description": "Guidance is author-written text on how the team should resolve the task, for\nexample the order of work or what each member should check. Every member\nreceives it as trusted instructions. It guides the members; it does not\ngrant or restrict interactions, which allowedInteractions controls.",
+                        "maxLength": 2000,
+                        "type": "string"
+                      },
+                      "handoff": {
+                        "description": "CollaborationHandoff configures the Handoff strategy.",
+                        "properties": {
+                          "entryMember": {
+                            "description": "EntryMember is the first owner.",
+                            "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                            "type": "string"
+                          },
+                          "maxHandoffs": {
+                            "description": "MaxHandoffs bounds ownership transfers. It cannot exceed limits.maxDelegations.",
+                            "format": "int32",
+                            "maximum": 100,
+                            "minimum": 1,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "entryMember",
+                          "maxHandoffs"
+                        ],
+                        "type": "object"
+                      },
+                      "limits": {
+                        "description": "Limits bounds the step. Every field is required and finite.",
+                        "properties": {
+                          "maxDelegationDepth": {
+                            "format": "int32",
+                            "maximum": 5,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxDelegations": {
+                            "format": "int32",
+                            "maximum": 100,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxMessages": {
+                            "format": "int32",
+                            "maximum": 500,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxParallelTasks": {
+                            "format": "int32",
+                            "maximum": 8,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxTokens": {
+                            "format": "int64",
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "maxTurns": {
+                            "format": "int32",
+                            "maximum": 100,
+                            "minimum": 1,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "maxDelegationDepth",
+                          "maxDelegations",
+                          "maxMessages",
+                          "maxParallelTasks",
+                          "maxTokens",
+                          "maxTurns"
+                        ],
+                        "type": "object"
+                      },
+                      "members": {
+                        "description": "Members are the participating Agents, addressed by step-local alias.",
+                        "items": {
+                          "description": "CollaborationMember binds a step-local alias to an Agent or to an ExternalAgent.",
+                          "properties": {
+                            "agentRef": {
+                              "description": "AgentRef references the member Agent.",
+                              "properties": {
+                                "name": {
+                                  "description": "Name is the Agent name.",
+                                  "maxLength": 253,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "namespace": {
+                                  "description": "Namespace is the Agent namespace. An empty value means the Workflow namespace.",
+                                  "maxLength": 63,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "name"
+                              ],
+                              "type": "object"
+                            },
+                            "description": {
+                              "description": "Description states what the member is good at. Members that may involve this\nmember see it when choosing whom to delegate to, and the member sees it as\nits own role. An ExternalAgent member without a description is described by\nthe skills pinned on its ExternalAgent.",
+                              "maxLength": 500,
+                              "type": "string"
+                            },
+                            "externalAgentRef": {
+                              "description": "ExternalAgentRef references a remote A2A agent declared by an ExternalAgent in\nthe Workflow namespace. Data sent to it leaves the platform, so an\nExternalAgentGrant is required.",
+                              "properties": {
+                                "name": {
+                                  "description": "Name is the name of the referenced resource.",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "name"
+                              ],
+                              "type": "object"
+                            },
+                            "name": {
+                              "description": "Name is the stable step-local alias.",
+                              "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                              "type": "string"
+                            },
+                            "serviceRef": {
+                              "description": "ServiceRef optionally pins one AgentService, in the Agent namespace, when\nthe Agent has several serving configurations. It is not valid with externalAgentRef.",
+                              "properties": {
+                                "name": {
+                                  "description": "Name is the name of the referenced resource.",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "name"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "name"
+                          ],
+                          "type": "object",
+                          "x-kubernetes-validations": [
+                            {
+                              "message": "exactly one of agentRef and externalAgentRef is required",
+                              "rule": "has(self.agentRef) != has(self.externalAgentRef)"
+                            },
+                            {
+                              "message": "serviceRef is not valid with externalAgentRef",
+                              "rule": "!has(self.externalAgentRef) || !has(self.serviceRef)"
+                            }
+                          ]
+                        },
+                        "maxItems": 8,
+                        "minItems": 2,
+                        "type": "array",
+                        "x-kubernetes-list-map-keys": [
+                          "name"
+                        ],
+                        "x-kubernetes-list-type": "map"
+                      },
+                      "parallel": {
+                        "description": "CollaborationParallel configures the Parallel strategy.",
+                        "properties": {
+                          "branches": {
+                            "description": "Branches are the members that run concurrently.",
+                            "items": {
+                              "description": "CollaborationBranch is one parallel branch.",
+                              "properties": {
+                                "member": {
+                                  "description": "Member is the member alias that runs the branch.",
+                                  "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "optional": {
+                                  "description": "Optional branches may fail without failing the step. They are recorded in\nthe result manifest.",
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "member"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 8,
+                            "minItems": 2,
+                            "type": "array"
+                          },
+                          "synthesizer": {
+                            "description": "Synthesizer optionally combines the branch results. It must not be a branch.",
+                            "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "branches"
+                        ],
+                        "type": "object"
+                      },
+                      "peer": {
+                        "description": "CollaborationPeer configures the Peer strategy.",
+                        "properties": {
+                          "finalizer": {
+                            "description": "Finalizer is the only member that can complete the step.",
+                            "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "finalizer"
+                        ],
+                        "type": "object"
+                      },
+                      "protocol": {
+                        "description": "Protocol selects the inter-agent protocol profile.",
+                        "enum": [
+                          "A2A"
+                        ],
+                        "type": "string"
+                      },
+                      "strategy": {
+                        "description": "Strategy selects the coordination strategy. Exactly the matching strategy\nblock must be present.",
+                        "enum": [
+                          "Supervisor",
+                          "Parallel",
+                          "Handoff",
+                          "Peer"
+                        ],
+                        "type": "string"
+                      },
+                      "supervisor": {
+                        "description": "CollaborationSupervisor configures the Supervisor strategy.",
+                        "properties": {
+                          "coordinator": {
+                            "description": "Coordinator is the member alias that delegates and produces the final artifact.",
+                            "pattern": "^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "coordinator"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "limits",
+                      "members",
+                      "protocol",
+                      "strategy"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "supervisor is required exactly when strategy is Supervisor",
+                        "rule": "(self.strategy == 'Supervisor') == has(self.supervisor)"
+                      },
+                      {
+                        "message": "parallel is required exactly when strategy is Parallel",
+                        "rule": "(self.strategy == 'Parallel') == has(self.parallel)"
+                      },
+                      {
+                        "message": "handoff is required exactly when strategy is Handoff",
+                        "rule": "(self.strategy == 'Handoff') == has(self.handoff)"
+                      },
+                      {
+                        "message": "peer is required exactly when strategy is Peer",
+                        "rule": "(self.strategy == 'Peer') == has(self.peer)"
+                      }
+                    ]
+                  },
                   "condition": {
                     "description": "Condition is a CEL expression that gates step dispatch.\nIf present and evaluates to false, the step is set to Skipped.",
                     "type": "string"
@@ -10055,7 +11825,8 @@
                     "description": "Type selects the dispatch mechanism for this step. Defaults to \"agent\".",
                     "enum": [
                       "agent",
-                      "tool"
+                      "tool",
+                      "collaboration"
                     ],
                     "type": "string"
                   }
@@ -10063,7 +11834,13 @@
                 "required": [
                   "name"
                 ],
-                "type": "object"
+                "type": "object",
+                "x-kubernetes-validations": [
+                  {
+                    "message": "collaboration is required exactly when type is collaboration",
+                    "rule": "(has(self.type) \u0026\u0026 self.type == 'collaboration') == has(self.collaboration)"
+                  }
+                ]
               },
               "type": "array"
             }

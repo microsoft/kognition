@@ -253,6 +253,19 @@ try {
                 requiredAgentLabels = @{ purpose = 'resource-parity' }
             }
         }) },
+        @{ resource = 'externalagents'; object = (New-KognitionObject 'ExternalAgent' 'parity-external-agent' @{
+            protocol = 'A2A'
+            endpoint = 'agents.parity.example:443'
+            card = @{ digest = ('sha256:' + ('0' * 64)); skills = @('summarize') }
+            credentialRef = @{ name = 'parity-secret' }
+            limits = @{ maxTokensPerTask = 4096; taskTimeout = '2m'; maxRequestBytes = 32768; maxResponseBytes = 65536; maxConcurrentTasks = 1 }
+        }) },
+        @{ resource = 'externalagentgrants'; object = (New-KognitionObject 'ExternalAgentGrant' 'parity-external-agent-grant' @{
+            externalAgentRef = @{ name = 'parity-external-agent' }
+            workflowRef = @{ name = 'parity-workflow' }
+            verbs = @('invoke')
+            conditions = @{ validFrom = '2025-01-01T00:00:00Z'; validUntil = '2035-01-01T00:00:00Z' }
+        }) },
         @{ resource = 'workflowruns'; object = (New-KognitionObject 'WorkflowRun' 'parity-workflow-run' @{
             workflowRef = @{ name = 'parity-workflow' }
             input = 'live parity check'

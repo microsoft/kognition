@@ -314,6 +314,7 @@ func workflowSpecToK8s(in *api.WorkflowSpec) *k8s.WorkflowSpec {
 				Retry:           workflowStepRetryToK8s(s.Retry),
 				ContinueOnError: s.ContinueOnError,
 				MemoryClaim:     workflowMemoryClaimToK8s(s.MemoryClaim),
+				Collaboration:   workflowCollaborationToK8s(s.Collaboration),
 			}
 		}
 	}
@@ -378,6 +379,7 @@ func workflowSpecFromK8s(in *k8s.WorkflowSpec) *api.WorkflowSpec {
 				Retry:           workflowStepRetryFromK8s(s.Retry),
 				ContinueOnError: s.ContinueOnError,
 				MemoryClaim:     workflowMemoryClaimFromK8s(s.MemoryClaim),
+				Collaboration:   workflowCollaborationFromK8s(s.Collaboration),
 			}
 		}
 	}

@@ -318,6 +318,33 @@ k8sController:
     create: true
     name: ""
     annotations: {}
+  workflowExecutor:
+    enabled: false
+    principals: []
+    bindingAdminGroups: []
+    # -- Multi-agent collaboration steps (supervisor, peer, handoff, parallel).
+    # Disabled by default. Each member task runs as an ordinary AgentJob in the
+    # Workflow namespace, so it uses the existing agent dispatcher, runtime
+    # credentials, model gateway and token metering. Enabling it grants the
+    # controller update on ConfigMaps in managed namespaces; admission restricts
+    # that to the collaboration ledger records.
+    collaboration:
+      enabled: false
+      # -- ExternalAgent: lets a collaboration step use a remote A2A agent that
+      # Kognition does not run. Disabled by default and requires collaboration.
+      # An external agent is a trust boundary: the endpoint must be listed in
+      # egressAllowList ("host:port" or "*.domain:port"; an empty list permits
+      # nothing), its Agent Card is pinned by digest, and every task needs an
+      # ExternalAgentGrant. NetworkPolicy cannot match DNS names, so the host
+      # allow-list, and the refusal of private and link-local addresses, are
+      # enforced by the admission webhook and the controller transport. With
+      # networkPolicy.enabled the controller additionally gets egress on allow-listed
+      # ports other than 443, excluding private, link-local and CGNAT ranges; port
+      # 443 is already open for the Kubernetes API and CPI, so for 443 the network
+      # policy adds no restriction.
+      externalAgents:
+        enabled: false
+        egressAllowList: []
   # -- Experimental gRPC sidecar plugin discovery. Disabled until a workload
   # explicitly packages compatible sidecars into the controller Pod.
   pluginHost:

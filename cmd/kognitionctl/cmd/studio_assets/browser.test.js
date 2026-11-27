@@ -52,7 +52,7 @@ async function authoringAPI(page, { mode = "standalone", namespace = "default", 
       tools: "Tool", toolgrants: "ToolGrant", knowledgebases: "KnowledgeBase",
       autonomyclasses: "AutonomyClass", memoryclaims: "MemoryClaim", secretrefs: "SecretRef", prompts: "Prompt",
       memoryclasses: "MemoryClass", modelinvocationprofiles: "ModelInvocationProfile", memoryrecords: "MemoryRecord",
-      evaluationruns: "EvaluationRun", workflowruns: "WorkflowRun",
+      evaluationruns: "EvaluationRun", workflowruns: "WorkflowRun", externalagents: "ExternalAgent",
     };
     return route.fulfill({ json: { items: [...stored.values()].filter(record => record.kind === kinds[match[1]]) } });
   });
@@ -225,6 +225,147 @@ test("Workflow Builder leaves shared Memory unset until configured and clears it
   expect(mutations[0].body.spec.memoryClaim).toBeUndefined();
   expect(mutations[0].body.spec.steps[0].memoryClaim).toBeUndefined();
   expect(mutations[0].body.spec.steps[0].agentRef.name).toBe("planner");
+});
+
+const teamAgents = ["analyst", "reviewer", "synthesizer"].map(name => ({
+  apiVersion: "kognition.dev/v1alpha1", kind: "Agent", metadata: { name, namespace: "default" }, spec: {},
+}));
+
+async function newTeamStep(page, name, opts = {}) {
+  const mutations = await authoringAPI(page, { mode: "kubernetes", records: teamAgents, ...opts });
+  await page.locator("#btn-create").click();
+  await page.locator("#btn-new-workflow").click();
+  await builderField(page, "Name").fill(name);
+  await page.getByRole("button", { name: "+ Team step", exact: true }).click();
+  return { mutations, inspector: page.locator("#inspector-body"), yaml: page.locator("#yaml-area") };
+}
+
+async function teamDeployed(page, mutations) {
+  await expect(page.locator("#btn-deploy")).toBeEnabled();
+  await page.locator("#btn-deploy").click();
+  await expect.poll(() => mutations.length).toBe(1);
+  return mutations[0].body.spec.steps[0].collaboration;
+}
+
+test("Workflow Team Parallel step edits bounded branches and deploys on the Kubernetes runtime", async ({ page }) => {
+  const { mutations, inspector } = await newTeamStep(page, "request-review");
+  await inspector.getByLabel(/^Agent for member-1/).selectOption("analyst");
+  await inspector.getByLabel(/^Agent for member-2/).selectOption("reviewer");
+  await inspector.getByLabel("Optional branch for member-2", { exact: true }).check();
+  await inspector.getByRole("button", { name: "+ Add member", exact: true }).click();
+  await inspector.getByLabel(/^Agent for member-3/).selectOption("synthesizer");
+  await inspector.getByLabel("Synthesizer", { exact: true }).selectOption("member-3");
+  await expect(inspector.getByRole("checkbox", { name: "Optional branch for member-3" })).toHaveCount(0);
+  await page.locator('[data-view="yaml"]').click();
+  const yaml = page.locator("#yaml-area");
+  await expect(yaml).toHaveValue(/type: collaboration[\s\S]*timeout: "5m"[\s\S]*strategy: Parallel\s+protocol: A2A/);
+  await expect(yaml).toHaveValue(/branches:\s+- member: member-1\s+- member: member-2\s+optional: true\s+synthesizer: member-3/);
+  await expect(yaml).toHaveValue(/maxParallelTasks: 2\s+maxTokens: 8192/);
+  await expect(yaml).not.toHaveValue(/allowedInteractions|toolRef|retry:/);
+  await page.locator('[data-view="builder"]').click();
+  const team = await teamDeployed(page, mutations);
+  expect(team.strategy).toBe("Parallel");
+  expect(team.parallel).toEqual({ branches: [{ member: "member-1" }, { member: "member-2", optional: true }], synthesizer: "member-3" });
+  expect(team.allowedInteractions).toBeUndefined();
+  await inspector.getByLabel("Type", { exact: true }).selectOption("agent");
+  await inspector.getByLabel(/^Agent\s*\*?$/).selectOption("reviewer");
+  await page.locator('[data-view="yaml"]').click();
+  await expect(yaml).not.toHaveValue(/collaboration|parallel:/);
+});
+
+test("Workflow Team Supervisor step delegates from the coordinator and keeps renames consistent", async ({ page }) => {
+  const { mutations, inspector, yaml } = await newTeamStep(page, "supervised");
+  await inspector.getByLabel("Strategy", { exact: true }).selectOption("Supervisor");
+  await inspector.getByRole("button", { name: "+ Add member", exact: true }).click();
+  await inspector.getByLabel(/^Agent for member-1/).selectOption("analyst");
+  await inspector.getByLabel(/^Agent for member-2/).selectOption("reviewer");
+  await inspector.getByLabel(/^Agent for member-3/).selectOption("synthesizer");
+  await inspector.getByLabel("Name of member-1", { exact: true }).fill("lead");
+  await inspector.getByLabel("Name of member-1", { exact: true }).blur();
+  await expect(inspector.getByLabel(/^Coordinator\s*\*?$/)).toHaveValue("lead");
+  const team = await teamDeployed(page, mutations);
+  expect(team.strategy).toBe("Supervisor");
+  expect(team.supervisor).toEqual({ coordinator: "lead" });
+  expect(team.allowedInteractions).toEqual([{ from: "lead", to: "member-2" }, { from: "lead", to: "member-3" }]);
+  expect(team.parallel).toBeUndefined();
+  await page.locator('[data-view="yaml"]').click();
+  await expect(yaml).toHaveValue(/strategy: Supervisor/);
+});
+
+test("Workflow Team member rename keeps focus on the next field", async ({ page }) => {
+  const { inspector } = await newTeamStep(page, "focus");
+  await inspector.getByRole("button", { name: "+ Add member", exact: true }).click();
+  const name = inspector.getByLabel("Name of member-1", { exact: true });
+  await name.fill("lead");
+  await page.keyboard.press("Tab");
+  await expect(inspector.getByLabel("Name of lead", { exact: true })).toHaveValue("lead");
+  await page.keyboard.type("Plans the work");
+  await expect(inspector.getByLabel(/^Description of lead/)).toHaveValue("Plans the work");
+});
+
+test("Workflow Team Handoff and Peer steps generate their interaction graph", async ({ page }) => {
+  const { mutations, inspector } = await newTeamStep(page, "handoff-flow");
+  await inspector.getByLabel("Strategy", { exact: true }).selectOption("Handoff");
+  await inspector.getByLabel(/^Agent for member-1/).selectOption("analyst");
+  await inspector.getByLabel(/^Agent for member-2/).selectOption("reviewer");
+  await expect(inspector.getByLabel(/^Entry member\s*\*?$/)).toHaveValue("member-1");
+  await inspector.getByLabel("Interaction 1 to", { exact: true }).selectOption("member-2");
+  await inspector.getByLabel("Strategy", { exact: true }).selectOption("Peer");
+  await expect(inspector.getByLabel(/^Finalizer\s*\*?$/)).toHaveValue("member-1");
+  await expect(inspector.getByLabel("Interaction 2 from", { exact: true })).toHaveValue("member-2");
+  const team = await teamDeployed(page, mutations);
+  expect(team.strategy).toBe("Peer");
+  expect(team.peer).toEqual({ finalizer: "member-1" });
+  expect(team.allowedInteractions).toEqual([{ from: "member-1", to: "member-2" }, { from: "member-2", to: "member-1" }]);
+  expect(team.handoff).toBeUndefined();
+});
+
+test("Workflow Team problems panel reports admission-rule violations", async ({ page }) => {
+  const { inspector } = await newTeamStep(page, "incomplete-team");
+  await inspector.getByLabel("Strategy", { exact: true }).selectOption("Handoff");
+  await inspector.getByLabel("maxHandoffs", { exact: true }).fill("3");
+  // The mobile inspector overlays the graph tabs; dispatch the click directly.
+  await page.locator('[data-graph-panel="problems"]').dispatchEvent("click");
+  const panel = page.locator("#workflow-graph-panel");
+  await expect(panel.getByText(/maxHandoffs must be between 1 and limits.maxDelegations/)).toBeVisible();
+  await expect(panel.getByText(/member "member-1" needs an agent/)).toBeVisible();
+});
+
+test("Workflow Team member can reference an ExternalAgent and drops agent-only fields", async ({ page }) => {
+  const remote = { apiVersion: "kognition.dev/v1alpha1", kind: "ExternalAgent", metadata: { name: "partner", namespace: "default" }, spec: {} };
+  const { mutations, inspector } = await newTeamStep(page, "with-remote", { records: [...teamAgents, remote] });
+  await inspector.getByLabel(/^Agent for member-1/).selectOption("analyst");
+  await inspector.getByLabel("Kind of member-2", { exact: true }).selectOption("external");
+  await expect(inspector.getByLabel(/^Agent for member-2/)).toHaveCount(0);
+  await expect(inspector.getByLabel("AgentService for member-2", { exact: true })).toHaveCount(0);
+  await expect(inspector.getByText(/Prompt data is sent to the remote endpoint/)).toBeVisible();
+  await inspector.getByLabel(/^External agent for member-2/).selectOption("partner");
+  const team = await teamDeployed(page, mutations);
+  expect(team.members[0]).toEqual({ name: "member-1", agentRef: { name: "analyst" } });
+  expect(team.members[1]).toEqual({ name: "member-2", externalAgentRef: { name: "partner" } });
+});
+
+test("Workflow Team problems panel reports incomplete and duplicate external members", async ({ page }) => {
+  const { inspector } = await newTeamStep(page, "bad-remote");
+  await inspector.getByLabel("Kind of member-1", { exact: true }).selectOption("external");
+  await inspector.getByLabel("Kind of member-2", { exact: true }).selectOption("external");
+  await page.locator('[data-graph-panel="problems"]').dispatchEvent("click");
+  const panel = page.locator("#workflow-graph-panel");
+  await expect(panel.getByText(/member "member-1" needs an external agent/)).toBeVisible();
+  await expect(panel.getByText(/member "member-2" needs an external agent/)).toBeVisible();
+});
+
+test("Workflow Team steps can be drafted but not deployed outside the Kubernetes runtime", async ({ page }) => {
+  const mutations = await authoringAPI(page, { mode: "standalone", records: teamAgents });
+  await page.locator("#btn-create").click();
+  await page.locator("#btn-new-workflow").click();
+  await builderField(page, "Name").fill("draft-only");
+  await page.getByRole("button", { name: "+ Team step", exact: true }).click();
+  await expect(page.locator("#btn-deploy")).toBeDisabled();
+  await expect(page.locator("#inspector-body").getByText(/run only on the Kubernetes runtime/)).toBeVisible();
+  await page.locator('[data-view="preview"]').click();
+  await expect(page.getByText("Team steps run only on the Kubernetes runtime.", { exact: true })).toBeVisible();
+  expect(mutations).toEqual([]);
 });
 
 test("recording manifests use readable native YAML without changing quoted data, false, zero or multiline instructions", async ({ page }) => {
@@ -1462,7 +1603,7 @@ test("workflow approval gate edits are undoable and text input is coalesced", as
   await expect(page.getByRole("button", { name: "Remove gate" })).toHaveCount(1);
 });
 
-test("namespace change preserves a dirty draft when discarded is cancelled", async ({ page }) => {
+test("namespace change clears a dirty draft only after confirmation", async ({ page }) => {
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/meta") return route.fulfill({ json: { mode: "kubernetes", namespace: "default" } });
@@ -1480,6 +1621,80 @@ test("namespace change preserves a dirty draft when discarded is cancelled", asy
   await page.locator("#namespace-select").selectOption("team-a");
   await expect(page.locator("#namespace-select")).toHaveValue("default");
   await expect(name).toHaveValue("draft-agent");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#namespace-select").selectOption("team-a");
+  await expect(page.locator("#namespace-select")).toHaveValue("team-a");
+  await expect(page.locator("#empty-state")).toBeVisible();
+  await expect(page.locator("#btn-deploy")).toBeDisabled();
+});
+
+test("namespace change ignores a resource selection still loading", async ({ page }) => {
+  const oldPrompt = { apiVersion: "kognition.dev/v1alpha1", kind: "Prompt",
+    metadata: { name: "old-prompt", namespace: "default" }, spec: { content: "Old workspace" } };
+  await authoringAPI(page, { mode: "kubernetes", records: [oldPrompt] });
+  let releaseResponse;
+  const pendingResponse = new Promise(resolve => { releaseResponse = resolve; });
+  await page.route("**/api/resources/prompts/old-prompt?*", async route => {
+    await pendingResponse;
+    return route.fulfill({ json: oldPrompt });
+  });
+  const loaded = page.waitForResponse(response => response.url().includes("/api/resources/prompts/old-prompt?"));
+  try {
+    await openResource(page, "prompts", "old-prompt");
+    await expect(page.locator("#status")).toContainText("loading");
+    await page.locator("#namespace-select").selectOption("team-a");
+  } finally {
+    releaseResponse();
+  }
+  await (await loaded).finished();
+  await expect(page.locator("#empty-state")).toBeVisible();
+  await expect(page.locator("#btn-deploy")).toBeDisabled();
+});
+
+for (const view of ["builder", "yaml"]) test(`deploy preserves ${view} edits made before the server replies`, async ({ page }) => {
+  await authoringAPI(page);
+  let releaseResponse;
+  const pendingResponse = new Promise(resolve => { releaseResponse = resolve; });
+  const updates = [];
+  await page.route("**/api/resources/prompts**", async route => {
+    const request = route.request();
+    if (!["POST", "PUT"].includes(request.method())) return route.fallback();
+    const body = request.postDataJSON();
+    updates.push({ method: request.method(), body });
+    if (request.method() === "POST") await pendingResponse;
+    return route.fulfill({ json: { ...body, metadata: { ...body.metadata, uid: "prompt-uid", resourceVersion: 2 } } });
+  });
+  await createResource(page, "#btn-new-prompt");
+  await builderField(page, "Name").fill("pending-prompt");
+  await builderField(page, "Content").fill("First revision");
+  const deploy = page.locator("#btn-deploy");
+  const yamlArea = page.locator("#yaml-area");
+  const pendingYAML = "kind: Prompt\nmetadata: {name: pending-prompt}\nspec: {content: Second revision}\n";
+  try {
+    await deploy.click();
+    await expect(deploy).toBeDisabled();
+    if (view === "yaml") {
+      await page.locator('[data-view="yaml"]').click();
+      await yamlArea.fill(pendingYAML);
+    } else {
+      await builderField(page, "Content").fill("Second revision");
+    }
+  } finally {
+    releaseResponse();
+  }
+  await expect(page.locator("#status")).toContainText("newer edits not deployed");
+  if (view === "yaml") {
+    await expect(yamlArea).toHaveValue(pendingYAML);
+    expect(updates.map(({ method, body }) => [method, body.spec.content])).toEqual([["POST", "First revision"]]);
+    return;
+  }
+  await expect(builderField(page, "Content")).toHaveValue("Second revision");
+  await deploy.click();
+  await expect(page.locator("#status")).toHaveText("deployed Prompt pending-prompt");
+  expect(updates.map(({ method, body }) => [method, body.spec.content, body.metadata.resourceVersion])).toEqual([
+    ["POST", "First revision", undefined], ["PUT", "Second revision", 2],
+  ]);
 });
 
 test("Gallery import cannot silently replace a dirty draft", async ({ page }) => {

@@ -102,6 +102,7 @@ func runStudioServer(ctx context.Context, opts localUIServerOptions) error {
 	mux.HandleFunc("GET /tutorial/start", practice.launch)
 	mux.HandleFunc("POST /api/studio/tutorial-dismiss", practice.dismiss)
 	registerStudioInvokeAPI(mux)
+	registerStudioCollaborationAPI(mux)
 	mux.HandleFunc("POST /api/studio/profile-digest", handleStudioProfileDigest)
 
 	if opts.name == "" {

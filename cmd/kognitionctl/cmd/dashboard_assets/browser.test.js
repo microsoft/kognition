@@ -113,6 +113,44 @@ test("generic resources are keyboard operable and filters recover after refresh"
   await expect(rows).toHaveCount(3);
 });
 
+test("Workflow Teams show declared membership without claiming live capability discovery", async ({ page }, testInfo) => {
+  const workflow = (name, steps) => ({
+    apiVersion: "kognition.dev/v1alpha1", kind: "Workflow", metadata: { name, namespace: "default" }, spec: { steps },
+  });
+  const team = workflow("review-team", [{ name: "review", type: "collaboration", timeout: "5m", collaboration: {
+    strategy: "Parallel", protocol: "A2A", members: [
+      { name: "analyst", agentRef: { name: "draft-review" } },
+      { name: "reviewer", agentRef: { name: "check-review", namespace: "review" }, serviceRef: { name: "check-service" } },
+    ],
+    parallel: { branches: [{ member: "analyst" }, { member: "reviewer", optional: true }] }, limits: { maxTokens: 8192 },
+  } }]);
+  const solo = workflow("solo-review", [{ name: "review", agentRef: { name: "draft-review" } }]);
+  await page.route("**/api/**", async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/meta") return route.fulfill({ json: { namespace: "default", mode: "kubernetes", groups: [
+      { title: "Workflows", items: [{ label: "Workflows", plural: "workflows", singular: "workflow" }] },
+    ] } });
+    if (url.pathname === "/api/namespaces") return route.fulfill({ json: ["default"] });
+    if (url.pathname === "/api/resources/workflows") return route.fulfill({ json: { items: [team, solo] } });
+    return route.fulfill({ status: 404, json: { error: "not found" } });
+  });
+  await page.goto("/");
+  if (testInfo.project.name === "mobile") await page.locator("#catalog-toggle").click();
+  await page.getByRole("button", { name: "Workflows", exact: true }).click();
+  await page.getByText("review-team", { exact: true }).click();
+  const detail = page.locator("#detail");
+  await expect(detail.getByRole("button", { name: "Teams", exact: true })).toBeVisible();
+  await expect(detail.getByText("Declared configuration only. A2A execution and capability discovery are not enabled.")).toBeVisible();
+  await expect(detail.getByText("default/draft-review · Required branch", { exact: true })).toBeVisible();
+  await expect(detail.getByText("review/check-review · Optional branch · AgentService: check-service", { exact: true })).toBeVisible();
+  await expect(detail.getByText("8192", { exact: true })).toBeVisible();
+  await expect(detail.getByRole("button", { name: "Edit", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await page.getByText("solo-review", { exact: true }).click();
+  await expect(detail.getByRole("button", { name: "Teams", exact: true })).toBeHidden();
+  await expect(detail.locator("#detail-pre")).toContainText("solo-review");
+});
+
 test("mobile resource lists use labeled cards and contain long detail titles", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "Mobile resource presentation");
   const longName = `agent-${"identity-segment-".repeat(8)}`;

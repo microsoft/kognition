@@ -185,6 +185,23 @@ func freshValues(content []byte, options freshOptions) ([]byte, error) {
 		return nil, err
 	}
 	migrations["retainCompletedJobs"] = true
+	runtimeAuth, err := section("runtimeAuth")
+	if err != nil {
+		return nil, err
+	}
+	if existing, configured := runtimeAuth["existingSecret"]; configured {
+		if _, ok := existing.(string); !ok {
+			return nil, errors.New("runtimeAuth.existingSecret must be a string")
+		}
+	}
+	if create, configured := runtimeAuth["create"]; configured {
+		if _, ok := create.(bool); !ok {
+			return nil, errors.New("runtimeAuth.create must be a boolean")
+		}
+	} else {
+		existing, _ := runtimeAuth["existingSecret"].(string)
+		runtimeAuth["create"] = existing == ""
+	}
 	postgres, err := section("postgres")
 	if err != nil {
 		return nil, err
@@ -347,7 +364,7 @@ func prepareFresh(options freshOptions, stdout, stderr io.Writer) (string, error
 		cmd.Stderr = stderr
 		return cmd.Output()
 	}
-	releases, err := command("list", "--all", "--kubeconfig", configArtifact.Path, "--namespace", options.namespace, "--output", "json")
+	releases, err := command("list", "--deployed", "--failed", "--pending", "--superseded", "--uninstalled", "--uninstalling", "--kubeconfig", configArtifact.Path, "--namespace", options.namespace, "--output", "json")
 	if err != nil {
 		return "", err
 	}

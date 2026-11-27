@@ -125,7 +125,7 @@ type AgentRoleBindingSpec struct {
 	Subjects []Subject            `json:"subjects" yaml:"subjects"`
 }
 
-// ControlPlaneRole defines standalone RuntimeApproval permissions.
+// ControlPlaneRole defines standalone decision and execution permissions.
 type ControlPlaneRole struct {
 	TypeMeta   `json:",inline" yaml:",inline"`
 	ObjectMeta `json:"metadata" yaml:"metadata"`
@@ -137,7 +137,24 @@ func (c *ControlPlaneRole) GetObjectMeta() *ObjectMeta { return &c.ObjectMeta }
 
 // ControlPlaneRoleSpec defines ordered-independent allow and deny rules.
 type ControlPlaneRoleSpec struct {
-	Rules []ControlPlanePolicyRule `json:"rules" yaml:"rules"`
+	Rules          []ControlPlanePolicyRule    `json:"rules" yaml:"rules"`
+	ExecutionRules []ControlPlaneExecutionRule `json:"executionRules,omitempty" yaml:"executionRules,omitempty"`
+}
+
+type ControlPlaneExecutionOperation string
+
+const (
+	ControlPlaneWorkflowUse ControlPlaneExecutionOperation = "Workflow/use"
+	ControlPlaneAgentInvoke ControlPlaneExecutionOperation = "Agent/invoke"
+)
+
+type ControlPlaneExecutionRule struct {
+	Effect         string                         `json:"effect" yaml:"effect"`
+	Operation      ControlPlaneExecutionOperation `json:"operation" yaml:"operation"`
+	Workspace      string                         `json:"workspace" yaml:"workspace"`
+	ResourceName   string                         `json:"resourceName" yaml:"resourceName"`
+	ResourceUID    string                         `json:"resourceUID" yaml:"resourceUID"`
+	RevisionDigest string                         `json:"revisionDigest,omitempty" yaml:"revisionDigest,omitempty"`
 }
 
 // ControlPlanePolicyRule authorizes matching RuntimeApproval operations.
@@ -197,7 +214,8 @@ func (a *AgentCommunicationPolicy) GetObjectMeta() *ObjectMeta { return &a.Objec
 // AgentCommunicationPolicySpec defines communication rules.
 type AgentCommunicationPolicySpec struct {
 	// AllowFrom lists agents permitted to communicate.
-	AllowFrom []LocalObjectReference `json:"allowFrom,omitempty" yaml:"allowFrom,omitempty"`
+	AllowFrom          []LocalObjectReference `json:"allowFrom,omitempty" yaml:"allowFrom,omitempty"`
+	AllowFromQualified []AgentReference       `json:"allowFromQualified,omitempty" yaml:"allowFromQualified,omitempty"`
 
 	// AllowTo lists agents that may be communicated with.
 	AllowTo []LocalObjectReference `json:"allowTo,omitempty" yaml:"allowTo,omitempty"`

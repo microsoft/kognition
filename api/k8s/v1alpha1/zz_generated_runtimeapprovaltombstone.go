@@ -62,6 +62,13 @@ func (in *RuntimeApprovalTombstoneList) DeepCopyObject() runtime.Object {
 
 func (in *RuntimeApprovalTombstoneSpec) DeepCopyInto(out *RuntimeApprovalTombstoneSpec) {
 	*out = *in
+	if in.ExecutorAction != nil {
+		out.ExecutorAction = in.ExecutorAction.DeepCopy()
+	}
+	if in.WorkflowContext != nil {
+		out.WorkflowContext = new(WorkflowActionContext)
+		*out.WorkflowContext = *in.WorkflowContext
+	}
 	in.CreatedAt.DeepCopyInto(&out.CreatedAt)
 	in.ExpiresAt.DeepCopyInto(&out.ExpiresAt)
 	in.CompactedAt.DeepCopyInto(&out.CompactedAt)

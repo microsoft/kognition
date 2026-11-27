@@ -74,6 +74,7 @@
 "cmd/kognitionctl/cmd/workflow_test.go","go","","4","0","core","default",""
 "cmd/kognitionctl/main_test.go","go","","1","0","core","default",""
 "cmd/kubectl-kognition/main_test.go","go","","1","0","core","default",""
+"deploy/aks/tests/binding-admin-group-tests.ps1","powershell","","0","0","integrations/azure","path",""
 "deploy/aks/tests/foundation-tests.ps1","powershell","","0","0","integrations/azure","path",""
 "deploy/aks/tests/install-tests.ps1","powershell","","0","0","integrations/azure","path",""
 "deploy/aks/tests/profile-tests.ps1","powershell","","0","0","integrations/azure","path",""

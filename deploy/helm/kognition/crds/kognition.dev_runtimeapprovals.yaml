@@ -69,8 +69,13 @@ spec:
           metadata:
             type: object
           spec:
+            x-kubernetes-preserve-unknown-fields: true
             properties:
-              agentIdentityRef:
+              actorKind:
+                type: string
+                enum: [WorkflowExecutor]
+              agentIdentityRef: &executorResourceReference
+                x-kubernetes-preserve-unknown-fields: true
                 properties:
                   kind:
                     maxLength: 64
@@ -253,6 +258,7 @@ spec:
                   domain:
                     enum:
                     - kognition.dev/runtime-approval/action/v1
+                    - kognition.dev/workflow-executor/action/v1
                     type: string
                   epoch:
                     format: int64
@@ -261,6 +267,7 @@ spec:
                   format:
                     enum:
                     - kognition-runtime-action-v1
+                    - kognition-workflow-executor-action-v1
                     type: string
                   keyVersion:
                     format: int64
@@ -284,6 +291,84 @@ spec:
               expiresAt:
                 format: date-time
                 type: string
+              executorAction:
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+                required: [executor, initiator, workflow, workflowRevisionDigest, executionBinding, target, service, context, expiresAt]
+                properties:
+                  executor: &executorPrincipal
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                    required: [method, issuer, subject]
+                    properties:
+                      method:
+                        type: string
+                        minLength: 1
+                        maxLength: 64
+                      issuer:
+                        type: string
+                        minLength: 1
+                        maxLength: 512
+                      subject:
+                        type: string
+                        minLength: 1
+                        maxLength: 512
+                    x-kubernetes-validations:
+                    - rule: "!(self.method in ['anonymous', 'token'])"
+                      message: "executor principals must use canonical non-bootstrap identities"
+                  initiator: *executorPrincipal
+                  workflow: *executorResourceReference
+                  workflowRevisionDigest:
+                    type: string
+                    minLength: 64
+                    maxLength: 64
+                    pattern: '^[a-f0-9]{64}$'
+                  executionBinding: *executorResourceReference
+                  target: *executorResourceReference
+                  service: *executorResourceReference
+                  context: &executorActivationContext
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                    required: [workspace, runUID, step, activationID, attempt, ownerEpoch, bindingDigest]
+                    properties:
+                      workspace:
+                        type: string
+                        minLength: 1
+                        maxLength: 63
+                        pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                      runUID:
+                        type: string
+                        minLength: 1
+                        maxLength: 128
+                      step:
+                        type: string
+                        minLength: 1
+                        maxLength: 128
+                      activationID:
+                        type: string
+                        minLength: 1
+                        maxLength: 128
+                      attempt:
+                        type: integer
+                        format: int64
+                        minimum: 1
+                      ownerEpoch:
+                        type: integer
+                        format: int64
+                        minimum: 1
+                      bindingDigest:
+                        type: string
+                        minLength: 64
+                        maxLength: 64
+                        pattern: '^[a-f0-9]{64}$'
+                  expiresAt:
+                    type: string
+                    format: date-time
+                x-kubernetes-validations:
+                - rule: "self.workflow.kind == 'Workflow' && self.workflow.scope == 'Namespaced' && self.workflow.__namespace__ == self.context.workspace && self.executionBinding.kind == 'WorkflowExecutionBinding' && self.executionBinding.scope == 'Namespaced' && self.executionBinding.__namespace__ == self.context.workspace"
+                  message: "executor authority must identify its exact namespaced Workflow and protected binding"
+                - rule: "self.target.kind == 'Agent' && self.target.scope == 'Namespaced' && has(self.target.__namespace__) && self.target.__namespace__ != '' && self.service.kind == 'AgentService' && self.service.scope == 'Namespaced' && self.service.__namespace__ == self.target.__namespace__"
+                  message: "executor target must identify an exact Agent and serving binding in one namespace"
               initialDecision:
                 enum: [Pending, NotRequired]
                 type: string
@@ -296,12 +381,13 @@ spec:
                 maxLength: 64
                 type: string
               plane:
-                enum: [Tool, Memory, Communication]
+                enum: [Tool, Memory, Communication, Workflow]
                 type: string
               sessionRef:
                 minLength: 1
                 maxLength: 256
                 type: string
+              workflowContext: *executorActivationContext
               targetRef:
                 properties:
                   kind:
@@ -373,10 +459,6 @@ spec:
                 maxLength: 253
                 type: string
             required:
-            - agentIdentityRef
-            - agentInstanceRef
-            - agentRef
-            - autonomyClassRef
             - binding
             - createdAt
             - expiresAt
@@ -384,20 +466,25 @@ spec:
             - invocationID
             - operation
             - plane
-            - sessionRef
             - targetRef
             - workspace
             type: object
             x-kubernetes-validations:
-            - rule: "self.agentRef.scope == 'Namespaced' && self.agentRef.__namespace__ == self.workspace"
+            - rule: "has(self.actorKind) ? (has(self.executorAction) && has(self.workflowContext) && self.plane == 'Workflow' && self.operation == 'initiate' && !has(self.agentRef) && !has(self.agentIdentityRef) && !has(self.agentInstanceRef) && !has(self.autonomyClassRef) && !has(self.trustProfileRef) && !has(self.sessionRef) && !has(self.authorizationRefs)) : (!has(self.executorAction) && self.plane != 'Workflow' && has(self.agentRef) && has(self.agentIdentityRef) && has(self.agentInstanceRef) && has(self.autonomyClassRef) && has(self.sessionRef))"
+              message: "executor and Agent approval fields must use distinct complete actor representations"
+            - rule: "!has(self.executorAction) || (self.workflowContext.workspace == self.executorAction.context.workspace && self.workflowContext.runUID == self.executorAction.context.runUID && self.workflowContext.step == self.executorAction.context.step && self.workflowContext.activationID == self.executorAction.context.activationID && self.workflowContext.attempt == self.executorAction.context.attempt && self.workflowContext.ownerEpoch == self.executorAction.context.ownerEpoch && self.workflowContext.bindingDigest == self.executorAction.context.bindingDigest && self.workspace == self.executorAction.context.workspace && self.targetRef.kind == self.executorAction.service.kind && self.targetRef.scope == self.executorAction.service.scope && self.targetRef.__namespace__ == self.executorAction.service.__namespace__ && self.targetRef.name == self.executorAction.service.name && self.targetRef.uid == self.executorAction.service.uid && self.targetRef.resourceVersion == self.executorAction.service.resourceVersion && self.expiresAt <= self.executorAction.expiresAt)"
+              message: "executor approval cannot change its activation, target, or authority expiry"
+            - rule: "has(self.actorKind) ? (self.binding.format == 'kognition-workflow-executor-action-v1' && self.binding.domain == 'kognition.dev/workflow-executor/action/v1') : (self.binding.format == 'kognition-runtime-action-v1' && self.binding.domain == 'kognition.dev/runtime-approval/action/v1')"
+              message: "action binding domain must match the actual actor type"
+            - rule: "!has(self.agentRef) || (self.agentRef.scope == 'Namespaced' && self.agentRef.__namespace__ == self.workspace)"
               message: "agentRef must be namespaced to the RuntimeApproval workspace"
-            - rule: "self.agentIdentityRef.scope == 'Namespaced' && self.agentIdentityRef.__namespace__ == self.workspace"
+            - rule: "!has(self.agentIdentityRef) || (self.agentIdentityRef.scope == 'Namespaced' && self.agentIdentityRef.__namespace__ == self.workspace)"
               message: "agentIdentityRef must be namespaced to the RuntimeApproval workspace"
-            - rule: "self.agentInstanceRef.scope == 'Namespaced' && self.agentInstanceRef.__namespace__ == self.workspace"
+            - rule: "!has(self.agentInstanceRef) || (self.agentInstanceRef.scope == 'Namespaced' && self.agentInstanceRef.__namespace__ == self.workspace)"
               message: "agentInstanceRef must be namespaced to the RuntimeApproval workspace"
             - rule: "!has(self.trustProfileRef) || (self.trustProfileRef.scope == 'Namespaced' && self.trustProfileRef.__namespace__ == self.workspace)"
               message: "trustProfileRef must be namespaced to the RuntimeApproval workspace"
-            - rule: "self.autonomyClassRef.scope == 'Cluster' && !has(self.autonomyClassRef.__namespace__)"
+            - rule: "!has(self.autonomyClassRef) || (self.autonomyClassRef.scope == 'Cluster' && !has(self.autonomyClassRef.__namespace__))"
               message: "autonomyClassRef must be cluster-scoped"
             - rule: "!has(self.authorizationRefs) || self.authorizationRefs.all(ref, (ref.scope == 'Namespaced' && ref.__namespace__ == self.workspace) || (ref.scope == 'Cluster' && !has(ref.__namespace__)))"
               message: "authorizationRefs must have a valid workspace or cluster scope"

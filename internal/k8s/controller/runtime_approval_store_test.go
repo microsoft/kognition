@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/convert"
 	"github.com/kognition-ai/kognition/internal/runtimeapproval"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval/conformancetest"
 	"github.com/kognition-ai/kognition/internal/store"
 )
 
@@ -946,6 +948,66 @@ func TestKubernetesRuntimeApprovalBindingKeyLeaseFailsClosedWhileHeld(t *testing
 }
 
 var kubernetesRuntimeApprovalPayload = json.RawMessage(`{"argument":"sensitive"}`)
+
+func TestKubernetesRuntimeApprovalExecutorContract(t *testing.T) {
+	storage := newRuntimeApprovalTestStore(t, newFakeClient(t))
+	keys := kubernetesRuntimeApprovalTestKeys(t)
+	storage.ConfigureRuntimeApprovalBindingKeys(keys)
+	proposed, payload, terminal := conformancetest.RunExecutorApprovalContract(t, storage, keys)
+	object := convert.RuntimeApprovalToK8s(&terminal)
+	tombstone, err := storage.CreateOrVerifyRuntimeApprovalTombstone(context.Background(), object, DefaultRuntimeApprovalTombstoneRetention)
+	if err != nil || tombstone.Spec.ActorKind != api.RuntimeApprovalActorExecutor || tombstone.Spec.ExecutorAction == nil {
+		t.Fatalf("executor replay fence lost its actor: %v", err)
+	}
+	object.Finalizers = nil
+	if err := storage.client.Update(context.Background(), object); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.client.Delete(context.Background(), object); err != nil {
+		t.Fatal(err)
+	}
+	created, replay, err := storage.CreateOrGetRuntimeApproval(context.Background(), proposed, payload, time.Hour)
+	if err != nil || created || replay.UID != terminal.UID || replay.Status.ExecutionState != api.RuntimeApprovalExecutionCompleted {
+		t.Fatalf("compacted executor replay reopened: created=%v error=%v", created, err)
+	}
+	retained, err := storage.GetRuntimeApprovalByInvocation(context.Background(), proposed.Spec.Workspace, proposed.Spec.InvocationID)
+	if err != nil || retained.Spec.ActorKind != api.RuntimeApprovalActorExecutor || retained.Spec.ExecutorAction == nil {
+		t.Fatalf("executor tombstone read lost actor: %v", err)
+	}
+}
+
+func TestKubernetesRuntimeApprovalWorkflowContextPersistenceAndReplay(t *testing.T) {
+	storage := newRuntimeApprovalTestStore(t, newFakeClient(t))
+	keys := kubernetesRuntimeApprovalTestKeys(t)
+	storage.ConfigureRuntimeApprovalBindingKeys(keys)
+	proposed := kubernetesRuntimeApprovalFixture(t, "workflow-context", api.RuntimeApprovalDecisionPending)
+	proposed.Spec.WorkflowContext = &api.WorkflowActionContext{Workspace: "origin", RunUID: "run-uid", Step: "team",
+		ActivationID: "visit-1", Attempt: 1, OwnerEpoch: 1, BindingDigest: strings.Repeat("a", 64)}
+	binding, err := runtimeapproval.Bind(context.Background(), keys, runtimeapproval.ActionEnvelopeFromApproval(proposed, kubernetesRuntimeApprovalPayload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposed.Spec.Binding = binding
+	created, first, err := storage.CreateOrGetRuntimeApproval(context.Background(), proposed, kubernetesRuntimeApprovalPayload, time.Minute)
+	if err != nil || !created || !reflect.DeepEqual(first.Spec.WorkflowContext, proposed.Spec.WorkflowContext) {
+		t.Fatalf("Workflow context creation: %v %+v %v", created, first.Spec.WorkflowContext, err)
+	}
+	retained, err := storage.GetRuntimeApprovalByInvocation(context.Background(), proposed.Spec.Workspace, proposed.Spec.InvocationID)
+	if err != nil || !reflect.DeepEqual(retained.Spec.WorkflowContext, proposed.Spec.WorkflowContext) {
+		t.Fatalf("Workflow context read: %+v %v", retained.Spec.WorkflowContext, err)
+	}
+	created, replay, err := storage.CreateOrGetRuntimeApproval(context.Background(), proposed, kubernetesRuntimeApprovalPayload, time.Minute)
+	if err != nil || created || replay.UID != first.UID {
+		t.Fatalf("exact Workflow replay: %v %+v %v", created, replay, err)
+	}
+	changed := proposed
+	changedContext := *proposed.Spec.WorkflowContext
+	changedContext.OwnerEpoch++
+	changed.Spec.WorkflowContext = &changedContext
+	if _, _, err := storage.CreateOrGetRuntimeApproval(context.Background(), changed, kubernetesRuntimeApprovalPayload, time.Minute); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("changed Workflow epoch accepted: %v", err)
+	}
+}
 
 func newRuntimeApprovalTestStore(t *testing.T, c client.Client) *StoreAdapter {
 	t.Helper()

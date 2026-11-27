@@ -100,6 +100,7 @@ spec:
                   domain:
                     enum:
                     - kognition.dev/runtime-approval/action/v1
+                    - kognition.dev/workflow-executor/action/v1
                     type: string
                   epoch:
                     format: int64
@@ -108,6 +109,7 @@ spec:
                   format:
                     enum:
                     - kognition-runtime-action-v1
+                    - kognition-workflow-executor-action-v1
                     type: string
                   keyVersion:
                     format: int64
@@ -128,6 +130,67 @@ spec:
               compactedAt:
                 format: date-time
                 type: string
+              actorKind:
+                type: string
+                enum: [WorkflowExecutor]
+              executorAction:
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+                required: [executor, initiator, workflow, workflowRevisionDigest, executionBinding, target, service, context, expiresAt]
+                properties:
+                  executor: &tombstonePrincipal
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                    required: [method, issuer, subject]
+                    properties:
+                      method: {type: string, minLength: 1, maxLength: 64}
+                      issuer: {type: string, minLength: 1, maxLength: 512}
+                      subject: {type: string, minLength: 1, maxLength: 512}
+                    x-kubernetes-validations:
+                    - rule: "!(self.method in ['anonymous', 'token'])"
+                      message: "executor replay requires canonical non-bootstrap attribution"
+                  initiator: *tombstonePrincipal
+                  workflow: &tombstoneExecutorReference
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                    required: [kind, scope, namespace, name, uid, resourceVersion]
+                    properties:
+                      kind: {type: string, minLength: 1, maxLength: 64}
+                      scope: {type: string, enum: [Namespaced]}
+                      namespace: {type: string, minLength: 1, maxLength: 63}
+                      name: {type: string, minLength: 1, maxLength: 253}
+                      uid: {type: string, minLength: 1, maxLength: 128}
+                      resourceVersion: {type: integer, format: int64, minimum: 1}
+                  workflowRevisionDigest:
+                    type: string
+                    minLength: 64
+                    maxLength: 64
+                    pattern: '^[a-f0-9]{64}$'
+                  executionBinding: *tombstoneExecutorReference
+                  target: *tombstoneExecutorReference
+                  service: *tombstoneExecutorReference
+                  context: &tombstoneActivationContext
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                    required: [workspace, runUID, step, activationID, attempt, ownerEpoch, bindingDigest]
+                    properties:
+                      workspace:
+                        type: string
+                        minLength: 1
+                        maxLength: 63
+                        pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                      runUID: {type: string, minLength: 1, maxLength: 128}
+                      step: {type: string, minLength: 1, maxLength: 128}
+                      activationID: {type: string, minLength: 1, maxLength: 128}
+                      attempt: {type: integer, format: int64, minimum: 1}
+                      ownerEpoch: {type: integer, format: int64, minimum: 1}
+                      bindingDigest:
+                        type: string
+                        minLength: 64
+                        maxLength: 64
+                        pattern: '^[a-f0-9]{64}$'
+                  expiresAt: {type: string, format: date-time}
+              workflowContext: *tombstoneActivationContext
               createdAt:
                 format: date-time
                 type: string
@@ -180,6 +243,7 @@ spec:
                 - Tool
                 - Memory
                 - Communication
+                - Workflow
                 type: string
               retentionDeadline:
                 format: date-time
@@ -193,7 +257,6 @@ spec:
                 minLength: 1
                 type: string
             required:
-            - agentRef
             - binding
             - compactedAt
             - createdAt
@@ -209,10 +272,10 @@ spec:
             - workspace
             type: object
             x-kubernetes-validations:
-            - message: agentRef must identify an Agent namespaced to the RuntimeApprovalTombstone
-                workspace
-              rule: self.agentRef.kind == 'Agent' && self.agentRef.scope == 'Namespaced'
-                && self.agentRef.__namespace__ == self.workspace
+            - message: replay fence must preserve its actual Agent or executor actor
+              rule: "has(self.actorKind) ? (has(self.executorAction) && has(self.workflowContext) && !has(self.agentRef) && self.plane == 'Workflow') : (has(self.agentRef) && !has(self.executorAction) && self.plane != 'Workflow' && self.agentRef.kind == 'Agent' && self.agentRef.scope == 'Namespaced' && self.agentRef.__namespace__ == self.workspace)"
+            - message: replay fence domain must preserve its actual actor type
+              rule: "has(self.actorKind) ? (self.binding.format == 'kognition-workflow-executor-action-v1' && self.binding.domain == 'kognition.dev/workflow-executor/action/v1' && self.workspace == self.executorAction.context.workspace && self.expiresAt <= self.executorAction.expiresAt) : (self.binding.format == 'kognition-runtime-action-v1' && self.binding.domain == 'kognition.dev/runtime-approval/action/v1')"
             - message: compactedAt must not precede createdAt
               rule: self.compactedAt >= self.createdAt
             - message: retentionDeadline must follow compactedAt

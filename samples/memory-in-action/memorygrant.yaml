@@ -1,0 +1,23 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# MemoryGrant: gives notes-agent explicit read/write access to notes-claim.
+# Use accessMode ReadOnly to let an agent recall without storing.
+#
+# Prereq: samples/memory-in-action/manifests.yaml (Agent notes-agent,
+# MemoryClaim notes-claim).
+#
+# Observe:
+#   kubectl get memorygrants.kognition.dev
+#   kubectl describe memorygrant notes-agent-notes-claim
+apiVersion: kognition.dev/v1alpha1
+kind: MemoryGrant
+metadata:
+  name: notes-agent-notes-claim
+  namespace: default
+spec:
+  agentRef:
+    name: notes-agent
+  memoryClaimRef:
+    name: notes-claim
+  accessMode: ReadWrite

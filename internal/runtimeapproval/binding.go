@@ -26,6 +26,8 @@ import (
 	"unicode/utf8"
 
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
+	"github.com/kognition-ai/kognition/internal/store"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 const (
@@ -228,6 +230,7 @@ type ActionEnvelope struct {
 	TrustProfileRef   *api.RuntimeApprovalReference
 	AutonomyClassRef  api.RuntimeApprovalReference
 	AuthorizationRefs []api.RuntimeApprovalReference
+	WorkflowContext   *api.WorkflowActionContext
 	Payload           json.RawMessage
 }
 
@@ -245,6 +248,7 @@ type canonicalActionEnvelope struct {
 	TrustProfileRef   *api.RuntimeApprovalReference  `json:"trustProfileRef,omitempty"`
 	AutonomyClassRef  api.RuntimeApprovalReference   `json:"autonomyClassRef"`
 	AuthorizationRefs []api.RuntimeApprovalReference `json:"authorizationRefs,omitempty"`
+	WorkflowContext   *api.WorkflowActionContext     `json:"workflowContext,omitempty"`
 	Payload           json.RawMessage                `json:"payload"`
 }
 
@@ -333,6 +337,16 @@ func AuthenticateNewBinding(ctx context.Context, keys BindingKeyStore, approval 
 	if err := ValidateNewBindingKey(ctx, keys, approval.Spec.Binding); err != nil {
 		return err
 	}
+	if approval.Spec.ActorKind == api.RuntimeApprovalActorExecutor {
+		action, err := WorkflowExecutorActionFromApproval(approval, payload)
+		if err != nil {
+			return err
+		}
+		return VerifyWorkflowExecutorAction(ctx, keys, action, approval.Spec.Binding)
+	}
+	if approval.Spec.ActorKind != "" || approval.Spec.ExecutorAction != nil {
+		return fmt.Errorf("unsupported RuntimeApproval actor")
+	}
 	return Verify(ctx, keys, ActionEnvelopeFromApproval(approval, payload), approval.Spec.Binding)
 }
 
@@ -341,6 +355,16 @@ func AuthenticateNewBinding(ctx context.Context, keys BindingKeyStore, approval 
 func AuthenticateRetainedBinding(ctx context.Context, keys BindingKeyStore, approval api.RuntimeApproval, payload json.RawMessage) error {
 	if err := ValidateRetainedBindingKey(ctx, keys, approval.Spec.Binding); err != nil {
 		return err
+	}
+	if approval.Spec.ActorKind == api.RuntimeApprovalActorExecutor {
+		action, err := WorkflowExecutorActionFromApproval(approval, payload)
+		if err != nil {
+			return err
+		}
+		return VerifyWorkflowExecutorAction(ctx, keys, action, approval.Spec.Binding)
+	}
+	if approval.Spec.ActorKind != "" || approval.Spec.ExecutorAction != nil {
+		return fmt.Errorf("unsupported RuntimeApproval actor")
 	}
 	return Verify(ctx, keys, ActionEnvelopeFromApproval(approval, payload), approval.Spec.Binding)
 }
@@ -356,12 +380,15 @@ func ActionEnvelopeFromApproval(approval api.RuntimeApproval, payload json.RawMe
 		TargetRef: approval.Spec.TargetRef, TrustProfileRef: approval.Spec.TrustProfileRef,
 		AutonomyClassRef:  approval.Spec.AutonomyClassRef,
 		AuthorizationRefs: append([]api.RuntimeApprovalReference(nil), approval.Spec.AuthorizationRefs...),
+		WorkflowContext:   cloneWorkflowActionContext(approval.Spec.WorkflowContext),
 		Payload:           append(json.RawMessage(nil), payload...),
 	}
 }
 
 func bindingMatchesKey(binding api.RuntimeActionBinding, key BindingKey) bool {
-	return binding.Format == BindingFormatV1 && binding.Algorithm == key.Algorithm && binding.Domain == key.Domain && binding.Epoch == key.Epoch && binding.KeyVersion == key.Version && len(key.Material) >= 32
+	formatMatches := binding.Format == BindingFormatV1 && binding.Domain == key.Domain ||
+		binding.Format == WorkflowExecutorBindingFormat && binding.Domain == WorkflowExecutorBindingDomain && key.Domain == BindingDomainV1
+	return formatMatches && binding.Algorithm == key.Algorithm && binding.Epoch == key.Epoch && binding.KeyVersion == key.Version && len(key.Material) >= 32
 }
 
 func validateBindingTag(tag string) error {
@@ -391,7 +418,8 @@ func canonicalAction(action ActionEnvelope) ([]byte, error) {
 		AgentInstanceRef: stableInstanceReference(action.AgentInstanceRef), SessionRef: action.SessionRef,
 		TargetRef: action.TargetRef, TrustProfileRef: action.TrustProfileRef,
 		AutonomyClassRef: action.AutonomyClassRef, AuthorizationRefs: references,
-		Payload: payload,
+		WorkflowContext: action.WorkflowContext,
+		Payload:         payload,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal runtime action envelope: %w", err)
@@ -408,6 +436,7 @@ func validateActionEnvelope(action ActionEnvelope) error {
 		AgentInstanceRef: action.AgentInstanceRef, TargetRef: action.TargetRef,
 		TrustProfileRef: action.TrustProfileRef, AutonomyClassRef: action.AutonomyClassRef,
 		AuthorizationRefs: append([]api.RuntimeApprovalReference(nil), action.AuthorizationRefs...),
+		WorkflowContext:   action.WorkflowContext,
 	}}
 	if err := NormalizeAndValidateReferences(&approval); err != nil {
 		return err
@@ -655,6 +684,23 @@ func NormalizeAndValidateReferences(approval *api.RuntimeApproval) error {
 	if approval == nil || approval.Spec.Workspace == "" {
 		return fmt.Errorf("RuntimeApproval workspace is required")
 	}
+	if approval.Spec.ActorKind == api.RuntimeApprovalActorExecutor {
+		action, err := WorkflowExecutorActionFromApproval(*approval, nil)
+		if err != nil {
+			return err
+		}
+		return validateExecutorActionIdentity(action)
+	}
+	if approval.Spec.ActorKind != "" || approval.Spec.ExecutorAction != nil {
+		return fmt.Errorf("unsupported RuntimeApproval actor")
+	}
+	if context := approval.Spec.WorkflowContext; context != nil {
+		key := workflowContextKey(*context)
+		if !store.ValidWorkflowActivationKey(key) || len(validation.IsDNS1123Label(context.Workspace)) != 0 ||
+			context.OwnerEpoch < 1 || !validInstanceConfigurationDigest(context.BindingDigest) {
+			return fmt.Errorf("RuntimeApproval workflow context requires an exact bounded activation, owner epoch, and binding digest")
+		}
+	}
 	if len(approval.Spec.AuthorizationRefs) > 64 {
 		return fmt.Errorf("RuntimeApproval supports at most 64 authorization references")
 	}
@@ -704,6 +750,19 @@ func NormalizeAndValidateReferences(approval *api.RuntimeApproval) error {
 		return err
 	}
 	return nil
+}
+
+func cloneWorkflowActionContext(context *api.WorkflowActionContext) *api.WorkflowActionContext {
+	if context == nil {
+		return nil
+	}
+	cloned := *context
+	return &cloned
+}
+
+func workflowContextKey(context api.WorkflowActionContext) store.WorkflowActivationKey {
+	return store.WorkflowActivationKey{Workspace: context.Workspace, RunUID: context.RunUID, Step: context.Step,
+		ActivationID: context.ActivationID, Attempt: context.Attempt}
 }
 
 func validInstanceConfigurationDigest(value string) bool {
@@ -764,17 +823,26 @@ func ValidateCreate(approval api.RuntimeApproval, ttl time.Duration) error {
 		return fmt.Errorf("RuntimeApproval TTL must be positive and at most 24h")
 	}
 	spec := approval.Spec
-	if spec.Workspace == "" || len(spec.Workspace) > 253 || spec.InvocationID == "" || len(spec.InvocationID) > 128 || spec.Operation == "" || len(spec.Operation) > 64 || spec.SessionRef == "" || len(spec.SessionRef) > 256 {
+	if spec.Workspace == "" || len(spec.Workspace) > 253 || spec.InvocationID == "" || len(spec.InvocationID) > 128 || spec.Operation == "" || len(spec.Operation) > 64 ||
+		(spec.ActorKind != api.RuntimeApprovalActorExecutor && (spec.SessionRef == "" || len(spec.SessionRef) > 256)) {
 		return fmt.Errorf("RuntimeApproval requires bounded workspace, invocation ID, operation, and session reference")
 	}
-	if spec.Plane != api.RuntimeApprovalPlaneTool && spec.Plane != api.RuntimeApprovalPlaneMemory && spec.Plane != api.RuntimeApprovalPlaneCommunication {
+	if spec.ActorKind == api.RuntimeApprovalActorExecutor {
+		if err := NormalizeAndValidateReferences(&approval); err != nil {
+			return err
+		}
+	} else if spec.ActorKind != "" || spec.ExecutorAction != nil || (spec.Plane != api.RuntimeApprovalPlaneTool && spec.Plane != api.RuntimeApprovalPlaneMemory && spec.Plane != api.RuntimeApprovalPlaneCommunication) {
 		return fmt.Errorf("RuntimeApproval plane must be Tool, Memory, or Communication")
 	}
 	if err := ValidateInitialStatus(approval.Status); err != nil {
 		return err
 	}
 	binding := spec.Binding
-	if binding.Format != BindingFormatV1 || binding.Algorithm != BindingAlgorithmV1 || binding.Domain != BindingDomainV1 || binding.KeyVersion <= 0 || len(binding.Tag) < 43 || len(binding.Tag) > 64 {
+	format, domain := BindingFormatV1, BindingDomainV1
+	if spec.ActorKind == api.RuntimeApprovalActorExecutor {
+		format, domain = WorkflowExecutorBindingFormat, WorkflowExecutorBindingDomain
+	}
+	if binding.Format != format || binding.Algorithm != BindingAlgorithmV1 || binding.Domain != domain || binding.KeyVersion <= 0 || len(binding.Tag) < 43 || len(binding.Tag) > 64 {
 		return fmt.Errorf("RuntimeApproval requires a supported bounded action binding")
 	}
 	return nil

@@ -19,6 +19,7 @@ import (
 
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
 	"github.com/kognition-ai/kognition/internal/auth"
+	"github.com/kognition-ai/kognition/internal/controlplaneauth"
 	"github.com/kognition-ai/kognition/internal/requestid"
 	"github.com/kognition-ai/kognition/internal/runtimeapproval"
 	"github.com/kognition-ai/kognition/internal/store"
@@ -276,8 +277,16 @@ func validateControlPlanePolicy(ctx context.Context, policies store.Store, kind,
 		if err := json.Unmarshal(data, &role); err != nil {
 			return fmt.Errorf("invalid ControlPlaneRole: %w", err)
 		}
-		if len(role.Spec.Rules) == 0 {
+		if len(role.Spec.Rules) == 0 && len(role.Spec.ExecutionRules) == 0 {
 			return errors.New("at least one rule is required")
+		}
+		if len(role.Spec.ExecutionRules) > controlplaneauth.MaxExecutionRules {
+			return errors.New("at most 128 execution rules are supported")
+		}
+		for _, rule := range role.Spec.ExecutionRules {
+			if err := controlplaneauth.ValidateExecutionRule(rule); err != nil {
+				return errors.New("execution rules must name an exact supported operation, workspace, resource UID, and Workflow revision")
+			}
 		}
 		for _, rule := range role.Spec.Rules {
 			if rule.Effect != "allow" && rule.Effect != "deny" {

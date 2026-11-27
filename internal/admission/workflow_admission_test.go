@@ -6,10 +6,13 @@ package admission
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/kognition-ai/kognition/api/v1alpha1"
+	"github.com/kognition-ai/kognition/internal/runtimeapproval"
+	"sigs.k8s.io/yaml"
 )
 
 func validWorkflow() v1alpha1.Workflow {
@@ -51,6 +54,59 @@ func TestWorkflowValidator_AcceptsValid(t *testing.T) {
 	resp := v.Validate(context.Background(), workflowRequest(validWorkflow()))
 	if !resp.Allowed {
 		t.Fatalf("expected valid workflow to be accepted, got: %s", resp.Reason)
+	}
+}
+
+func TestWorkflowRunProtectionCannotBecomeLegacyExecution(t *testing.T) {
+	prior := v1alpha1.WorkflowRun{ObjectMeta: v1alpha1.ObjectMeta{Name: "accepted", Namespace: "team-a", UID: "run-uid", Annotations: map[string]string{runtimeapproval.WorkflowRunAcceptanceRequiredAnnotation: "true"}},
+		Spec: v1alpha1.WorkflowRunSpec{WorkflowRef: v1alpha1.LocalObjectReference{Name: "approved"}}}
+	oldJSON, err := json.Marshal(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*v1alpha1.WorkflowRun){
+		"remove execution mode":   func(run *v1alpha1.WorkflowRun) { run.Annotations = nil },
+		"replace accepted spec":   func(run *v1alpha1.WorkflowRun) { run.Spec.WorkflowRef.Name = "other" },
+		"replace run incarnation": func(run *v1alpha1.WorkflowRun) { run.UID = "recreated" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			current := prior
+			mutate(&current)
+			raw, err := json.Marshal(current)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := NewWorkflowValidator().Validate(context.Background(), &Request{Operation: OperationUpdate, Kind: "WorkflowRun", Object: raw, OldObject: oldJSON})
+			if response.Allowed {
+				t.Fatal("protected run became mutable or executable by the legacy controller")
+			}
+		})
+	}
+	prior.Status.Phase = v1alpha1.PhasePending
+	raw, err := json.Marshal(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := NewWorkflowValidator().Validate(context.Background(), &Request{Operation: OperationUpdate, Kind: "WorkflowRun", Object: raw, OldObject: oldJSON}); !response.Allowed {
+		t.Fatalf("safe status update denied: %s", response.Reason)
+	}
+}
+
+func TestWorkflowValidator_ParallelReviewDraft(t *testing.T) {
+	data, err := os.ReadFile("../../docs/development-plans/features/workflow-collaboration/parallel-review.draft.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow v1alpha1.Workflow
+	if err := yaml.UnmarshalStrict(data, &workflow); err != nil {
+		t.Fatalf("draft does not match the Workflow schema: %v", err)
+	}
+	request := workflowRequest(workflow)
+	if response := NewWorkflowValidator().Validate(context.Background(), request); response.Allowed || !strings.Contains(response.Reason, "collaboration execution has not been qualified") {
+		t.Fatalf("default admission must reject the collaboration draft, got: %+v", response)
+	}
+	if response := NewWorkflowValidator(WithCollaborationEnabled(true)).Validate(context.Background(), request); !response.Allowed {
+		t.Fatalf("draft must satisfy structural admission: %s", response.Reason)
 	}
 }
 

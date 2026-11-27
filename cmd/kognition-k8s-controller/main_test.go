@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -18,12 +19,18 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	admissionv1 "k8s.io/api/admission/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	k8sapi "github.com/kognition-ai/kognition/api/k8s/v1alpha1"
 	api "github.com/kognition-ai/kognition/api/v1alpha1"
@@ -31,6 +38,7 @@ import (
 	"github.com/kognition-ai/kognition/internal/cpi"
 	k8sctrl "github.com/kognition-ai/kognition/internal/k8s/controller"
 	"github.com/kognition-ai/kognition/internal/k8s/dispatcher"
+	"github.com/kognition-ai/kognition/internal/k8s/webhook"
 	"github.com/kognition-ai/kognition/internal/opa"
 	"github.com/kognition-ai/kognition/internal/plugin"
 	"github.com/kognition-ai/kognition/internal/runtimeapproval"
@@ -44,6 +52,126 @@ func TestRequiresAutomaticIdentityForKnowledgeGatewayOnly(t *testing.T) {
 	})
 	if !requiresAutomaticIdentity(agentDispatcher) {
 		t.Fatal("knowledge-only gateway configuration must require a controller-managed identity")
+	}
+}
+
+func TestWorkflowBindingWebhookConfiguration(t *testing.T) {
+	principal := api.ControlPlaneRoleSubject{Method: "tokenreview", Issuer: "kubernetes.io/tokenreview", Subject: "system:serviceaccount:system:executor"}
+	for _, scenario := range []struct {
+		name      string
+		principal api.ControlPlaneRoleSubject
+		groups    string
+		valid     bool
+	}{
+		{"exact native identity", principal, "workflow-operators", true},
+		{"OIDC is not native identity", api.ControlPlaneRoleSubject{Method: "oidc", Issuer: "https://issuer.example", Subject: principal.Subject}, "workflow-operators", false},
+		{"foreign TokenReview issuer", api.ControlPlaneRoleSubject{Method: principal.Method, Issuer: "foreign", Subject: principal.Subject}, "workflow-operators", false},
+		{"wildcard namespace", api.ControlPlaneRoleSubject{Method: principal.Method, Issuer: principal.Issuer, Subject: "system:serviceaccount:*:executor"}, "workflow-operators", false},
+		{"invalid ServiceAccount", api.ControlPlaneRoleSubject{Method: principal.Method, Issuer: principal.Issuer, Subject: "system:serviceaccount:system:bad name"}, "workflow-operators", false},
+		{"namespace service accounts are not operators", principal, "system:serviceaccounts:system", false},
+		{"all authenticated users are not operators", principal, "system:authenticated", false},
+		{"wildcard operators", principal, "workflow-*", false},
+		{"oversized operator group", principal, strings.Repeat("a", 257), false},
+		{"too many operator groups", principal, strings.Repeat("operator,", 17), false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			raw, err := json.Marshal([]api.ControlPlaneRoleSubject{scenario.principal})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(runtimeapproval.WorkflowExecutorPrincipalsEnvironmentVariable, string(raw))
+			t.Setenv("KOGNITION_WORKFLOW_BINDING_ADMIN_GROUPS", scenario.groups)
+			options, err := workflowBindingWebhookOptionsFromEnv("system", fake.NewClientBuilder().Build())
+			if (err == nil) != scenario.valid {
+				t.Fatalf("valid=%v, error=%v", scenario.valid, err)
+			}
+			if !scenario.valid {
+				return
+			}
+			handler := webhook.NewHandler(nil, runtime.NewScheme(), zap.NewNop(), options...)
+			name := runtimeapproval.WorkflowExecutorBindingObjectName("team-a", "binding")
+			object, err := json.Marshal(corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "system"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{Kind: metav1.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, Namespace: "system", Name: name, Operation: admissionv1.Create, Object: runtime.RawExtension{Raw: object}, UserInfo: authenticationv1.UserInfo{Username: principal.Subject, Groups: []string{"workflow-operators"}}}}
+			response := handler.Handle(context.Background(), request)
+			if response.Allowed || response.Result == nil || response.Result.Code != http.StatusForbidden {
+				t.Fatalf("executor in operator group reached binding administration: %#v", response)
+			}
+			request.UserInfo.Username = "operator"
+			response = handler.Handle(context.Background(), request)
+			if response.Allowed || response.Result == nil || response.Result.Code != http.StatusBadRequest {
+				t.Fatalf("configured operator did not reach binding validation: %#v", response)
+			}
+		})
+	}
+}
+
+func TestWorkflowExecutorAuthorizationConfiguration(t *testing.T) {
+	principal := api.ControlPlaneRoleSubject{Method: "tokenreview", Issuer: "kubernetes.io/tokenreview", Subject: "system:serviceaccount:system:executor"}
+	raw, err := json.Marshal([]api.ControlPlaneRoleSubject{principal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(runtimeapproval.WorkflowExecutorPrincipalsEnvironmentVariable, string(raw))
+	t.Setenv("KOGNITION_WORKFLOW_EXECUTOR_POD_NAME", "executor-pod")
+	tokenFile := filepath.Join(t.TempDir(), "executor-token")
+	if err := os.WriteFile(tokenFile, []byte("fixture-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KOGNITION_WORKFLOW_EXECUTOR_TOKEN_FILE", tokenFile)
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "executor-pod", Namespace: "system", UID: "actual-pod-uid"}, Spec: corev1.PodSpec{ServiceAccountName: "executor"}}
+	account := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "executor", Namespace: "system", UID: "actual-service-account-uid"}}
+	reader := fake.NewClientBuilder().WithObjects(pod, account).Build()
+	config := &rest.Config{Host: "https://kubernetes.example"}
+	configured, err := workflowExecutorAuthorizationFromEnv(context.Background(), config, reader, "system")
+	if err != nil || configured == nil {
+		t.Fatalf("explicit executor configuration: %v", err)
+	}
+	if configured.Subject != principal.Subject || configured.WorkloadUID != string(pod.UID) || configured.ServiceAccountUID != string(account.UID) || configured.Pods != reader || configured.TokenReviews == nil || configured.AccessReviews == nil {
+		t.Fatalf("configuration did not retain independently read workload identities: %#v", configured)
+	}
+	if err := os.WriteFile(tokenFile, []byte("rotated-fixture-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if token, err := configured.Credential(context.Background()); err != nil || token != "rotated-fixture-token" {
+		t.Fatal("executor credential rotation was not read at the request boundary")
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := configured.Credential(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled credential read: %v", err)
+	}
+	for _, scenario := range []struct {
+		name          string
+		reader        client.Reader
+		config        *rest.Config
+		file, content string
+	}{
+		{"missing API config", reader, nil, tokenFile, "fixture-token"},
+		{"missing uncached reader", nil, config, tokenFile, "fixture-token"},
+		{"missing credential file", reader, config, "", "fixture-token"},
+		{"relative credential file", reader, config, "relative-token", "fixture-token"},
+		{"missing pod", fake.NewClientBuilder().WithObjects(account).Build(), config, tokenFile, "fixture-token"},
+		{"missing ServiceAccount", fake.NewClientBuilder().WithObjects(pod).Build(), config, tokenFile, "fixture-token"},
+		{"empty credential", reader, config, tokenFile, ""},
+		{"oversized credential", reader, config, tokenFile, strings.Repeat("x", 65537)},
+		{"ambiguous credential", reader, config, tokenFile, "first second"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			t.Setenv("KOGNITION_WORKFLOW_EXECUTOR_TOKEN_FILE", scenario.file)
+			if err := os.WriteFile(tokenFile, []byte(scenario.content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := workflowExecutorAuthorizationFromEnv(context.Background(), scenario.config, scenario.reader, "system"); err == nil {
+				t.Fatal("unqualified executor configuration accepted")
+			}
+		})
+	}
+	t.Setenv(runtimeapproval.WorkflowExecutorPrincipalsEnvironmentVariable, "")
+	if configured, err := workflowExecutorAuthorizationFromEnv(context.Background(), nil, nil, ""); err != nil || configured != nil {
+		t.Fatal("unconfigured execution required or invented workload authority")
 	}
 }
 
@@ -228,6 +356,7 @@ type stubManagerReconciler struct {
 
 type startupManager struct {
 	ctrl.Manager
+	resourceClient client.Client
 	addErr         error
 	readyErr       error
 	adds           atomic.Int32
@@ -236,8 +365,9 @@ type startupManager struct {
 	runnables      []ctrlmanager.Runnable
 }
 
-func (m *startupManager) GetClient() client.Client    { return nil }
-func (m *startupManager) GetAPIReader() client.Reader { return nil }
+func (m *startupManager) GetClient() client.Client    { return m.resourceClient }
+func (m *startupManager) GetAPIReader() client.Reader { return m.resourceClient }
+func (m *startupManager) GetConfig() *rest.Config     { return nil }
 func (m *startupManager) AddReadyzCheck(name string, checker healthz.Checker) error {
 	m.readinessNames = append(m.readinessNames, name)
 	m.readiness = append(m.readiness, checker)
@@ -450,7 +580,7 @@ func TestRunControllerStartupFailures(t *testing.T) {
 
 	t.Setenv("KOGNITION_CONTROLLER_NAMESPACE", "system")
 	err = runControllerWithManager(controllerOptions{}, zap.NewNop(), func(k8sctrl.ManagerOptions) (ctrl.Manager, error) {
-		return &startupManager{addErr: wantErr}, nil
+		return &startupManager{addErr: wantErr, resourceClient: fake.NewClientBuilder().Build()}, nil
 	})
 	if !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "register autonomy defaults") {
 		t.Fatalf("runnable registration error = %v", err)
@@ -754,6 +884,7 @@ func TestControllerAssemblyRegistersProductionRoster(t *testing.T) {
 		"SecretRefReconcilerAdapter",
 		"ToolReconcilerAdapter",
 		"ToolClassReconcilerAdapter",
+		"ExternalAgentReconcilerAdapter",
 		"ToolInvocationRunReconcilerAdapter",
 		"WorkflowReconcilerAdapter",
 		"WorkflowRunReconcilerAdapter",
@@ -817,6 +948,8 @@ func TestControllerAssemblyRegistersProductionRoster(t *testing.T) {
 		"AutonomyReviewValidator",
 		"IntentGatewayValidator",
 		"AgentIdentityValidator",
+		"ExternalAgentValidator",
+		"ExternalAgentGrantValidator",
 		"CrossNamespaceHook",
 	}
 	assertConcreteTypeNames(t, "validating hooks", assembly.validating, wantValidating)

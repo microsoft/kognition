@@ -81,6 +81,9 @@ func ParseCandidate(content []byte, release string) (Candidate, error) {
 				if err != nil || !found || len(groups) == 0 || rule["nonResourceURLs"] != nil {
 					return Candidate{}, errors.New("controller ClusterRole must only address Kognition resources")
 				}
+				if executorReviewRule(rule, groups) {
+					continue
+				}
 				for _, group := range groups {
 					if group != "kognition.dev" && group != "knowledge.kognition.dev" {
 						return Candidate{}, errors.New("controller ClusterRole cannot grant Kubernetes administrative access")
@@ -97,6 +100,25 @@ func ParseCandidate(content []byte, release string) (Candidate, error) {
 		return Candidate{}, err
 	}
 	return candidate, nil
+}
+
+// executorReviewRule reports whether rule is exactly the create-only
+// TokenReview or SubjectAccessReview grant that the native Workflow executor
+// uses to authenticate and authorize its own callers. Nothing broader passes.
+func executorReviewRule(rule map[string]interface{}, groups []string) bool {
+	if len(groups) != 1 || len(rule) != 3 {
+		return false
+	}
+	resources, found, err := unstructured.NestedStringSlice(rule, "resources")
+	if err != nil || !found || len(resources) != 1 {
+		return false
+	}
+	verbs, found, err := unstructured.NestedStringSlice(rule, "verbs")
+	if err != nil || !found || len(verbs) != 1 || verbs[0] != "create" {
+		return false
+	}
+	return (groups[0] == "authentication.k8s.io" && resources[0] == "tokenreviews") ||
+		(groups[0] == "authorization.k8s.io" && resources[0] == "subjectaccessreviews")
 }
 
 func (candidate Candidate) validateRoles() error {
