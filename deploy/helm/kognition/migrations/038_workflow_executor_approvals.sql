@@ -1,3 +1,6 @@
+-- Copyright (c) Microsoft Corporation.
+-- Licensed under the MIT License.
+
 ALTER TABLE runtime_approval_quota_tickets
     ADD COLUMN IF NOT EXISTS actor_kind TEXT NOT NULL DEFAULT 'Agent',
     ADD COLUMN IF NOT EXISTS executor_principal JSONB;

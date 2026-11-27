@@ -237,7 +237,11 @@ func TestRuntimeApprovalCRDFoundationParity(t *testing.T) {
 		}
 	}
 	spec := root.Properties["spec"]
-	assertRequiredFields(t, spec.Required, "workspace", "invocationID", "initialDecision", "agentRef", "agentIdentityRef", "agentInstanceRef", "targetRef", "autonomyClassRef", "binding")
+	assertRequiredFields(t, spec.Required, "workspace", "invocationID", "initialDecision", "plane", "operation", "targetRef", "binding", "createdAt", "expiresAt")
+	assertConditionalApprovalActor(t, spec, "executorAction",
+		[]string{"agentRef", "agentIdentityRef", "agentInstanceRef", "autonomyClassRef", "sessionRef", "trustProfileRef", "authorizationRefs", "workflowContext"},
+		"has(self.actorKind) ? (has(self.executorAction) && has(self.workflowContext) && self.plane == 'Workflow' && self.operation == 'initiate' && !has(self.agentRef) && !has(self.agentIdentityRef) && !has(self.agentInstanceRef) && !has(self.autonomyClassRef) && !has(self.trustProfileRef) && !has(self.sessionRef) && !has(self.authorizationRefs)) : (!has(self.executorAction) && self.plane != 'Workflow' && has(self.agentRef) && has(self.agentIdentityRef) && has(self.agentInstanceRef) && has(self.autonomyClassRef) && has(self.sessionRef))",
+		"has(self.actorKind) ? (self.binding.format == 'kognition-workflow-executor-action-v1' && self.binding.domain == 'kognition.dev/workflow-executor/action/v1') : (self.binding.format == 'kognition-runtime-action-v1' && self.binding.domain == 'kognition.dev/runtime-approval/action/v1')")
 	assertStringEnum(t, spec.Properties["initialDecision"], "Pending", "NotRequired")
 	for _, name := range []string{"agentRef", "agentIdentityRef", "agentInstanceRef", "targetRef", "trustProfileRef", "autonomyClassRef"} {
 		reference := spec.Properties[name]
@@ -258,10 +262,7 @@ func TestRuntimeApprovalCRDFoundationParity(t *testing.T) {
 	assertRequiredFields(t, authorizationReference.Required, "kind", "scope", "name", "uid", "resourceVersion")
 	assertStringEnum(t, authorizationReference.Properties["scope"], "Namespaced", "Cluster")
 	binding := spec.Properties["binding"]
-	assertRequiredFields(t, binding.Required, "format", "algorithm", "domain", "epoch", "keyVersion", "tag")
-	assertStringEnum(t, binding.Properties["format"], "kognition-runtime-action-v1")
-	assertStringEnum(t, binding.Properties["algorithm"], "HMAC-SHA-256")
-	assertStringEnum(t, binding.Properties["domain"], "kognition.dev/runtime-approval/action/v1")
+	assertRuntimeActionBindingSchema(t, binding)
 	if binding.Properties["epoch"].Minimum == nil || *binding.Properties["epoch"].Minimum != 1 {
 		t.Errorf("RuntimeApproval binding epoch minimum = %v, want 1", binding.Properties["epoch"].Minimum)
 	}
@@ -390,10 +391,13 @@ func TestRuntimeApprovalTombstoneCRDParity(t *testing.T) {
 		t.Fatalf("RuntimeApprovalTombstone immutability validations = %#v", root.XValidations)
 	}
 	spec := root.Properties["spec"]
-	assertRequiredFields(t, spec.Required, "workspace", "invocationID", "plane", "operation", "agentRef", "runtimeApprovalUID", "initialDecision", "binding", "decisionState", "executionState", "createdAt", "expiresAt", "compactedAt", "retentionDeadline")
+	assertRequiredFields(t, spec.Required, "workspace", "invocationID", "plane", "operation", "runtimeApprovalUID", "initialDecision", "binding", "decisionState", "executionState", "createdAt", "expiresAt", "compactedAt", "retentionDeadline")
+	assertConditionalApprovalActor(t, spec, "executorAction", []string{"agentRef", "workflowContext"},
+		"has(self.actorKind) ? (has(self.executorAction) && has(self.workflowContext) && !has(self.agentRef) && self.plane == 'Workflow') : (has(self.agentRef) && !has(self.executorAction) && self.plane != 'Workflow' && self.agentRef.kind == 'Agent' && self.agentRef.scope == 'Namespaced' && self.agentRef.__namespace__ == self.workspace)",
+		"has(self.actorKind) ? (self.binding.format == 'kognition-workflow-executor-action-v1' && self.binding.domain == 'kognition.dev/workflow-executor/action/v1' && self.workspace == self.executorAction.context.workspace && self.expiresAt <= self.executorAction.expiresAt) : (self.binding.format == 'kognition-runtime-action-v1' && self.binding.domain == 'kognition.dev/runtime-approval/action/v1')")
 	assertStringEnum(t, spec.Properties["decisionState"], "Approved", "Rejected", "Expired", "NotRequired")
 	assertStringEnum(t, spec.Properties["executionState"], "NotStarted", "Completed", "Failed")
-	assertRequiredFields(t, spec.Properties["binding"].Required, "format", "algorithm", "domain", "epoch", "keyVersion", "tag")
+	assertRuntimeActionBindingSchema(t, spec.Properties["binding"])
 	if _, hasStatus := root.Properties["status"]; hasStatus {
 		t.Fatal("RuntimeApprovalTombstone must not expose mutable status")
 	}
@@ -421,32 +425,21 @@ func TestRuntimeApprovalQuotaTicketCRDParity(t *testing.T) {
 	}
 	root := crd.Spec.Versions[0].Schema.OpenAPIV3Schema
 	spec := root.Properties["spec"]
-	assertRequiredFields(t, spec.Required, "workspace", "invocationID", "agentRef", "binding", "phase", "chargedBytes", "createdAt")
+	assertRequiredFields(t, spec.Required, "workspace", "invocationID", "binding", "phase", "chargedBytes", "createdAt")
+	assertConditionalApprovalActor(t, spec, "executorRef", []string{"agentRef"},
+		"has(self.actorKind) ? (has(self.executorRef) && !has(self.agentRef)) : (has(self.agentRef) && !has(self.executorRef) && self.agentRef.kind == 'Agent' && self.agentRef.scope == 'Namespaced' && self.agentRef.__namespace__ == self.workspace)",
+		"has(self.actorKind) ? (self.binding.format == 'kognition-workflow-executor-action-v1' && self.binding.domain == 'kognition.dev/workflow-executor/action/v1') : (self.binding.format == 'kognition-runtime-action-v1' && self.binding.domain == 'kognition.dev/runtime-approval/action/v1')",
+		"self.phase == 'Compacted' ? (has(self.compactedAt) && has(self.retentionDeadline)) : true",
+		"self.phase == 'Live' ? !has(self.compactedAt) : true")
 	assertStringEnum(t, spec.Properties["phase"], "Live", "Compacted")
 	if bytes := spec.Properties["chargedBytes"]; bytes.Minimum == nil || *bytes.Minimum != 1 || bytes.Maximum != nil {
 		t.Fatalf("RuntimeApprovalQuotaTicket chargedBytes bounds = [%v, %v], want [1, unbounded]", bytes.Minimum, bytes.Maximum)
 	}
-	assertRequiredFields(t, spec.Properties["binding"].Required, "format", "algorithm", "domain", "epoch", "keyVersion", "tag")
-	assertStringEnum(t, spec.Properties["binding"].Properties["format"], "kognition-runtime-action-v1")
-	assertStringEnum(t, spec.Properties["binding"].Properties["algorithm"], "HMAC-SHA-256")
-	assertStringEnum(t, spec.Properties["binding"].Properties["domain"], "kognition.dev/runtime-approval/action/v1")
+	assertRuntimeActionBindingSchema(t, spec.Properties["binding"])
 	agentRef := spec.Properties["agentRef"]
 	assertRequiredFields(t, agentRef.Required, "kind", "scope", "name", "uid", "resourceVersion")
 	assertStringEnum(t, agentRef.Properties["kind"], "Agent")
 	assertStringEnum(t, agentRef.Properties["scope"], "Namespaced")
-	rules := map[string]bool{}
-	for _, validation := range spec.XValidations {
-		rules[validation.Rule] = true
-	}
-	if !rules["self.agentRef.kind == 'Agent' && self.agentRef.scope == 'Namespaced' && self.agentRef.__namespace__ == self.workspace"] {
-		t.Fatal("RuntimeApprovalQuotaTicket must bind agentRef.namespace to the workspace")
-	}
-	if !rules["self.phase == 'Compacted' ? (has(self.compactedAt) && has(self.retentionDeadline)) : true"] {
-		t.Fatal("RuntimeApprovalQuotaTicket must require compactedAt/retentionDeadline in Compacted phase")
-	}
-	if !rules["self.phase == 'Live' ? !has(self.compactedAt) : true"] {
-		t.Fatal("RuntimeApprovalQuotaTicket must forbid compactedAt in Live phase")
-	}
 	if _, hasStatus := root.Properties["status"]; hasStatus {
 		t.Fatal("RuntimeApprovalQuotaTicket must not expose mutable status")
 	}
@@ -484,6 +477,38 @@ func TestTrustProfileIndexCRDParity(t *testing.T) {
 	if _, hasStatus := root.Properties["status"]; hasStatus {
 		t.Fatal("TrustProfileIndex must not expose mutable status")
 	}
+}
+
+func assertConditionalApprovalActor(t *testing.T, schema apiextensionsv1.JSONSchemaProps, executorField string, optionalFields []string, expectedRules ...string) {
+	t.Helper()
+	assertStringEnum(t, schema.Properties["actorKind"], "WorkflowExecutor")
+	for _, name := range append([]string{"actorKind", executorField}, optionalFields...) {
+		if _, exists := schema.Properties[name]; !exists {
+			t.Errorf("actor schema is missing %q", name)
+		}
+		for _, required := range schema.Required {
+			if required == name {
+				t.Errorf("actor field %q must be conditionally required, not globally required", name)
+			}
+		}
+	}
+	rules := make(map[string]bool, len(schema.XValidations))
+	for _, validation := range schema.XValidations {
+		rules[validation.Rule] = true
+	}
+	for _, rule := range expectedRules {
+		if !rules[rule] {
+			t.Errorf("actor schema is missing validation %q", rule)
+		}
+	}
+}
+
+func assertRuntimeActionBindingSchema(t *testing.T, schema apiextensionsv1.JSONSchemaProps) {
+	t.Helper()
+	assertRequiredFields(t, schema.Required, "format", "algorithm", "domain", "epoch", "keyVersion", "tag")
+	assertStringEnum(t, schema.Properties["format"], "kognition-runtime-action-v1", "kognition-workflow-executor-action-v1")
+	assertStringEnum(t, schema.Properties["algorithm"], "HMAC-SHA-256")
+	assertStringEnum(t, schema.Properties["domain"], "kognition.dev/runtime-approval/action/v1", "kognition.dev/workflow-executor/action/v1")
 }
 
 func assertStringEnum(t *testing.T, schema apiextensionsv1.JSONSchemaProps, expected ...string) {

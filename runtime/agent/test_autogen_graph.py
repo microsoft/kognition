@@ -186,8 +186,10 @@ async def test_autogen_gateway_approval_barrier_preserves_response(monkeypatch, 
         calls.append((endpoint, json, headers))
         if operation == "delegation-invoke" and len(calls) == 1:
             return httpx.Response(200, request=httpx.Request("POST", endpoint), json={"capability": "invocation-proof"})
-        invocation_id = headers["X-Kognition-Memory-Invocation-Id"] if operation == "memory" else "governed-invocation"
-        return httpx.Response(status_code, request=httpx.Request("POST", endpoint), json={"runtime_approval_state": approval_state, "invocation_id": invocation_id})
+        invocation_id = headers["X-Kognition-Memory-Invocation-Id"] if operation == "memory" else json["invocation_id"]
+        return httpx.Response(status_code, request=httpx.Request("POST", endpoint), json={
+            "runtime_approval_state": approval_state, "invocation_id": invocation_id, "runtime_approval": {"name": "approval-1"},
+        })
 
     monkeypatch.setattr("memory.httpx.post" if operation == "memory" else "tools.httpx.post", gateway)
     tool_name = "memory_store" if operation == "memory" else "delegate_to_agent"
@@ -206,8 +208,12 @@ async def test_autogen_gateway_approval_barrier_preserves_response(monkeypatch, 
         assert calls[1][2]["Authorization"] == "Bearer invocation-proof"
         assert calls[0][1]["invocation_id"] == calls[1][1]["invocation_id"]
     assert result["runtime_approval_state"] == approval_state
-    expected_invocation = calls[0][2]["X-Kognition-Memory-Invocation-Id"] if operation == "memory" else "governed-invocation"
-    assert json.loads(result["messages"][-1].content)["invocation_id"] == expected_invocation
+    expected_invocation = calls[0][2]["X-Kognition-Memory-Invocation-Id"] if operation == "memory" else calls[0][1]["invocation_id"]
+    assert expected_invocation
+    response_body = json.loads(result["messages"][-1].content)
+    assert response_body["invocation_id"] == expected_invocation
+    assert response_body["runtime_approval_state"] == approval_state
+    assert response_body["runtime_approval"] == {"name": "approval-1"}
     assert client.total_usage().completion_tokens == 3
 
 
