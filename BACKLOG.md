@@ -143,6 +143,7 @@ All identifiers follow the schema defined in PROJECT.md Section 0.5.
 | EPIC-0022 | Demo Trustworthiness Hardening | MVP-3, MVP-4, MVP-7 | US-0088..US-0090 | EPIC-0008, EPIC-0009, EPIC-0014, EPIC-0018 | In progress |
 | EPIC-0023 | Kognition Studio Authoring Completion | MVP-1, MVP-3, MVP-4, MVP-7 | US-0092..US-0099 | Existing API slices of EPIC-0001, EPIC-0004, EPIC-0005, EPIC-0006, EPIC-0008, EPIC-0009, EPIC-0013, EPIC-0018, EPIC-0021 | In progress: authoring and core tutorial locally verified; installed/protected-action and pilot qualification open |
 | EPIC-0024 | External A2A Agents (ExternalAgent) | MVP-3, MVP-4 (security support) | US-0100..US-0113 | EPIC-0003, EPIC-0004, EPIC-0006, EPIC-0008, EPIC-0009, EPIC-0019, EPIC-0023 | Planned: v1 (US-0100..US-0106) approved; later evolution (US-0107..US-0113) designed, not approved |
+| EPIC-0025 | Kubernetes Human Access Control | MVP-3 (security support) | US-0114..US-0123 | EPIC-0008, EPIC-0009, EPIC-0015, EPIC-0018, EPIC-0023 | Planned: stack 1 (US-0114..US-0120) owner-directed 2026-11-27; US-0121..US-0123 designed, not approved |
 
 ---
 
@@ -173,6 +174,7 @@ graph TD
     E21[EPIC-0021<br>Evaluation Pipelines]
     E22[EPIC-0022<br>Trustworthiness Hardening]
     E24[EPIC-0024<br>External A2A Agents]
+    E25[EPIC-0025<br>K8s Access Control]
 
     E01 --> E02
     E01 --> E04
@@ -220,6 +222,12 @@ graph TD
     E08 --> E24
     E09 --> E24
     E06 --> E24
+
+    E08 --> E25
+    E09 --> E25
+    E18 --> E25
+    E15 -.-> E25
+    E23 -.-> E25
 
     E01 -.-> E15
     E02 -.-> E15
@@ -3533,6 +3541,212 @@ US-0109/US-0108.
 | TC-0386 | **Not scheduled:** A second protocol value can be added with no change to the Workflow API and no regression of the A2A path. | FR-0617, MVP-5 |
 | TC-0387 | **Not scheduled:** Two clusters interoperate in both directions with the same card model. | FR-0616, MVP-5 |
 
+### EPIC-0025 - Kubernetes Human Access Control - PLANNED
+
+> **Goal:** Give people and automation a maintained, least-privilege way to use Kognition in Kubernetes mode: native Kubernetes roles for every resource kind and action, proven against a real API server and documented with an explicit responsibility boundary. Identity-provider integration stays with the platform operator.
+> **Design:** [Access control plan](docs/development-plans/features/kubernetes-access-control/plan.md) and [ADR-0031](docs/adr/0031-kubernetes-human-access-control.md) (Proposed). Requirements: FR-0410..FR-0419 in [PROJECT.md](PROJECT.md).
+> **Builds on:** identity and approvals (EPIC-0008, EPIC-0009), the Kubernetes CRDs and webhooks (EPIC-0018), the chart (EPIC-0015) and Studio (EPIC-0023).
+> **Scope directed by the owner, 2026-11-27:** stack 1, US-0114..US-0120. US-0121..US-0123 are designed but **not approved**; each needs its own ADR, approval and security review. Standalone-mode alignment is a separate follow-on epic.
+> **Open decisions:** OD-1..OD-5 in ADR-0031. A task that depends on one says so. ADR-0031 stays Proposed until reviewed.
+> **Behavior preserved:** no existing authorization check changes meaning. Tasks that add a check (T-0450, T-0452) start with a failing characterization test.
+
+**Delivery rules (every task):** write the named test case first and record that it fails for the expected reason; implement the smallest change; rerun until green; run the affected packages, `go vet`, the repository linters and the 80% coverage gate; add tests at each applicable tier (unit, Helm, envtest, kind) rather than only the lowest. A story is done only when all its test cases pass at their tier and its documentation matches verified behavior. Each story is one pull request in a stack, in the order below.
+
+**Delivery order**
+
+| Order | Story | Depends on | Priority |
+|---|---|---|---|
+| 1 | US-0114 Access catalog and classification | None | P1 |
+| 2 | US-0115 Chart-shipped human roles | US-0114 | P1 |
+| 3 | US-0116 Authorization proven on a real API server | US-0115 | P1 |
+| 4 | US-0117 Separation-of-duties hardening | T-0446 (T-0452 also needs OD-2) | P1 (T-0452 blocked) |
+| 5 | US-0118 Documentation | US-0115, US-0116 | P1 |
+| 6 | US-0119 Access check and denial experience | US-0116 | P2 (T-0458 P3) |
+| 7 | US-0120 Kind end-to-end qualification | US-0115 | P2 |
+| Later | US-0121, US-0122, US-0123 | US-0120 acceptance | Not approved |
+
+**Final-state definition of done (stack 1):** an operator installs the chart, binds
+existing users and groups to documented Kognition roles in a namespace, and each role
+allows exactly what the catalog says and nothing else, verified with real API-server
+evidence for bearer-token and certificate principals. No shipped role can read Secrets,
+write controller status (apart from the autonomy decision), delete in bulk, or grant
+authority it should not hold. Every shipped kind has an access class and a new kind
+cannot ship without one. The known gaps (interactive chat, bearer-only decision
+endpoints, non-CRD audit evidence) are stated, not hidden.
+
+#### US-0114 - Access Catalog and Classification - PLANNED
+
+> As **Patricia**, I want every Kognition resource kind classified by the consequence of granting access, with the human roles generated from that classification, so that a new kind cannot ship without an access decision and roles cannot drift.
+
+**Traces:** FR-0410, FR-0411 | MVP-3 (security support; not an MVP gate)
+
+| ID | Task | US |
+|---|---|---|
+| T-0440 | Add `internal/accesscatalog`: typed access classes, the classification of all 55 kinds from plan section 5, the role definitions from plan section 6 expressed as `rbacv1.PolicyRule` sets built from classes (explicit resources and verbs, no wildcards), the custom action definitions and the opt-in aggregation target map. No Kubernetes client dependency. Traces: FR-0411. | US-0114 |
+| T-0441 | Add a test helper that loads the shipped CRDs from `deploy/helm/kognition/crds` (group, plural, scope, `status` subresource) and use it to assert classification completeness, uniqueness and scope consistency, and that every class a role names exists. Written first; fails until T-0440 classifies every kind. Traces: FR-0411. | US-0114 |
+| T-0442 | Add `tools/access-catalog`, which renders the human-role Helm template deterministically from the catalog and supports `--check` to fail on drift; add `make` and `make.ps1` targets. Traces: FR-0411. | US-0114 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0388 | **Pending:** Classification completeness: every shipped CRD kind has exactly one class; no entry names a missing CRD; cluster-scoped kinds appear only in `class` or `system`; a temporary CRD fixture with an unclassified kind fails with that kind's name. | FR-0411, MVP-3 |
+| TC-0389 | **Pending:** Role safety invariants over every generated role: no wildcard in groups, resources, verbs or names; no `deletecollection`; no `secrets`, `pods/exec`, `pods/portforward` or `serviceaccounts/token`; read-only access to `system` kinds; no `*/status` write except `autonomyreviews/status` for `kognition-autonomy-reviewer`; each role stays within its documented classes; no role depends on another. The catalog's answer for every (role, kind, verb) equals a reference evaluation of the generated rules. | FR-0411, FR-0410, MVP-3 |
+| TC-0390 | **Pending:** The generator is deterministic (two runs are byte-identical with stable ordering); `--check` passes on a clean tree and fails on a modified template; the output parses as valid `rbacv1` objects. | FR-0411 |
+
+#### US-0115 - Chart-Shipped Human Roles - PLANNED
+
+> As **Patricia**, I want the chart to install inert, maintained Kognition ClusterRoles, so that I can bind my existing groups to them instead of hand-writing RBAC for 55 kinds.
+
+**Traces:** FR-0412, FR-0410 | MVP-3 (security support; not an MVP gate)
+
+| ID | Task | US |
+|---|---|---|
+| T-0443 | Add the generated `deploy/helm/kognition/templates/human-roles.yaml`, rendered only in `mode: kubernetes` and when `rbac.humanRoles.enabled` is true (default true under OD-3, pending maintainer confirmation), with the `kognition.dev/access-role` label, no bindings and no aggregation labels. Add values, `values.schema.json` entries and chart documentation. Traces: FR-0412. | US-0115 |
+| T-0444 | Add the opt-in `rbac.humanRoles.aggregateToBuiltIn` (default none) that adds `rbac.authorization.k8s.io/aggregate-to-view`, `-edit` or `-admin` labels to a documented subset of roles; reject unknown targets in the schema. Lowest priority in the story. Traces: FR-0412. | US-0115 |
+| T-0445 | Add Helm unit tests in `deploy/helm/kognition/tests`, matching assertions in `helm-regression-tests.ps1` and a CI step that runs `tools/access-catalog --check`. Traces: FR-0412, FR-0411. | US-0115 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0391 | **Pending:** Kubernetes mode renders the 15 expected ClusterRoles with names and labels; standalone mode renders none; `rbac.humanRoles.enabled=false` renders none; no RoleBinding or ClusterRoleBinding references a human role in any mode; no aggregation labels by default. | FR-0412 |
+| TC-0392 | **Pending:** Every resource in a rendered role belongs to an installed CRD (or the RBAC resources used by `kognition-access-admin`); that role's `bind` is limited to exactly the `kognition-*` role names; rendered output equals generator output. | FR-0412, FR-0411, MVP-3 |
+| TC-0393 | **Pending:** Aggregation is off by default; each allowed target adds exactly the documented labels; an unknown target fails schema validation; no aggregated built-in role gains `secrets` or wildcard access. | FR-0412 |
+
+#### US-0116 - Authorization Proven on a Real API Server - PLANNED
+
+> As **Gabriela**, I want evidence from a real Kubernetes API server that each role allows exactly what it should, so that I can trust the roles without reading them.
+
+**Traces:** FR-0419, FR-0414, FR-0413 | MVP-3 (security support; not an MVP gate)
+
+| ID | Task | US |
+|---|---|---|
+| T-0446 | Add an `integration`-tagged envtest harness that starts kube-apiserver with the RBAC authorizer (verify the default flags and set `--authorization-mode=RBAC` explicitly if needed), installs the Kognition CRDs and the generated roles, creates principals with distinct credentials, and exposes helpers that evaluate an action by `SubjectAccessReview` and by a real request as that principal. Traces: FR-0419. | US-0116 |
+| T-0447 | Add a catalog-driven role by kind by verb matrix test: bind each role to a fresh principal (RoleBinding for namespaced roles, ClusterRoleBinding for cluster roles) and assert allowed exactly where the catalog says, including another namespace, cluster-scoped kinds and `status` writes. Traces: FR-0419, FR-0411. | US-0116 |
+| T-0448 | Test the custom actions: `use` limited by `resourceNames`, `approve` and `reject` independently grantable, `reconcile`, and the `autonomyreviews/status` exception; exercise the existing admission that binds `ApprovalDecision.spec.approver` and `AutonomyReview.status.decidedBy` to the caller under real authenticated identities. Traces: FR-0414, FR-0413. | US-0116 |
+| T-0449 | Add escalation and negative controls: `kognition-access-admin` can bind Kognition roles but not `cluster-admin` and cannot create ClusterRoleBindings or edit Roles; `kognition-builder` and `kognition-consumer` cannot create RoleBindings; no shipped role can read Secrets or open `pods/portforward`; deleting a binding denies the next request. Traces: FR-0419, FR-0413. | US-0116 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0394 | **Pending:** Matrix: for every role, kind, verb and scope the `SubjectAccessReview` result and the real request outcome agree with the catalog; cross-namespace and cluster-scoped checks are included; every denial leaves no created or changed object. | FR-0419, FR-0411, MVP-3 |
+| TC-0395 | **Pending:** Custom actions: `use` on workflow A is allowed and on B denied when `resourceNames` names A; `approve` without `reject` works and the reverse; `reconcile` is separate; a forged `approver` or `decidedBy` is rejected; anonymous callers are denied. | FR-0414, FR-0413, MVP-3 |
+| TC-0396 | **Pending:** Escalation: an access-admin cannot bind a role outside the Kognition set or create a cluster binding; a builder cannot create a ToolGrant, ModelGrant or SecretRef; no role reads Secrets; `kognition-platform-admin` is not cluster-admin. | FR-0419, FR-0413, MVP-3 |
+| TC-0397 | **Pending:** Request-time evaluation: removing a binding or changing a group takes effect on the next request; a `SubjectAccessReview` evaluation error on a webhook-checked action is treated as unavailable and never as allowed. | FR-0419, FR-0414 |
+
+#### US-0117 - Separation-of-Duties Hardening - PLANNED
+
+> As **Gabriela**, I want to be sure a person cannot approve their own request, obtain authority through a controller they lack directly, or grant more than they hold, so that role separation cannot be bypassed.
+
+**Traces:** FR-0413 | MVP-3 (security support; not an MVP gate)
+
+| ID | Task | US |
+|---|---|---|
+| T-0450 | Characterize self-approval first: where a submitter is recorded, determine whether the same identity can decide its own `RuntimeApproval` or vote on an `ApprovalDecision` gate it triggered. Write the failing test, then add an admission check comparing the recorded submitter with the decider if it is not already prevented; document the residual where no submitter is recorded. Traces: FR-0413. | US-0117 |
+| T-0451 | Review each controller-mediated creation path (`Solution`, `MemoryClaim` to `MemoryVolume`, `KnowledgeBaseIndexSchedule` to `KnowledgeBaseIndexRun`, `AgentAutoscaler`, workflow collaboration `AgentJob`s, `EvaluationRun`): record what the controller creates, under whose authority, and the most an author lacking the corresponding create permission can obtain. Add tests and fixes for any path that exceeds the author's authority and record accepted residuals in a review record beside the plan. Traces: FR-0413. | US-0117 |
+| T-0452 | **Blocked on OD-2.** Implement the approved grant-creation rule: admission authorizes the creator with a `SubjectAccessReview` on the grant's target before accepting `ToolGrant`, `ModelGrant`, `MemoryGrant`, `ExternalAgentGrant`, `CrossNamespaceGrant`, `AgentRole` and `AgentRoleBinding`, failing closed on evaluation error, and adjust the `kognition-grant-admin` rules to match. Traces: FR-0413. | US-0117 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0398 | **Pending:** Self-approval: a principal holding both consumer and approver cannot decide its own run or request, and a different approver can; the check covers both approval paths; the residual is documented where no submitter is recorded. | FR-0413, MVP-3 |
+| TC-0399 | **Pending:** Confused deputy: for each reviewed path, a principal without the related permission cannot obtain through the controller any resource, grant or provider spend it could not create directly; denials leave no created object. | FR-0413, MVP-3 |
+| TC-0400 | **Blocked on OD-2:** A grant-admin cannot create a grant whose target it is not authorized for; an evaluation error rejects the grant (fail closed); a permitted grant is accepted and audited. | FR-0413, MVP-3 |
+
+#### US-0118 - Access Control Documentation - PLANNED
+
+> As **Patricia**, I want clear, verified documentation of the roles, the responsibility boundary and the known limitations, so that I can grant access correctly without reading source.
+
+**Traces:** FR-0418, FR-0410 | MVP-3 (security support; not an MVP gate)
+
+| ID | Task | US |
+|---|---|---|
+| T-0453 | Add the reader guide `docs/concepts/access-control.md` and register it with the website (`website/site.mjs`, sidebar, tests): responsibility boundary, role catalog, bundles, neutral binding examples, custom actions, limitations (interactive chat, bearer-only decision endpoints, non-CRD evidence) and the verification command. State only behavior verified by US-0116. Traces: FR-0418, FR-0410. | US-0118 |
+| T-0454 | Update the operator documents: the [security guide](docs/security.md) (Kubernetes access control and the bearer-token boundary of decision endpoints), the Kubernetes and AKS getting-started guides (grant access after install), [Studio](docs/studio.md) and the CLI reference; add content-map and resource-model links. Traces: FR-0418. | US-0118 |
+| T-0455 | Generate the role and class tables used in the documents from the catalog and add a drift test so documentation, chart and catalog cannot diverge. Traces: FR-0418, FR-0411. | US-0118 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0401 | **Pending:** Drift: the role and class tables in documentation equal the catalog output; adding a kind or changing a role without updating the documents fails. | FR-0418, FR-0411 |
+| TC-0402 | **Pending:** The published page set test, `npm --prefix website run check`, the build and the link check pass with the new page; every code link resolves; each behavioral claim maps to a passing TC of US-0116 or US-0117. | FR-0418 |
+
+#### US-0119 - Access Check and Denial Experience - PLANNED
+
+> As **Diego**, I want to see what I am allowed to do and understand why an action was denied, so that I can ask for the right role instead of guessing.
+
+**Traces:** FR-0415, FR-0414 | MVP-3 (security support; not an MVP gate)
+
+| ID | Task | US |
+|---|---|---|
+| T-0456 | Add `kognitionctl auth can-i <verb> <kind>[/<name>] [-n namespace]` and `kognitionctl auth list [-n namespace]` for Kubernetes mode using `SelfSubjectAccessReview` and `SelfSubjectRulesReview`, filtered to `kognition.dev`; in standalone mode return a clear unsupported message. Output is advisory. Traces: FR-0415. | US-0119 |
+| T-0457 | Map Forbidden failures on the interactive chat path (`pods` list, `pods/portforward`, `secrets` get) to a message naming the missing permission, why chat needs it and the documented limitation, without logging tokens. Traces: FR-0415, FR-0416. | US-0119 |
+| T-0458 | P3. Add an advisory access endpoint to local Studio and use it to disable controls the caller cannot use, with an explanation; every action still fails server-side when forged. Traces: FR-0415. | US-0119 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0403 | **Pending:** `auth can-i` and `auth list` against envtest RBAC agree with `SubjectAccessReview` for several principals; standalone mode prints the unsupported message; output contains no tokens. | FR-0415, MVP-3 |
+| TC-0404 | **Pending:** Each missing chat-path permission yields the expected message and exit code, with no secret value in output or logs. | FR-0415, FR-0416 |
+| TC-0405 | **Pending:** Disabled Studio controls match `SelfSubjectRulesReview`; a forged request for a denied action returns the server's 403 and changes nothing; the explanation is keyboard and screen-reader accessible. | FR-0415, MVP-3 |
+
+#### US-0120 - Kind End-to-End Qualification - PLANNED
+
+> As **Gabriela**, I want the roles exercised on a real cluster with real credential types, so that I know they hold outside a test harness.
+
+**Traces:** FR-0419, FR-0412 | MVP-3 (security support; not an MVP gate)
+
+| ID | Task | US |
+|---|---|---|
+| T-0459 | Add a kind end-to-end script and `make`/`make.ps1` target (`e2e-kubernetes-access`) that installs the chart, creates principals with distinct credential types (client certificate and ServiceAccount token), binds representative roles in two namespaces, and runs the allowed and denied matrix including cross-namespace, escalation and revocation cases, retaining an evidence record. Traces: FR-0419, FR-0412. | US-0120 |
+| T-0460 | Run it in the protected-branch or nightly kind tier and after chart upgrade; retain the evidence artifact; document the run in [testing](docs/testing.md). Traces: FR-0419. | US-0120 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0406 | **Pending:** Representative roles enforce allowed and denied operations for both credential types; denied operations start no work. | FR-0419, FR-0412, MVP-3 |
+| TC-0407 | **Pending:** Removing a binding or group membership is denied on the next request; a binding in one namespace never reaches another. | FR-0419 |
+| TC-0408 | **Pending:** `helm upgrade` keeps operator-created bindings and updates the roles in place; a role change appears in `SelfSubjectRulesReview` without recreating bindings; disabling the roles removes only chart-owned roles. | FR-0412, FR-0419 |
+
+#### US-0121 - Aggregated Action API - NOT APPROVED
+
+> As **Diego**, I want to invoke an authorized Agent and, as an approver, decide requests without `secrets` read or `pods/portforward`, so that least-privilege end users can actually use Kognition.
+
+**Traces:** FR-0416, FR-0414 | MVP-3 (security support; not an MVP gate)
+
+| ID | Task | US |
+|---|---|---|
+| T-0461 | Write the ADR and threat model for an aggregated `actions` API: trust of the aggregation proxy, forwarded identity, delegated authorization, availability and failure behavior, and the exact actions (invoke, approve, reject, cancel). Needs its own approval and security review. Traces: FR-0416, FR-0414. | US-0121 |
+| T-0462 | After approval, implement the extension API server with delegated authentication and authorization, the invoke action without `secrets` or `pods/portforward`, approval actions with client-certificate parity, and chart, CLI and Studio integration. Traces: FR-0416, FR-0414. | US-0121 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0409 | **Not scheduled:** An action is allowed or denied identically for bearer-token and client-certificate principals, including `resourceNames` scoping. | FR-0416, FR-0414, MVP-3 |
+| TC-0410 | **Not scheduled:** A consumer without `secrets` or `pods/portforward` invokes an authorized Agent; a wrong Agent or namespace is denied; forged forwarded identity headers are rejected. | FR-0416, MVP-3 |
+
+#### US-0122 - Hosted Studio Per-User Identity - NOT APPROVED
+
+> As **Gabriela**, I want a centrally hosted Studio to act as each signed-in person and never as a shared privileged identity, so that per-user authorization and audit survive the hosted deployment.
+
+**Traces:** FR-0417 | MVP-3 (security support; not an MVP gate)
+
+| ID | Task | US |
+|---|---|---|
+| T-0463 | Write the ADR for hosted Studio identity modes (OD-4): the accepted way a per-user credential reaches the Kubernetes API, session and expiry handling, and why impersonation is excluded or separately approved. Traces: FR-0417. | US-0122 |
+| T-0464 | After approval, implement the chosen mode and the hosted-Studio deployment contract. Traces: FR-0417. | US-0122 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0411 | **Not scheduled:** Requests carry the signed-in user's identity end to end and Kubernetes audit names that user; a missing or expired credential never falls back to a shared identity. | FR-0417, MVP-3 |
+| TC-0412 | **Not scheduled:** User credentials are never persisted or logged, and expiry and refresh behave as documented. | FR-0417, MVP-3 |
+
+#### US-0123 - Auditor Access to Non-CRD Evidence - NOT APPROVED
+
+> As **Gabriela**, I want an auditor to read evidence held in ledger ConfigMaps and the trust query API under the same role model, so that audit access is not an exception.
+
+**Traces:** FR-0415 | MVP-3, MVP-4 (security support)
+
+| ID | Task | US |
+|---|---|---|
+| T-0465 | Design the access path and authorization for evidence stored outside CRDs (OD-5), covering the ConfigMap audit store and the trust decision query API. Traces: FR-0415. | US-0123 |
+| T-0466 | After approval, implement it and extend `kognition-auditor` accordingly. Traces: FR-0415. | US-0123 |
+
+| ID | Test | Traces |
+|---|---|---|
+| TC-0413 | **Not scheduled:** An auditor reads the evidence, a non-auditor is denied, and `data` content stays excluded. | FR-0415, MVP-4 |
+
 ---
 
 ## 4.2 Verified Remaining Implementation Work
@@ -3629,6 +3843,38 @@ design fields alone.
 
 ---
 
+## 4.4 Owner-Directed Work, 2026-11-27: EPIC-0025 Priority and Delivery Plan
+
+The owner directed this order on 2026-11-27: document the access-control design,
+record the backlog, prioritize, then implement test-first as stacked pull
+requests. It does not reorder the Studio milestone or the deferred platform queue
+above; EPIC-0025 touches the chart roles, new tests and documentation, and shares
+only T-0458 with Studio work, which is the lowest priority and waits.
+
+| Rank | Priority | Work | Readiness and dependencies | Completion evidence |
+|---|---|---|---|---|
+| 1 | P1 | US-0114: T-0440..T-0442 | Ready. Design is [ADR-0031](docs/adr/0031-kubernetes-human-access-control.md) and the [plan](docs/development-plans/features/kubernetes-access-control/plan.md). | TC-0388..TC-0390 pass; every kind classified; generator drift check in CI. |
+| 2 | P1 | US-0115: T-0443, T-0445 | After rank 1. Confirm OD-3 (install default) with the maintainer before merging; implement as the proposed default meanwhile. | TC-0391, TC-0392 pass in Helm tests and the regression script. |
+| 3 | P1 | US-0116: T-0446..T-0449 | After rank 2. Verify the envtest API server's authorization mode first. | TC-0394..TC-0397 pass in the `integration` tier against Kubernetes 1.30.x. |
+| 4 | P1 | US-0117: T-0450, T-0451 | Start after T-0446 (needs a real API server). Both begin with a failing characterization test. T-0452 is blocked on OD-2. | TC-0398, TC-0399 pass; the review record lists accepted residuals. |
+| 5 | P1 | US-0118: T-0453..T-0455 | After ranks 2 and 3, so documentation states only verified behavior. Needs Node 24 for website validation. | TC-0401, TC-0402 pass. |
+| 6 | P2 | US-0119: T-0456, T-0457 | After rank 3. | TC-0403, TC-0404 pass. |
+| 7 | P2 | US-0120: T-0459, T-0460 | After rank 2; needs the kind tier. | TC-0406..TC-0408 pass with a retained evidence record. |
+| 8 | P3 | T-0444 aggregation; T-0458 Studio advisory | After their stories' P1/P2 tasks. | TC-0393; TC-0405. |
+| Blocked | P1 | T-0452 and TC-0400 | OD-2 grant anti-escalation needs a maintainer decision. | TC-0400. |
+| Not approved | — | US-0121..US-0123 | Each needs an ADR, approval and security review after stack 1. Not scheduled. | — |
+
+**Decisions needed from the maintainer:** OD-1..OD-5 in ADR-0031. Only OD-2 and
+OD-3 gate stack 1; the others gate the unapproved stories.
+
+**Stacked pull requests:** one per story, each based on the previous branch, so
+each review is bounded and the stack can merge in order. Documentation and
+backlog pull requests precede implementation. No cluster, provider or cloud
+resource is modified by the unit, Helm and envtest tiers; the kind tier creates
+and removes only its own disposable cluster.
+
+---
+
 ## 5. NFR Verification Plan
 
 These are verification mappings, not measured completion claims. Numeric
@@ -3708,6 +3954,7 @@ write-before-effect evidence within its supported scope.
 | FR-0610..FR-0613 | CPI & Integration | US-0065..US-0066 |
 | FR-0308, FR-0311, FR-0403..FR-0404, FR-0700, FR-0702 | Demo Trust Evidence | US-0088..US-0090 |
 | FR-0617..FR-0623 | ExternalAgent (outbound A2A) | US-0100..US-0113 |
+| FR-0410..FR-0419 | Kubernetes Human Access Control | US-0114..US-0123 |
 
 The cross-cutting reference-documentation story US-0091 traces NFR-0001,
 NFR-0004, NFR-0007, NFR-0008, NFR-0010, NFR-0012, NFR-0013, MVP-3, and MVP-4.
@@ -3722,10 +3969,10 @@ criteria.
 
 | Artifact | Count |
 |---|---|
-| Epics | 24 |
-| User Stories | 113 |
-| Tasks (distinct IDs) | 439 across 443 definition rows; historical ID collisions remain |
-| Test Cases (distinct IDs) | 375 across 385 definition rows; historical ID collisions remain |
+| Epics | 25 |
+| User Stories | 123 |
+| Tasks (distinct IDs) | 466 across 470 definition rows; historical ID collisions remain |
+| Test Cases (distinct IDs) | 401 across 411 definition rows; historical ID collisions remain |
 | MVP FRs covered | 97 |
 | NFRs covered | 13 |
 | DIFFs covered | 4 |
