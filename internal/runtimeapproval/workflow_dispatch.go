@@ -196,33 +196,6 @@ func (gate *WorkflowDispatchGate) Dispatch(ctx context.Context, expected api.Run
 	return result, target(ctx)
 }
 
-func (gate *WorkflowDispatchGate) authorizeCommitted(ctx context.Context, expected api.RuntimeApproval, payload json.RawMessage) error {
-	current, err := gate.authorize(ctx, expected, payload)
-	if err != nil {
-		return err
-	}
-	claim, err := workflowApprovalClaim(current, expected)
-	if err != nil {
-		return err
-	}
-	effect, err := WorkflowApprovalEffect(current)
-	if err != nil {
-		return err
-	}
-	activation, err := gate.config.Activations.GetWorkflowActivation(ctx, workflowContextKey(*current.Spec.WorkflowContext))
-	if err != nil {
-		return err
-	}
-	retained, found := activation.Effects[effect.ID]
-	if !found || activation.Mode != store.WorkflowGateActive || activation.Epoch != effect.Epoch ||
-		activation.Spec.BindingDigest != current.Spec.WorkflowContext.BindingDigest || retained.ID != effect.ID ||
-		retained.BindingDigest != effect.BindingDigest || retained.Actor != effect.Actor || retained.Plane != effect.Plane ||
-		retained.Epoch != effect.Epoch || retained.Claim != claim || retained.State != store.WorkflowEffectCommitted {
-		return store.ErrConflict
-	}
-	return gate.checkDeadline(ctx, current)
-}
-
 func (gate *WorkflowDispatchGate) authorize(ctx context.Context, expected api.RuntimeApproval, payload json.RawMessage) (api.RuntimeApproval, error) {
 	if gate == nil || gate.config.Activations == nil || gate.config.Approvals == nil || gate.config.Keys == nil ||
 		gate.config.Clock == nil || gate.config.Eligibility == nil || expected.Spec.WorkflowContext == nil {

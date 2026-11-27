@@ -109,7 +109,7 @@ func (e *Engine) Start(input string) (State, error) {
 		return State{}, fmt.Errorf("%w: input is required", ErrInvalidEvent)
 	}
 	if err := contentErr("input", input); err != nil {
-		return State{}, fmt.Errorf("%w: %v", ErrInvalidEvent, err)
+		return State{}, fmt.Errorf("%w: %w", ErrInvalidEvent, err)
 	}
 	st := State{
 		Version:    StateVersion,

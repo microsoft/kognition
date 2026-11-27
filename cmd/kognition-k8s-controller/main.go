@@ -651,7 +651,7 @@ func boundedTokenFileCredential(tokenFile string) func(context.Context) (string,
 		if err != nil {
 			return "", fmt.Errorf("executor credential file unavailable")
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		raw, err := io.ReadAll(io.LimitReader(file, 65537))
 		if err != nil || len(raw) > 65536 {
 			return "", fmt.Errorf("executor credential exceeds its finite bound or is unreadable")

@@ -80,7 +80,7 @@ func DecodeOperations(raw []byte) ([]Operation, error) {
 	dec.DisallowUnknownFields()
 	var p payload
 	if err := dec.Decode(&p); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidPayload, err)
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%w: trailing data", ErrInvalidPayload)
@@ -130,7 +130,7 @@ func ValidateOperations(ops []Operation) error {
 		}
 		for _, f := range []struct{ name, v string }{{"goal", op.Goal}, {"context", op.Context}, {"result", op.Result}} {
 			if err := contentErr(f.name, f.v); err != nil {
-				return fmt.Errorf("%w: operations[%d] %v", ErrInvalidPayload, i, err)
+				return fmt.Errorf("%w: operations[%d] %w", ErrInvalidPayload, i, err)
 			}
 		}
 	}

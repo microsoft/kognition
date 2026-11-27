@@ -883,7 +883,9 @@ func TestUnknownMemberIsRefused(t *testing.T) {
 func TestLimiter(t *testing.T) {
 	l := NewLimiter()
 	now := time.Unix(1000, 0)
-	if !l.Reserve("k", "a", 1, now, time.Minute) || !l.Reserve("k", "a", 1, now, time.Minute) {
+	first := l.Reserve("k", "a", 1, now, time.Minute)
+	again := l.Reserve("k", "a", 1, now, time.Minute)
+	if !first || !again {
 		t.Fatal("reserving the same dispatch again must be idempotent")
 	}
 	if l.Reserve("k", "b", 1, now, time.Minute) {

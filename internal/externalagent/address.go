@@ -107,7 +107,7 @@ func allZero(values []byte) bool {
 func ResolvePermitted(ctx context.Context, resolver Resolver, host string) ([]netip.Addr, error) {
 	addrs, err := resolver.LookupNetIP(ctx, "ip", host)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrUnresolvable, err)
+		return nil, fmt.Errorf("%w: %w", ErrUnresolvable, err)
 	}
 	if len(addrs) == 0 {
 		return nil, ErrUnresolvable

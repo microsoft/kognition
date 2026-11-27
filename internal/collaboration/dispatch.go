@@ -75,7 +75,7 @@ func DecodeDispatch(raw []byte) (DispatchPayload, error) {
 	dec.DisallowUnknownFields()
 	var payload DispatchPayload
 	if err := dec.Decode(&payload); err != nil {
-		return DispatchPayload{}, fmt.Errorf("%w: %v", ErrInvalidDispatch, err)
+		return DispatchPayload{}, fmt.Errorf("%w: %w", ErrInvalidDispatch, err)
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return DispatchPayload{}, fmt.Errorf("%w: trailing data", ErrInvalidDispatch)

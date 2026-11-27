@@ -532,8 +532,11 @@ func scanRuntimeApprovalTombstone(ctx context.Context, query runtimeApprovalQuer
 	}
 	if actorKind == api.RuntimeApprovalActorExecutor {
 		approval.Spec.ActorKind = actorKind
-		if err := json.Unmarshal(executorAction, &approval.Spec.ExecutorAction); err != nil || approval.Spec.ExecutorAction == nil {
-			return api.RuntimeApproval{}, false, fmt.Errorf("invalid executor tombstone action: %v", err)
+		if err := json.Unmarshal(executorAction, &approval.Spec.ExecutorAction); err != nil {
+			return api.RuntimeApproval{}, false, fmt.Errorf("invalid executor tombstone action: %w", err)
+		}
+		if approval.Spec.ExecutorAction == nil {
+			return api.RuntimeApproval{}, false, errors.New("invalid executor tombstone action: missing")
 		}
 		approval.Spec.TargetRef = approval.Spec.ExecutorAction.Service
 	} else if actorKind != "Agent" {

@@ -227,7 +227,7 @@ func ParseExternalAgentEndpoint(endpoint string) (host string, port int, err err
 	}
 	h, p, splitErr := net.SplitHostPort(endpoint)
 	if splitErr != nil {
-		return "", 0, fmt.Errorf("must be host:port: %v", splitErr)
+		return "", 0, fmt.Errorf("must be host:port: %w", splitErr)
 	}
 	n, convErr := strconv.Atoi(p)
 	if convErr != nil || n < 1 || n > 65535 {

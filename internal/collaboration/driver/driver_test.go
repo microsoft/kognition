@@ -59,8 +59,6 @@ func (s *scripted) Observe(_ context.Context, m collaboration.Message) (Observat
 	return s.behave(m), nil
 }
 
-func ops(o ...collaboration.Operation) []collaboration.Operation { return o }
-
 func done(m collaboration.Message, o ...collaboration.Operation) Observation {
 	return Observation{Settled: true, Actor: m.Recipient, Status: collaboration.ReportCompleted,
 		Operations: o, TokensUsed: 10, TokensKnown: true}

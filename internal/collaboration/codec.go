@@ -35,13 +35,13 @@ func Decode(raw []byte) (State, error) {
 	dec.DisallowUnknownFields()
 	var st State
 	if err := dec.Decode(&st); err != nil {
-		return State{}, fmt.Errorf("%w: %v", ErrInvalidState, err)
+		return State{}, fmt.Errorf("%w: %w", ErrInvalidState, err)
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return State{}, fmt.Errorf("%w: trailing data", ErrInvalidState)
 	}
 	if err := st.validate(); err != nil {
-		return State{}, fmt.Errorf("%w: %v", ErrInvalidState, err)
+		return State{}, fmt.Errorf("%w: %w", ErrInvalidState, err)
 	}
 	return st, nil
 }

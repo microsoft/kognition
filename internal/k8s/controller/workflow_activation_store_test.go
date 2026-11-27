@@ -247,14 +247,14 @@ func TestKubernetesProtectedExecutorRecords(t *testing.T) {
 	evidence.calls = 0
 	reconciler := NewWorkflowRunSubmissionReconciler(shared, storage)
 	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: run.Namespace, Name: run.Name}}
-	if result, err := reconciler.Reconcile(context.Background(), request); err != nil || result.Requeue || result.RequeueAfter != 0 {
+	if result, err := reconciler.Reconcile(context.Background(), request); err != nil || result.Requeue || result.RequeueAfter != 0 { //nolint:staticcheck // Verify controller-runtime 1.x immediate requeue compatibility.
 		t.Fatalf("protected submission reconciliation failed: %+v %v", result, err)
 	}
 	if actual, err := storage.GetWorkflowRunAcceptance(context.Background(), run.Namespace, string(run.UID)); err != nil || !reflect.DeepEqual(actual, acceptance) || evidence.calls != 2 {
 		t.Fatalf("native finalization failed without manufactured submitter context: %+v %v calls=%d", actual, err, evidence.calls)
 	}
 	evidence.err = errors.New("submitter use revoked after acceptance")
-	if result, err := reconciler.Reconcile(context.Background(), request); err != nil || result.Requeue || result.RequeueAfter != 0 || evidence.calls != 2 {
+	if result, err := reconciler.Reconcile(context.Background(), request); err != nil || result.Requeue || result.RequeueAfter != 0 || evidence.calls != 2 { //nolint:staticcheck // Verify controller-runtime 1.x immediate requeue compatibility.
 		t.Fatalf("retained acceptance reused submitter authority: %+v %v calls=%d", result, err, evidence.calls)
 	}
 	unchanged := &k8s.WorkflowRun{}
