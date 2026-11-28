@@ -31,7 +31,9 @@ var expectedClasses = map[string]Class{
 
 	"AgentRole": ClassGrant, "AgentRoleBinding": ClassGrant, "CrossNamespaceGrant": ClassGrant,
 	"ExternalAgentGrant": ClassGrant, "MemoryGrant": ClassGrant, "ModelGrant": ClassGrant,
-	"SecretRef": ClassGrant, "ToolGrant": ClassGrant,
+	"ToolGrant": ClassGrant,
+
+	"SecretRef": ClassCredential,
 
 	"AgentCommunicationPolicy": ClassGovernance, "AgentPolicy": ClassGovernance,
 	"CognitiveAdmissionPolicy": ClassGovernance, "CognitiveLimitRange": ClassGovernance,
@@ -93,7 +95,7 @@ func TestCatalogMatchesPlanClassification(t *testing.T) {
 func TestClassTotalsMatchPlan(t *testing.T) {
 	want := map[Class]int{
 		ClassConfig: 15, ClassKnowledge: 3, ClassSubmit: 3, ClassRuntime: 4, ClassData: 1,
-		ClassGrant: 8, ClassGovernance: 6, ClassDecision: 3, ClassPlatform: 2, ClassClass: 5, ClassSystem: 5,
+		ClassGrant: 7, ClassCredential: 1, ClassGovernance: 6, ClassDecision: 3, ClassPlatform: 2, ClassClass: 5, ClassSystem: 5,
 	}
 	got := map[Class]int{}
 	for _, kind := range Default().Kinds {

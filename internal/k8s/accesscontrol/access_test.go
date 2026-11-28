@@ -341,6 +341,21 @@ func TestAccessAdminDelegationIsBoundedByTheAPIServer(t *testing.T) {
 		})
 	}
 
+	// Native RBAC also lets a principal bind a role whose permissions it already
+	// holds, without the bind verb. resourceNames therefore denies additional
+	// permissions, not every non-Kognition role.
+	if _, err := h.kube.RbacV1().ClusterRoles().Create(ctx, &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-subset"},
+		Rules:      []rbacv1.PolicyRule{{APIGroups: []string{rbacv1.GroupName}, Resources: []string{"rolebindings"}, Verbs: []string{"get", "list"}}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("can bind a role it already holds the permissions of", func(t *testing.T) {
+		if err := bind(nsA, "delegate-subset", clusterRole("test-subset")); err != nil {
+			t.Errorf("native RBAC permits binding a subset role without bind (err=%v)", err)
+		}
+	})
+
 	t.Run("only in its own namespace", func(t *testing.T) {
 		if err := bind(nsB, "delegate-elsewhere", clusterRole("kognition-viewer")); !apierrors.IsForbidden(err) {
 			t.Errorf("access-admin bound in team-b although it was granted only in team-a (err=%v)", err)
