@@ -3685,14 +3685,14 @@ endpoints, non-CRD audit evidence) are stated, not hidden.
 
 | ID | Task | US |
 |---|---|---|
-| T-0456 | Add `kognitionctl auth can-i <verb> <kind>[/<name>] [-n namespace]` and `kognitionctl auth list [-n namespace]` for Kubernetes mode using `SelfSubjectAccessReview` and `SelfSubjectRulesReview`, filtered to `kognition.dev`; in standalone mode return a clear unsupported message. Output is advisory. Traces: FR-0415. | US-0119 |
-| T-0457 | Map Forbidden failures on the interactive chat path (`pods` list, `pods/portforward`, `secrets` get) to a message naming the missing permission, why chat needs it and the documented limitation, without logging tokens. Traces: FR-0415, FR-0416. | US-0119 |
+| T-0456 | **Done.** Added `kognitionctl auth can-i <verb> <kind>[/<name>] [--subresource s] [-n namespace]` and `kognitionctl auth list [-n namespace]` for Kubernetes mode, backed by the new `internal/accesscheck` package (`SelfSubjectAccessReview`, `SelfSubjectRulesReview`, filtered to `kognition.dev`). `can-i` prints yes or no and exits 1 for no; `list` flags wildcard rules and incomplete reviews and notes that cluster-scoped kinds are not covered; standalone mode returns a clear unsupported message. Output is advisory. Written test-first. Traces: FR-0415. | US-0119 |
+| T-0457 | **Done.** Corrected scope: the active chat path creates an `AgentInstance` and polls it (it does not list Pods, port-forward or read Secrets; see plan section 3). Forbidden failures on reading the Agent, creating the AgentInstance and reading it back now produce a message naming the missing permission, why chat needs it, the documented limitation (ADR-0031 OD-1) and the matching `auth can-i` command, keep the original error for `errors.Is`, and fail fast instead of polling for five minutes. No credential is read or printed. Written test-first. Traces: FR-0415, FR-0416. | US-0119 |
 | T-0458 | P3. Add an advisory access endpoint to local Studio and use it to disable controls the caller cannot use, with an explanation; every action still fails server-side when forged. Traces: FR-0415. | US-0119 |
 
 | ID | Test | Traces |
 |---|---|---|
-| TC-0403 | **Pending:** `auth can-i` and `auth list` against envtest RBAC agree with `SubjectAccessReview` for several principals; standalone mode prints the unsupported message; output contains no tokens. | FR-0415, MVP-3 |
-| TC-0404 | **Pending:** Each missing chat-path permission yields the expected message and exit code, with no secret value in output or logs. | FR-0415, FR-0416 |
+| TC-0403 | **Passing:** `auth can-i` and `auth list` agree with `SubjectAccessReview` on a real API server for every shipped role and an unbound principal (every kind and standard verb; the list never claims more than the cluster allows and omits nothing the role allows); custom verbs, subresources and namespace isolation are reported correctly; standalone mode prints the unsupported message; a denied `can-i` exits 1 without an error message; output is derived only from the review and contains no credential. | FR-0415, MVP-3 |
+| TC-0404 | **Passing:** Each forbidden chat step (read the Agent, create the AgentInstance, read it back) yields the expected message naming the permission and the `auth can-i` command, preserves the original error, and fails fast; other failures are not rewritten; no credential appears in output. | FR-0415, FR-0416 |
 | TC-0405 | **Pending:** Disabled Studio controls match `SelfSubjectRulesReview`; a forged request for a denied action returns the server's 403 and changes nothing; the explanation is keyboard and screen-reader accessible. | FR-0415, MVP-3 |
 
 #### US-0120 - Kind End-to-End Qualification - PLANNED
@@ -3872,7 +3872,7 @@ only T-0458 with Studio work, which is the lowest priority and waits.
 | 3 | P1 | US-0116: T-0446..T-0449 | Done in the third implementation PR except the forged-identity admission proof, which moves to the kind tier (T-0459). The envtest API server enforces RBAC. | TC-0394, TC-0396, TC-0397 pass and TC-0395 passes except the forgery part, in the `integration` tier against Kubernetes 1.30.x. |
 | 4 | P1 | US-0117: T-0450, T-0451, T-0467, T-0469, T-0470, T-0472, T-0473 (all done) | T-0471 is optional (P3). T-0452 and T-0468 are blocked on the OD-2 and OD-1 decisions (see the ADR review section). | TC-0398 (partial, residual recorded), TC-0399, TC-0414, TC-0416, TC-0417, TC-0419 and TC-0420 pass; the review record lists accepted residuals. |
 | 5 | P1 | US-0118: T-0453..T-0455 | After ranks 2 and 3, so documentation states only verified behavior. Needs Node 24 for website validation. | TC-0401, TC-0402 pass. |
-| 6 | P2 | US-0119: T-0456, T-0457 | After rank 3. | TC-0403, TC-0404 pass. |
+| 6 | P2 | US-0119: T-0456, T-0457 (done) | T-0458 (Studio advisory) remains at P3. | TC-0403, TC-0404 pass. |
 | 7 | P2 | US-0120: T-0459, T-0460 | After rank 2; needs the kind tier. | TC-0406..TC-0408 pass with a retained evidence record. |
 | 8 | P3 | T-0444 aggregation; T-0458 Studio advisory | After their stories' P1/P2 tasks. | TC-0393; TC-0405. |
 | Blocked | P1 | T-0452 and TC-0400 | OD-2 grant anti-escalation needs a maintainer decision. | TC-0400. |

@@ -5,16 +5,87 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
+
+func TestInvokeInteractiveAgentK8sExplainsAForbiddenChatStep(t *testing.T) {
+	forbid := func(resource string) error {
+		return apierrors.NewForbidden(schema.GroupResource{Group: "kognition.dev", Resource: resource}, "researcher", errors.New(`User "alice" cannot do that`))
+	}
+	tests := []struct {
+		name      string
+		denyGet   string
+		denyMake  bool
+		wantParts []string
+	}{
+		{name: "reading the Agent", denyGet: "agents", wantParts: []string{"get agents", "team-a", "auth can-i get agents"}},
+		{name: "creating the AgentInstance", denyMake: true, wantParts: []string{"create agentinstances", "team-a", "auth can-i create agentinstances", "ADR-0031", "AgentInstance"}},
+		{name: "reading the AgentInstance back", denyGet: "agentinstances", wantParts: []string{"get agentinstances", "team-a", "auth can-i get agentinstances"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+			previousClient := k8sDynClient
+			k8sDynClient = client
+			t.Cleanup(func() { k8sDynClient = previousClient })
+			client.PrependReactor("get", "agents", func(k8stesting.Action) (bool, runtime.Object, error) {
+				if test.denyGet == "agents" {
+					return true, nil, forbid("agents")
+				}
+				return true, &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kognition.dev/v1alpha1", "kind": "Agent", "metadata": map[string]any{"name": "researcher", "namespace": "team-a"}}}, nil
+			})
+			client.PrependReactor("create", "agentinstances", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				if test.denyMake {
+					return true, nil, forbid("agentinstances")
+				}
+				return true, action.(k8stesting.CreateAction).GetObject(), nil
+			})
+			client.PrependReactor("get", "agentinstances", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, forbid("agentinstances")
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := invokeInteractiveAgentK8s(ctx, "team-a", "researcher", "hello", "", "cli")
+			if err == nil {
+				t.Fatal("a forbidden chat step succeeded")
+			}
+			for _, part := range test.wantParts {
+				if !strings.Contains(err.Error(), part) {
+					t.Errorf("error does not mention %q:\n%v", part, err)
+				}
+			}
+			if !apierrors.IsForbidden(err) {
+				t.Errorf("the original Forbidden error was lost: %v", err)
+			}
+		})
+	}
+
+	t.Run("other failures are not rewritten", func(t *testing.T) {
+		client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+		previousClient := k8sDynClient
+		k8sDynClient = client
+		t.Cleanup(func() { k8sDynClient = previousClient })
+		client.PrependReactor("get", "agents", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("connection refused")
+		})
+		_, err := invokeInteractiveAgentK8s(context.Background(), "team-a", "researcher", "hello", "", "cli")
+		if err == nil || strings.Contains(err.Error(), "auth can-i") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
 
 func TestInvokeInteractiveAgentK8sCreatesCapabilityAwareInstance(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
