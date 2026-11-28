@@ -443,6 +443,11 @@ func runControllerWithManager(
 		return err
 	}
 
+	solutionTarget, err := solutionTargetAuthorizationHook(mgr.GetConfig(), st)
+	if err != nil {
+		return err
+	}
+	assembly.validating = append(assembly.validating, solutionTarget)
 	chain := admission.NewChain(assembly.mutating, assembly.validating)
 	bindingOptions, err := workflowBindingWebhookOptionsFromEnv(controllerNamespace, mgr.GetAPIReader())
 	if err != nil {
@@ -536,6 +541,11 @@ func runResourceWebhooksWithManager(options controllerOptions, logger *zap.Logge
 	}
 	mutating, validating := admission.ProductionHooksWithExecutionAuthority(st, opa.NewEngine(), runtimeApprovalDecisionAuthorityFromEnv(), runtimeApprovalExecutionWritersFromEnv(), runtimeApprovalAdmissionUsernamesFromEnv()...)
 	validating = append(validating, cognamespace.NewProductionCrossNamespaceHook(st))
+	solutionTarget, err := solutionTargetAuthorizationHook(mgr.GetConfig(), st)
+	if err != nil {
+		return err
+	}
+	validating = append(validating, solutionTarget)
 	externalOn, err := externalAgentsEnabled(os.Getenv)
 	if err != nil {
 		return err

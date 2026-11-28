@@ -36,7 +36,7 @@ directly.
 | `AgentAutoscaler` | Changes `spec.replicas` of the same-namespace `Agent` it names ([agent_autoscaler_reconciler.go](../../../../internal/controller/agent_autoscaler_reconciler.go)). | **Accepted.** `AgentAutoscaler` and `Agent` are both `config`, so no shipped role can scale an Agent it could not already edit. A custom role that grants the autoscaler without the Agent would gain scaling authority; operators must not split them. |
 | `Evaluation` and `EvaluationRun` | `EvaluationRun`, then target and judge `AgentJob`s in the same namespace ([evaluation_reconciler.go](../../../../internal/controller/evaluation_reconciler.go)). | **Accepted named exception.** Evaluating is part of authoring, so the builder holds `evaluationruns` create. The spend is the evaluation's own and is bounded by its dataset. |
 | Workflow collaboration steps | `AgentJob`s for the members the workflow admits, limited by `allowedInteractions` and communication policy ([transport.go](../../../../internal/collaboration/jobtransport/transport.go)). | **By design.** `use` on a Workflow authorizes running its steps. Execution is under the controller, not the submitter, so `invoke` on each member is not checked for the submitter. The workflow author's definition is the boundary. Recorded so operators treat editing a Workflow as granting its reachable Agents. |
-| `Solution` with a `target` | `AgentJob` for an Agent or AgentService, or `WorkflowRun` for a Workflow, chosen by the author ([solution_reconciler.go](../../../../internal/controller/solution_reconciler.go), `compileTargetExecution`). The run starts with no `create` check on `agentjobs` or `workflowruns` and no `use` or `invoke` check. | **Finding (T-0469).** A builder, who cannot submit work, can start any Agent or Workflow in the namespace through a Solution. The author selects the target, so this exceeds the author's authority. |
+| `Solution` with a `target` | `AgentJob` for an Agent or AgentService, or `WorkflowRun` for a Workflow, chosen by the author ([solution_reconciler.go](../../../../internal/controller/solution_reconciler.go), `compileTargetExecution`). Before T-0469 the run started with no `create` check on `agentjobs` or `workflowruns` and no `use` or `invoke` check. | **Finding, fixed (T-0469).** A builder, who cannot submit work, could start any Agent or Workflow in the namespace through a Solution. Admission now authorizes the requesting user, see below. |
 | `Solution` generated resources | `Agent`, `Tool`, `Workflow`, `MemoryClaim`, and an `AgentPolicy` fixed to `enforce: true` over the Solution's own agents. | **Bounded provisioning.** The first four are `config` the builder may create. The policy only restricts. |
 
 Not adopted from the survey: it called `AgentAutoscaler` an escalation, but both kinds
@@ -46,3 +46,38 @@ meaning of `use`.
 
 Open, no change here: the `WorkflowRun` the Solution controller creates carries no
 protected-submission annotation, so it is also outside the `use` check (G7, T-0467).
+That is now covered for Solution targets by the admission check below.
+
+### T-0469 Solution target authorization
+
+When a `Solution` sets `spec.target` the validating webhook asks the cluster, for
+the requesting user, whether that user could start the target directly:
+
+| Target | Required |
+| --- | --- |
+| `Agent` | `create` on `agentjobs`, verb `invoke` on that Agent |
+| `AgentService` | `create` on `agentjobs`, verb `invoke` on the Agent the service names (the service must exist) |
+| `Workflow` | `create` on `workflowruns`, verb `use` on that Workflow |
+
+The check runs on create and on any update that changes the target or goal, so the
+controller's own metadata updates are not re-reviewed. It fails closed: an
+unavailable or erroring `SubjectAccessReview`, an anonymous user, an unresolvable
+AgentService and an unsupported kind are all denied. `resourceNames` scoping applies.
+
+Consequences for operators:
+
+- A user, group or GitOps service account that applies a `Solution` with a target
+  needs the rights above. `kognition-builder` alone is not enough; add
+  `kognition-consumer` (or equivalent) for the same subject.
+- The intent gateway creates Solutions for its own authenticated callers. Its
+  service account is an operator-bound identity and is exempt through
+  `KOGNITION_SOLUTION_TARGET_EXEMPT_SERVICE_ACCOUNTS`, set by the chart. Its callers'
+  authority is the gateway's own authentication, not this check.
+- `Solution` is now routed to the validating webhook, so the existing Solution
+  spec validator also runs in Kubernetes mode.
+
+Evidence: unit tests for the hook and the reviewer, a handler test, a chart test,
+and a real-API-server test (`TestSolutionTargetIsAuthorizedAgainstRealRBAC`) in which
+the shipped builder is denied, the shipped consumer is allowed in its own namespace
+and denied in another, and `resourceNames` limits the workflow. The kind tier
+(T-0459) exercises the deployed webhook.

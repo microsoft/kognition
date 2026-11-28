@@ -666,6 +666,12 @@ func (h *Handler) convertToInternal(kind string, raw []byte) (json.RawMessage, e
 		}
 		internal := convert.WorkflowFromK8s(&obj)
 		return json.Marshal(internal)
+	case "Solution":
+		var obj k8s.Solution
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			return nil, fmt.Errorf("unmarshal %s: %w", kind, err)
+		}
+		return json.Marshal(convert.SolutionFromK8s(&obj))
 	case "WorkflowRun":
 		var obj k8s.WorkflowRun
 		if err := json.Unmarshal(raw, &obj); err != nil {
@@ -1016,6 +1022,19 @@ func (h *Handler) convertToK8s(kind string, mutatedJSON json.RawMessage, origina
 			return nil, err
 		}
 		patched := convert.WorkflowToK8s(internal)
+		patched.TypeMeta = obj.TypeMeta
+		patched.ObjectMeta = mergeMutatedMeta(obj.ObjectMeta, patched.ObjectMeta)
+		return json.Marshal(patched)
+	case "Solution":
+		var obj k8s.Solution
+		if err := json.Unmarshal(originalRaw, &obj); err != nil {
+			return nil, err
+		}
+		internal := convert.SolutionFromK8s(&obj)
+		if err := json.Unmarshal(mutatedJSON, &internal); err != nil {
+			return nil, err
+		}
+		patched := convert.SolutionToK8s(internal)
 		patched.TypeMeta = obj.TypeMeta
 		patched.ObjectMeta = mergeMutatedMeta(obj.ObjectMeta, patched.ObjectMeta)
 		return json.Marshal(patched)

@@ -65,6 +65,7 @@ webhooks:
           - knowledgebaseclaims
           - knowledgebaseindexruns
           - knowledgebaseindexschedules
+          - solutions
         scope: Namespaced
       - apiGroups: ["kognition.dev"]
         apiVersions: ["v1alpha1"]

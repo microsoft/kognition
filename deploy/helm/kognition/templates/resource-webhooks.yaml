@@ -164,6 +164,9 @@ spec:
             {{- end }}
             - name: KOGNITION_RUNTIME_APPROVAL_WRITER_SERVICE_ACCOUNTS
               value: {{ list $name (ternary (printf "%s-tool-gateway" (include "kognition.fullname" .)) "" .Values.toolGateway.enabled) (ternary (printf "%s-memory-policy-gateway" (include "kognition.fullname" .)) "" (and .Values.memoryService.enabled .Values.memoryPolicyGateway.enabled)) (ternary (printf "%s-agent-communication-gateway" (include "kognition.fullname" .)) "" .Values.agentCommunicationGateway.enabled) | compact | join "," | quote }}
+            - name: KOGNITION_SOLUTION_TARGET_EXEMPT_SERVICE_ACCOUNTS
+              {{- $chartValues := fromYaml (toYaml .Values) }}
+              value: {{ ternary (default (printf "%s-intent-gateway" (include "kognition.fullname" .)) (dig "intentGateway" "serviceAccount" "name" "" $chartValues)) "" (dig "intentGateway" "enabled" true $chartValues) | quote }}
             - name: KOGNITION_RUNTIME_APPROVAL_MAXIMUM_CLOCK_SKEW
               value: {{ .Values.runtimeAuth.maximumClockSkew | quote }}
             - name: KOGNITION_RUNTIME_APPROVAL_BINDING_KEYS_JSON
