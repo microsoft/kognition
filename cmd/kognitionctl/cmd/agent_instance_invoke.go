@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 type interactiveAgentResult struct {
@@ -22,7 +24,7 @@ type interactiveAgentResult struct {
 func invokeInteractiveAgentK8s(ctx context.Context, namespace, agentName, message, conversationID, createdBy string) (interactiveAgentResult, error) {
 	revision, err := interactiveAgentRevision(namespace, agentName)
 	if err != nil {
-		return interactiveAgentResult{}, err
+		return interactiveAgentResult{}, explainChatForbidden(err, namespace, "get", "agents", "read the Agent it will talk to")
 	}
 	instanceName := interactiveAgentInstanceName(agentName, createdBy)
 	sessionContext := map[string]any{"input": message}
@@ -47,7 +49,7 @@ func invokeInteractiveAgentK8s(ctx context.Context, namespace, agentName, messag
 		},
 	}
 	if _, err := k8sCreate(namespace, obj); err != nil {
-		return interactiveAgentResult{}, fmt.Errorf("create AgentInstance: %w", err)
+		return interactiveAgentResult{}, explainChatForbidden(fmt.Errorf("create AgentInstance: %w", err), namespace, "create", "agentinstances", "start the conversation")
 	}
 
 	deadline := time.Now().Add(5 * time.Minute)
@@ -60,6 +62,9 @@ func invokeInteractiveAgentK8s(ctx context.Context, namespace, agentName, messag
 
 		raw, err := k8sGet(namespace, "agentinstances", instanceName)
 		if err != nil {
+			if apierrors.IsForbidden(err) {
+				return interactiveAgentResult{}, explainChatForbidden(fmt.Errorf("get AgentInstance status: %w", err), namespace, "get", "agentinstances", "read the answer")
+			}
 			if time.Now().After(deadline) {
 				return interactiveAgentResult{}, fmt.Errorf("get AgentInstance status: %w", err)
 			}
@@ -117,6 +122,20 @@ func invokeInteractiveAgentK8s(ctx context.Context, namespace, agentName, messag
 			return interactiveAgentResult{}, fmt.Errorf("timed out waiting for agent response")
 		}
 	}
+}
+
+// explainChatForbidden turns a Forbidden failure on the interactive chat path into
+// a message that names the missing permission, why chat needs it and the documented
+// limitation. The original error is kept for errors.Is and apierrors checks. Other
+// errors are returned unchanged. No credential is read or printed.
+func explainChatForbidden(err error, namespace, verb, resource, purpose string) error {
+	if err == nil || !apierrors.IsForbidden(err) {
+		return err
+	}
+	return fmt.Errorf("you are not allowed to %s %s in namespace %q, which chat needs to %s. "+
+		"Chat creates an AgentInstance for the Agent and polls it, and no shipped Kognition role grants that yet (ADR-0031, open decision OD-1); "+
+		"ask your platform administrator for access. Check with: kognitionctl auth can-i %s %s -n %s: %w",
+		verb, resource, namespace, purpose, verb, resource, namespace, err)
 }
 
 func interactiveAgentRevision(namespace, agentName string) (int64, error) {

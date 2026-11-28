@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,7 +18,10 @@ func main() {
 
 func run(execute func() error, stderr io.Writer) int {
 	if err := execute(); err != nil {
-		_, _ = fmt.Fprintln(stderr, err)
+		// A denied `auth can-i` has already printed its answer.
+		if !errors.Is(err, cmd.ErrAccessDenied) {
+			_, _ = fmt.Fprintln(stderr, err)
+		}
 		return 1
 	}
 	return 0
