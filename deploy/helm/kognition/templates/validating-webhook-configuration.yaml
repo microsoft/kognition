@@ -36,6 +36,7 @@ webhooks:
         resources:
           - agents
           - agentinstances
+          - agentjobs
           - agentpolicies
           - cognitiveadmissionpolicies
           - cognitivequotas

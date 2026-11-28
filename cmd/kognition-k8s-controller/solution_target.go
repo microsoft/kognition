@@ -16,15 +16,31 @@ import (
 	"github.com/kognition-ai/kognition/internal/store"
 )
 
-// solutionTargetAuthorizationHook authorizes the author of a Solution target
-// with the cluster's authorizers (T-0469).
-func solutionTargetAuthorizationHook(config *rest.Config, st store.Store) (admission.ValidatingHook, error) {
+// submissionAuthorizationHooks authorize the author of anything the controller
+// later starts on their behalf: a Solution target (T-0469) and an AgentJob
+// (T-0470).
+func submissionAuthorizationHooks(config *rest.Config, st store.Store) ([]admission.ValidatingHook, error) {
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, fmt.Errorf("configure Solution target access reviews: %w", err)
+		return nil, fmt.Errorf("configure submission access reviews: %w", err)
 	}
 	reviewer := webhook.NewSubjectAccessReviewer(clientset.AuthorizationV1().SubjectAccessReviews())
-	return admission.NewSolutionTargetAuthorizer(reviewer, st, solutionTargetExemptUsernamesFromEnv()...), nil
+	return []admission.ValidatingHook{
+		admission.NewSolutionTargetAuthorizer(reviewer, st, solutionTargetExemptUsernamesFromEnv()...),
+		admission.NewAgentJobAuthorizer(reviewer, agentJobExemptUsernamesFromEnv()...),
+	}, nil
+}
+
+// agentJobExemptUsernamesFromEnv is the controller service account, the only
+// platform identity that creates AgentJobs (for Solutions, Workflows and
+// Evaluations, after their own authorization).
+func agentJobExemptUsernamesFromEnv() []string {
+	namespace := strings.TrimSpace(os.Getenv("KOGNITION_CONTROLLER_NAMESPACE"))
+	account := strings.TrimSpace(os.Getenv("KOGNITION_CONTROLLER_SERVICE_ACCOUNT"))
+	if namespace == "" || account == "" || strings.ContainsAny(account, ":/") {
+		return nil
+	}
+	return []string{fmt.Sprintf("system:serviceaccount:%s:%s", namespace, account)}
 }
 
 // solutionTargetExemptUsernamesFromEnv names the operator-bound service accounts

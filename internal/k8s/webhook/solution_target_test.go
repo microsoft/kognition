@@ -70,6 +70,43 @@ func TestSubjectAccessReviewerNeverTurnsUncertaintyIntoAnAllow(t *testing.T) {
 	}
 }
 
+func TestHandleDeniesAnAgentJobTheCallerMayNotRun(t *testing.T) {
+	job := func(username string) admission.Request {
+		raw, err := json.Marshal(map[string]any{
+			"apiVersion": "kognition.dev/v1alpha1", "kind": "AgentJob",
+			"metadata": map[string]any{"name": "job", "namespace": "team-a"},
+			"spec":     map[string]any{"agentRef": map[string]any{"name": "analyst"}, "input": "go"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+			UID: "job", Operation: admissionv1.Create, Namespace: "team-a", Name: "job",
+			Kind:     metav1.GroupVersionKind{Group: "kognition.dev", Version: "v1alpha1", Kind: "AgentJob"},
+			Object:   runtime.RawExtension{Raw: raw},
+			UserInfo: authenticationv1.UserInfo{Username: username, Groups: []string{"consumers"}},
+		}}
+	}
+	chain := func(reviews *recordedAccessReview) *intadmission.Chain {
+		return intadmission.NewChain(nil, []intadmission.ValidatingHook{
+			intadmission.NewAgentJobAuthorizer(NewSubjectAccessReviewer(reviews)),
+		})
+	}
+
+	denying := &recordedAccessReview{response: &authorizationv1.SubjectAccessReview{}}
+	if response := NewHandler(chain(denying), testScheme(), testLogger()).Handle(context.Background(), job("consumer")); response.Allowed {
+		t.Fatal("an AgentJob for an Agent the caller may not invoke was admitted")
+	}
+	if len(denying.specs) == 0 || denying.specs[0].User != "consumer" || denying.specs[0].ResourceAttributes.Verb != "invoke" || denying.specs[0].ResourceAttributes.Name != "analyst" {
+		t.Fatalf("the caller was not reviewed for invoke on the Agent: %+v", denying.specs)
+	}
+
+	allowing := &recordedAccessReview{response: &authorizationv1.SubjectAccessReview{Status: authorizationv1.SubjectAccessReviewStatus{Allowed: true}}}
+	if response := NewHandler(chain(allowing), testScheme(), testLogger()).Handle(context.Background(), job("consumer")); !response.Allowed {
+		t.Fatalf("an authorized AgentJob was denied: %v", response.Result)
+	}
+}
+
 func TestHandleDeniesASolutionTargetTheCallerMayNotStart(t *testing.T) {
 	solution := func(username string) admission.Request {
 		raw, err := json.Marshal(map[string]any{

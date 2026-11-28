@@ -38,6 +38,7 @@ directly.
 | Workflow collaboration steps | `AgentJob`s for the members the workflow admits, limited by `allowedInteractions` and communication policy ([transport.go](../../../../internal/collaboration/jobtransport/transport.go)). | **By design.** `use` on a Workflow authorizes running its steps. Execution is under the controller, not the submitter, so `invoke` on each member is not checked for the submitter. The workflow author's definition is the boundary. Recorded so operators treat editing a Workflow as granting its reachable Agents. |
 | `Solution` with a `target` | `AgentJob` for an Agent or AgentService, or `WorkflowRun` for a Workflow, chosen by the author ([solution_reconciler.go](../../../../internal/controller/solution_reconciler.go), `compileTargetExecution`). Before T-0469 the run started with no `create` check on `agentjobs` or `workflowruns` and no `use` or `invoke` check. | **Finding, fixed (T-0469).** A builder, who cannot submit work, could start any Agent or Workflow in the namespace through a Solution. Admission now authorizes the requesting user, see below. |
 | `Solution` generated resources | `Agent`, `Tool`, `Workflow`, `MemoryClaim`, and an `AgentPolicy` fixed to `enforce: true` over the Solution's own agents. | **Bounded provisioning.** The first four are `config` the builder may create. The policy only restricts. |
+| `AgentJob` (found by the second review round on #54) | The AgentJob reconciler copies `spec.agentSpec` into a new `Agent` and turns `spec.agentRef` into an `AgentInstance` ([agent_job_reconciler.go](../../../../internal/controller/agent_job_reconciler.go), `ensureInlineAgent`, `createInstance`), with no check on the submitter. | **Finding, fixed (T-0470).** A consumer, who holds `create` on `agentjobs`, could author an Agent through an inline spec and run any Agent regardless of a scoped `invoke` grant. Admission now authorizes the requesting user, see below. |
 
 Not adopted from the survey: it called `AgentAutoscaler` an escalation, but both kinds
 are `config` and the builder holds both, so there is no escalation in the shipped
@@ -81,3 +82,46 @@ and a real-API-server test (`TestSolutionTargetIsAuthorizedAgainstRealRBAC`) in 
 the shipped builder is denied, the shipped consumer is allowed in its own namespace
 and denied in another, and `resourceNames` limits the workflow. The kind tier
 (T-0459) exercises the deployed webhook.
+
+### T-0470 AgentJob submission authorization
+
+The validating webhook now asks the cluster, for the requesting user, whether that
+user could do directly what the AgentJob will do on their behalf:
+
+| AgentJob field | Required |
+| --- | --- |
+| `spec.agentRef` | verb `invoke` on that Agent |
+| `spec.agentSpec` (inline) | `create` on `agents` |
+
+Both are required when both are set. The check runs on create and on updates that
+change the agent, revision, inline spec or input, and fails closed like the Solution
+check. The only exemption is the controller service account, which creates jobs for
+Solutions, Workflows and Evaluations after their own checks; it is derived from
+`KOGNITION_CONTROLLER_SERVICE_ACCOUNT`, the only platform identity with `create` on
+`agentjobs`.
+
+Consequences for operators:
+
+- `kognition-consumer` can run any Agent it may `invoke` (unscoped by default; scope
+  it with `resourceNames` on a custom role) but cannot define one. A subject that
+  submits inline jobs needs `create` on `agents`, for example `kognition-builder`.
+- `kognition-builder` alone cannot run an Agent through a job, because it holds no
+  `invoke`.
+- Workflow collaboration jobs and Evaluation jobs are created by the controller and
+  keep their own boundaries (the Workflow definition and the named Evaluation
+  exception above).
+
+Evidence: unit tests for the hook, a handler test, the chart test, and
+`TestAgentJobIsAuthorizedAgainstRealRBAC` on a real API server (consumer allowed to
+run, denied to author, denied across namespaces; builder denied to run, allowed to
+define; a scoped `invoke` grant limits the Agent).
+
+### G10 access-admin revocation authority
+
+`TestAccessAdminRevocationAuthorityIsBoundedToRevocation` characterizes it on a real
+API server. For a RoleBinding to a role outside the allowlist, access-admin cannot
+create it, cannot add itself to it by patching, and cannot restore it; it can delete
+it, and cannot delete in another namespace. So the exposure is revocation and
+availability of bindings in its own namespace, not escalation. The plan documents it
+as namespace-wide revocation authority. T-0471 tracks an optional admission policy
+that denies deleting chart-owned bindings.

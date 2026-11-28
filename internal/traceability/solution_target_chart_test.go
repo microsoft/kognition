@@ -11,8 +11,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 )
 
-func TestSolutionTargetAdmissionChart(test *testing.T) {
-	validated := func(extra ...string) bool {
+// submissionResources reach the validating webhook so the caller's authority is
+// checked before the controller starts work on their behalf (T-0469, T-0470).
+func TestSubmissionAuthorizationAdmissionChart(test *testing.T) {
+	validated := func(resource string, extra ...string) bool {
 		for _, document := range renderControllerChart(test, extra...) {
 			var configuration admissionregistrationv1.ValidatingWebhookConfiguration
 			if err := json.Unmarshal(document.Raw, &configuration); err != nil {
@@ -31,8 +33,8 @@ func TestSolutionTargetAdmissionChart(test *testing.T) {
 						hasCreate = hasCreate || operation == admissionregistrationv1.Create
 						hasUpdate = hasUpdate || operation == admissionregistrationv1.Update
 					}
-					for _, resource := range rule.Resources {
-						if resource == "solutions" && hasCreate && hasUpdate {
+					for _, name := range rule.Resources {
+						if name == resource && hasCreate && hasUpdate {
 							return true
 						}
 					}
@@ -59,8 +61,10 @@ func TestSolutionTargetAdmissionChart(test *testing.T) {
 		return "", false
 	}
 
-	if !validated() {
-		test.Fatal("Solution create and update never reach the validating webhook, so a Solution target is not authorized")
+	for _, resource := range []string{"solutions", "agentjobs"} {
+		if !validated(resource) {
+			test.Fatalf("%s create and update never reach the validating webhook, so the submitter is not authorized", resource)
+		}
 	}
 	if value, found := exempt(); !found || value != "security-test-kognition-intent-gateway" {
 		test.Fatalf("intent gateway exemption = %q (present %v), want the chart's intent gateway service account", value, found)
