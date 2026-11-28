@@ -11,6 +11,7 @@ spec:
   budgets:
     maxDuration: 5m
     maxTokens: 8192
+    maxContentBytes: 131072
   steps:
     - name: review-request
       type: collaboration

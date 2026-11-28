@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 )
 
@@ -25,9 +26,6 @@ const (
 
 	// MaxOperations bounds the operations in one payload.
 	MaxOperations = 16
-
-	// MaxPayloadBytes bounds an encoded payload before parsing.
-	MaxPayloadBytes = 64 << 10
 )
 
 // OperationKind is a coordination operation.
@@ -64,16 +62,19 @@ type payload struct {
 var ErrInvalidPayload = errors.New("collaboration: invalid operation payload")
 
 // EncodeOperations renders a payload for a member adapter to emit.
-func EncodeOperations(ops []Operation) ([]byte, error) {
-	if err := ValidateOperations(ops); err != nil {
+func EncodeOperations(ops []Operation, maxContentBytes int64) ([]byte, error) {
+	if err := ValidateOperations(ops, maxContentBytes); err != nil {
 		return nil, err
 	}
 	return json.Marshal(payload{SchemaVersion: SchemaVersion, Operations: ops})
 }
 
 // DecodeOperations strictly parses and validates a coordination payload.
-func DecodeOperations(raw []byte) ([]Operation, error) {
-	if len(raw) == 0 || len(raw) > MaxPayloadBytes {
+func DecodeOperations(raw []byte, maxContentBytes int64) ([]Operation, error) {
+	if maxContentBytes < 1 {
+		return nil, fmt.Errorf("%w: limits.maxContentBytes must be positive", ErrInvalidPayload)
+	}
+	if len(raw) == 0 || int64(len(raw)) > operationPayloadBytes(maxContentBytes) {
 		return nil, fmt.Errorf("%w: size", ErrInvalidPayload)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
@@ -88,14 +89,17 @@ func DecodeOperations(raw []byte) ([]Operation, error) {
 	if p.SchemaVersion != SchemaVersion {
 		return nil, fmt.Errorf("%w: unsupported schemaVersion %q", ErrInvalidPayload, p.SchemaVersion)
 	}
-	if err := ValidateOperations(p.Operations); err != nil {
+	if err := ValidateOperations(p.Operations, maxContentBytes); err != nil {
 		return nil, err
 	}
 	return p.Operations, nil
 }
 
 // ValidateOperations checks the structural rules that do not need ledger state.
-func ValidateOperations(ops []Operation) error {
+func ValidateOperations(ops []Operation, maxContentBytes int64) error {
+	if maxContentBytes < 1 {
+		return fmt.Errorf("%w: limits.maxContentBytes must be positive", ErrInvalidPayload)
+	}
 	if len(ops) == 0 || len(ops) > MaxOperations {
 		return fmt.Errorf("%w: operation count", ErrInvalidPayload)
 	}
@@ -129,10 +133,21 @@ func ValidateOperations(ops []Operation) error {
 			return fmt.Errorf("%w: operations[%d] operationId is not allowed", ErrInvalidPayload, i)
 		}
 		for _, f := range []struct{ name, v string }{{"goal", op.Goal}, {"context", op.Context}, {"result", op.Result}} {
-			if err := contentErr(f.name, f.v); err != nil {
+			if err := contentErr(f.name, f.v, maxContentBytes); err != nil {
 				return fmt.Errorf("%w: operations[%d] %w", ErrInvalidPayload, i, err)
 			}
 		}
 	}
 	return nil
+}
+
+func operationPayloadBytes(maxContentBytes int64) int64 {
+	// JSON may encode one content byte as six bytes (\u0000). Reserve metadata
+	// space for the schema, aliases and operation IDs without imposing another content cap.
+	const expansion = 6 * MaxOperations
+	const metadata = 4096
+	if maxContentBytes > (math.MaxInt64-metadata)/expansion {
+		return math.MaxInt64
+	}
+	return maxContentBytes*expansion + metadata
 }

@@ -124,11 +124,11 @@ func interpret(msg collaboration.Message, actor string, task *a2a.Task) driver.O
 }
 
 func completed(msg collaboration.Message, obs driver.Observation, task *a2a.Task) driver.Observation {
-	text, ops, err := artifacts(task)
+	obs.TokensUsed, obs.TokensKnown = usage(task, msg.Allowance)
+	text, ops, err := artifacts(task, msg.MaxContentBytes)
 	if msg.Kind == collaboration.DispatchPrepare {
 		obs.Status = collaboration.ReportCompleted
 		obs.Accepted = err == nil && ops == nil && strings.HasPrefix(strings.ToUpper(strings.TrimSpace(text)), "ACCEPT")
-		obs.TokensUsed, obs.TokensKnown = usage(task, msg.Allowance)
 		return obs
 	}
 	if err != nil {
@@ -139,11 +139,13 @@ func completed(msg collaboration.Message, obs driver.Observation, task *a2a.Task
 		ops, err = plain(msg, text)
 		if err != nil {
 			obs.Status, obs.Failure = collaboration.ReportFailed, FailureNoResult
+			if errors.Is(err, collaboration.ErrInvalidPayload) {
+				obs.Failure = FailureInvalidPayload + ": " + err.Error()
+			}
 			return obs
 		}
 	}
 	obs.Status, obs.Operations = collaboration.ReportCompleted, ops
-	obs.TokensUsed, obs.TokensKnown = usage(task, msg.Allowance)
 	return obs
 }
 
@@ -169,7 +171,7 @@ func usage(task *a2a.Task, allowance int64) (int64, bool) {
 }
 
 // artifacts returns the concatenated text and any structured coordination payload.
-func artifacts(task *a2a.Task) (string, []collaboration.Operation, error) {
+func artifacts(task *a2a.Task, maxContentBytes int64) (string, []collaboration.Operation, error) {
 	var text strings.Builder
 	var ops []collaboration.Operation
 	for _, artifact := range task.Artifacts {
@@ -181,7 +183,7 @@ func artifacts(task *a2a.Task) (string, []collaboration.Operation, error) {
 				if part.MediaType != collaboration.MediaType {
 					continue
 				}
-				decoded, err := collaboration.DecodeOperations(content)
+				decoded, err := collaboration.DecodeOperations(content, maxContentBytes)
 				if err != nil || ops != nil {
 					return "", nil, errors.New("invalid payload")
 				}
@@ -194,7 +196,7 @@ func artifacts(task *a2a.Task) (string, []collaboration.Operation, error) {
 				if err != nil {
 					return "", nil, err
 				}
-				decoded, err := collaboration.DecodeOperations(raw)
+				decoded, err := collaboration.DecodeOperations(raw, maxContentBytes)
 				if err != nil || ops != nil {
 					return "", nil, errors.New("invalid payload")
 				}
@@ -204,7 +206,7 @@ func artifacts(task *a2a.Task) (string, []collaboration.Operation, error) {
 	}
 	result := text.String()
 	if ops == nil && strings.Contains(result, collaboration.SchemaVersion) {
-		decoded, err := collaboration.DecodeOperations([]byte(strings.TrimSpace(result)))
+		decoded, err := collaboration.DecodeOperations([]byte(strings.TrimSpace(result)), maxContentBytes)
 		if err != nil {
 			return "", nil, err
 		}
@@ -222,7 +224,7 @@ func plain(msg collaboration.Message, text string) ([]collaboration.Operation, e
 	for _, kind := range msg.AllowedOperations {
 		if kind == collaboration.OpFinalize || kind == collaboration.OpComplete {
 			ops := []collaboration.Operation{{Kind: kind, Result: text}}
-			if err := collaboration.ValidateOperations(ops); err != nil {
+			if err := collaboration.ValidateOperations(ops, msg.MaxContentBytes); err != nil {
 				return nil, err
 			}
 			return ops, nil

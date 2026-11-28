@@ -144,7 +144,7 @@ func spec() *api.WorkflowCollaboration {
 		Strategy: api.CollaborationStrategySupervisor,
 		Protocol: api.CollaborationProtocolA2A,
 		Limits: api.CollaborationLimits{MaxTurns: 20, MaxMessages: 100, MaxDelegations: 10, MaxDelegationDepth: 3,
-			MaxParallelTasks: 4, MaxTokens: 100000},
+			MaxParallelTasks: 4, MaxTokens: 100000, MaxContentBytes: 8192},
 		Supervisor:          &api.CollaborationSupervisor{Coordinator: "lead"},
 		AllowedInteractions: []api.CollaborationInteraction{{From: "lead", To: "a"}},
 	}

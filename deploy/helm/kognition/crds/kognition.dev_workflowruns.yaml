@@ -424,6 +424,11 @@ spec:
                               description: Limits bounds the step. Every field is
                                 required and finite.
                               properties:
+                                maxContentBytes:
+                                  description: User-defined UTF-8 byte limit for each input, goal, handoff context and result.
+                                  format: int64
+                                  minimum: 1
+                                  type: integer
                                 maxDelegationDepth:
                                   format: int32
                                   maximum: 5
@@ -454,6 +459,7 @@ spec:
                                   minimum: 1
                                   type: integer
                               required:
+                              - maxContentBytes
                               - maxDelegationDepth
                               - maxDelegations
                               - maxMessages

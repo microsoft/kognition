@@ -142,6 +142,9 @@ type CollaborationLimits struct {
 	MaxDelegationDepth int32 `json:"maxDelegationDepth" yaml:"maxDelegationDepth"`
 	MaxParallelTasks   int32 `json:"maxParallelTasks" yaml:"maxParallelTasks"`
 	MaxTokens          int64 `json:"maxTokens" yaml:"maxTokens"`
+	// MaxContentBytes is the user-defined UTF-8 byte limit for each input, goal,
+	// handoff context and result. It must be explicitly positive.
+	MaxContentBytes int64 `json:"maxContentBytes" yaml:"maxContentBytes"`
 }
 
 // CollaborationSupervisor configures the Supervisor strategy.

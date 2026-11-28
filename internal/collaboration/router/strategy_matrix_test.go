@@ -362,7 +362,7 @@ type matrixRun struct {
 func runMatrix(t *testing.T, tc matrixCase, usage map[string]int64, reject map[string]bool) matrixRun {
 	t.Helper()
 	c := &api.WorkflowCollaboration{Strategy: tc.strategy, Protocol: api.CollaborationProtocolA2A,
-		Limits: api.CollaborationLimits{MaxTurns: 20, MaxMessages: 100, MaxDelegations: 10, MaxDelegationDepth: 3, MaxParallelTasks: 4, MaxTokens: 100000}}
+		Limits: api.CollaborationLimits{MaxTurns: 20, MaxMessages: 100, MaxDelegations: 10, MaxDelegationDepth: 3, MaxParallelTasks: 4, MaxTokens: 100000, MaxContentBytes: 8192}}
 	st := &matrixStore{items: map[string][]byte{}}
 	st.put(t, "Workflow", "wf", api.Workflow{ObjectMeta: api.ObjectMeta{Name: "wf", Namespace: matrixNS}})
 	external := map[string]bool{}

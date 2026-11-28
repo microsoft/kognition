@@ -13,7 +13,6 @@ import (
 	"go.uber.org/zap/zaptest"
 
 	"github.com/kognition-ai/kognition/api/v1alpha1"
-	"github.com/kognition-ai/kognition/internal/collaboration"
 	"github.com/kognition-ai/kognition/internal/store"
 )
 
@@ -54,6 +53,7 @@ func makeCollaborationWorkflow(name string) v1alpha1.Workflow {
 				Collaboration: &v1alpha1.WorkflowCollaboration{
 					Strategy: v1alpha1.CollaborationStrategySupervisor,
 					Protocol: v1alpha1.CollaborationProtocolA2A,
+					Limits:   v1alpha1.CollaborationLimits{MaxContentBytes: 8192},
 				},
 			}},
 		},
@@ -64,7 +64,7 @@ func makeCollaborationWorkflow(name string) v1alpha1.Workflow {
 func TestWorkflowRunReconciler_RejectsInvalidResolvedCollaborationInput(t *testing.T) {
 	tests := map[string]string{
 		"blank":     " \n ",
-		"oversized": strings.Repeat("x", collaboration.MaxContentBytes+1),
+		"oversized": strings.Repeat("x", 8193),
 	}
 	for name, input := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -186,6 +186,7 @@ func TestWorkflowReconciler_CollaborationStep_RunsThenSucceedsAndFeedsDownstream
 	if ss := findStepStatus(&stored, "debate"); ss == nil || ss.Phase != v1alpha1.PhaseRunning || ss.Attempts != 1 {
 		t.Fatalf("step status after first pass = %+v, want Running attempt 1", ss)
 	}
+
 	if got := len(listWorkflowJobs(t, s, "default")); got != 0 {
 		t.Fatalf("jobs before collaboration completes = %d, want 0", got)
 	}
@@ -208,6 +209,36 @@ func TestWorkflowReconciler_CollaborationStep_RunsThenSucceedsAndFeedsDownstream
 	}
 	if len(runner.stops) != 0 {
 		t.Fatalf("unexpected stops: %v", runner.stops)
+	}
+}
+
+func TestWorkflowReconciler_CollaborationPreservesConfiguredLargeOutput(t *testing.T) {
+	s := newMemStore()
+	r := NewWorkflowReconciler(s, zaptest.NewLogger(t))
+	output := strings.Repeat("\u00e9", 65536)
+	runner := &fakeCollaborationRunner{script: []WorkflowCollaborationProgress{
+		{Done: true, Succeeded: true, Output: output},
+	}}
+	r.SetCollaborationRunner(runner)
+	wf := makeCollaborationWorkflow("wf-large-collaboration")
+	wf.Spec.Steps[0].Collaboration.Limits.MaxContentBytes = 131072
+	wf.Spec.Steps = append(wf.Spec.Steps, v1alpha1.WorkflowStep{
+		Name: "summarize", AgentRef: v1alpha1.LocalObjectReference{Name: "summarizer"},
+		Input: "{{ .Steps.debate.Output }}",
+	})
+	wf.Spec.Edges = []v1alpha1.WorkflowEdge{{From: "debate", To: "summarize"}}
+	storeWorkflow(t, s, wf)
+	req := Request{Namespace: "default", Name: wf.ObjectMeta.Name, Kind: "Workflow"}
+	for i := 0; i < 5 && len(listWorkflowJobs(t, s, "default")) == 0; i++ {
+		mustReconcile(t, r, req)
+	}
+	stored := getWorkflow(t, s, "default", wf.ObjectMeta.Name)
+	if ss := findStepStatus(&stored, "debate"); ss == nil || ss.Output != output {
+		t.Fatal("configured collaboration output was truncated in workflow status")
+	}
+	jobs := listWorkflowJobs(t, s, "default")
+	if len(jobs) != 1 || jobs[0].Spec.Input != output {
+		t.Fatal("downstream step did not receive the complete collaboration result")
 	}
 }
 

@@ -13,12 +13,13 @@ import (
 func TestWorkflowCollaborationGuidanceAndDescriptionRoundTrip(t *testing.T) {
 	in := &api.WorkflowCollaboration{
 		Guidance: "Ask the analyst first.",
+		Limits:   api.CollaborationLimits{MaxContentBytes: 131072},
 		Members: []api.CollaborationMember{
 			{Name: "writer", Description: "drafts the answer", AgentRef: api.AgentReference{Name: "agent-a"}},
 		},
 	}
 	k := workflowCollaborationToK8s(in)
-	if k.Guidance != in.Guidance || k.Members[0].Description != "drafts the answer" {
+	if k.Guidance != in.Guidance || k.Members[0].Description != "drafts the answer" || k.Limits.MaxContentBytes != in.Limits.MaxContentBytes {
 		t.Fatalf("guidance or description lost converting to Kubernetes: %+v", k)
 	}
 	if out := workflowCollaborationFromK8s(k); !reflect.DeepEqual(out, in) {

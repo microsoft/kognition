@@ -150,3 +150,4 @@ spec:
           maxDelegationDepth: 1
           maxParallelTasks: 2
           maxTokens: 32768
+          maxContentBytes: 131072

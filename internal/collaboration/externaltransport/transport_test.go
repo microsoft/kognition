@@ -321,7 +321,7 @@ func (f *fixture) transport() *Transport {
 func startMessage(id string) collaboration.Message {
 	return collaboration.Message{
 		DispatchID: id, Kind: collaboration.DispatchStart, TaskID: "t1", Recipient: "remote", Turn: 1,
-		Goal: collaboration.Content{Text: "summarize the incident"}, Allowance: 1000,
+		Goal: collaboration.Content{Text: "summarize the incident"}, Allowance: 1000, MaxContentBytes: 8192,
 		AllowedOperations: []collaboration.OperationKind{collaboration.OpComplete},
 	}
 }
@@ -747,6 +747,26 @@ func TestObserveInterpretsReplies(t *testing.T) {
 	last := f.audit.decisions(t)
 	if got := last[len(last)-1]; got.Outcome != "completed" || got.Execution.Status != "completed" {
 		t.Fatalf("final decision = %+v", got)
+	}
+}
+
+func TestObserveUsesConfiguredContentLimit(t *testing.T) {
+	f := newFixture(t)
+	tr := f.transport()
+	msg := startMessage("d1")
+	msg.MaxContentBytes = 131072
+	ctx := context.Background()
+	if err := tr.Admit(ctx, msg); err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Send(ctx, msg); err != nil {
+		t.Fatal(err)
+	}
+	output := strings.Repeat("x", 131072)
+	f.client.task = completedTask(output)
+	obs, err := tr.Observe(ctx, msg)
+	if err != nil || obs.Status != collaboration.ReportCompleted || len(obs.Operations) != 1 || obs.Operations[0].Result != output {
+		t.Fatalf("external transport lost the configured large result: %+v %v", obs, err)
 	}
 }
 

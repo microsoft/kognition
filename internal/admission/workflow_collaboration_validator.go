@@ -218,6 +218,9 @@ func validateCollaborationLimits(cpath string, l v1alpha1.CollaborationLimits) [
 	if l.MaxTokens < 1 {
 		errs = append(errs, fmt.Sprintf("%s.limits.maxTokens must be greater than zero, got %d", cpath, l.MaxTokens))
 	}
+	if l.MaxContentBytes < 1 {
+		errs = append(errs, fmt.Sprintf("%s.limits.maxContentBytes must be greater than zero, got %d", cpath, l.MaxContentBytes))
+	}
 	return errs
 }
 

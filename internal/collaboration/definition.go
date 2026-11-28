@@ -100,6 +100,9 @@ func NewDefinition(c *api.WorkflowCollaboration) (Definition, error) {
 	if l.MaxTokens < 1 {
 		errs = append(errs, "limits.maxTokens must be positive")
 	}
+	if l.MaxContentBytes < 1 {
+		errs = append(errs, "limits.maxContentBytes must be positive")
+	}
 
 	blocks := 0
 	for _, present := range []bool{c.Supervisor != nil, c.Parallel != nil, c.Handoff != nil, c.Peer != nil} {

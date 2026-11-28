@@ -68,6 +68,31 @@ interaction: `allowedInteractions` and `AgentCommunicationPolicy` remain the onl
 authority, and a member can still decide not to delegate. Control characters are
 rejected, and descriptions are collapsed to one line before they enter a prompt.
 
+### Choose the content-size limit
+
+Every collaboration step must explicitly set `limits.maxContentBytes` to a
+positive integer. It is the user-defined UTF-8 byte limit for the resolved input,
+each member's plain-text result, and each `goal`, `context` or `result` field in a
+coordination payload. There is no default or fixed per-content ceiling.
+
+For example, `maxContentBytes: 131072` permits each content item up to 128 KiB.
+Choose an allowance appropriate for the requested deliverable and available
+resources. The controller includes the configured limit in member prompts and
+rejects oversized replies without silently truncating them. The team token budget
+is independent of the byte limit, and a model may still exceed the requested bound.
+
+The encoded coordination payload guard accounts for JSON escaping and the allowed
+operation count using the configured content limit; it does not impose a separate
+fixed 64 KiB ceiling. Backend limits still apply independently: the active ledger
+has a 900 KiB budget, Kubernetes ConfigMap data must fit within 1 MiB, and dispatch
+payloads and ExternalAgent transport limits remain bounded. A larger content
+allowance does not guarantee that many large results fit in one ledger.
+
+**Upgrade:** existing collaboration Workflows and stored WorkflowRun snapshots
+without this field have no implicit legacy allowance. Finish active runs before
+upgrading, explicitly add the field to each Workflow, update the CRDs, and create
+new runs. Studio leaves this required field blank until the author chooses it.
+
 ## Define a step
 
 ```yaml
@@ -98,6 +123,7 @@ steps:
         maxDelegationDepth: 1
         maxParallelTasks: 2
         maxTokens: 32768
+        maxContentBytes: 131072
 ```
 
 [samples/workflows/collaboration.yaml](../samples/workflows/collaboration.yaml)
@@ -122,14 +148,15 @@ contains runnable Parallel and Supervisor workflows and their member Agents.
   also be a branch.
 - Every limit is required: `maxTurns` (1-100), `maxMessages` (1-500),
   `maxDelegations` (1-100), `maxDelegationDepth` (1-5), `maxParallelTasks`
-  (1-8) and `maxTokens` (greater than zero).
+  (1-8), `maxTokens` and `maxContentBytes` (both greater than zero).
 
 ## Token accounting
 
 Member runtimes report usage in the result artifact metadata under
 `kognition.dev/usage` as `{"totalTokens": n}`. The controller sums reported usage
 against `limits.maxTokens`, including the member call that accepts or rejects a
-handoff. If a member reports no usable count, the controller
+handoff and completed member calls whose replies are empty or invalid. If a member
+reports no usable count, the controller
 charges the whole remaining allowance rather than assuming zero, so an
 unmetered member cannot bypass the limit. Model gateway metering of the member
 Agent still applies independently.
@@ -240,12 +267,19 @@ collaboration.
 ## Failure and outcomes
 
 Before the first dispatch, the controller fails the step if the resolved input
-is blank or exceeds 8 KiB.
+is blank or exceeds the step's configured `limits.maxContentBytes`.
 
 A step fails with a reason such as `MemberFailed`, `MemberRejected`,
 `MemberRequestedInput`, `InvalidPayload` or `NoResult`, or when it reaches a
 limit or its timeout. An optional Parallel branch may fail without failing the
 step. Completed turns stay recorded in the ledger.
+
+`NoResult` means the completed reply is blank or cannot supply an allowed terminal
+operation. A non-empty plain-text reply over the configured content limit fails with
+`InvalidPayload` and a message identifying the size limit. Both outcomes retain
+reported token usage; failure to use a reply does not mean the model call was free.
+When a required Parallel branch fails, the remaining work is cancelled and the
+synthesizer is not started.
 
 ## Limits of the current design
 

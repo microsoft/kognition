@@ -15,7 +15,7 @@ import (
 func limits() api.CollaborationLimits {
 	return api.CollaborationLimits{
 		MaxTurns: 20, MaxMessages: 100, MaxDelegations: 10, MaxDelegationDepth: 3,
-		MaxParallelTasks: 4, MaxTokens: 100000,
+		MaxParallelTasks: 4, MaxTokens: 100000, MaxContentBytes: 8192,
 	}
 }
 
@@ -995,10 +995,93 @@ func TestDecodeRejectsMalformedLedgers(t *testing.T) {
 
 func TestStartRejectsBadInput(t *testing.T) {
 	e := supervisor(t)
-	for _, in := range []string{"", "  ", strings.Repeat("x", MaxContentBytes+1)} {
+	for _, in := range []string{"", "  ", strings.Repeat("x", int(limits().MaxContentBytes)+1)} {
 		if _, err := e.Start(in); !errors.Is(err, ErrInvalidEvent) {
 			t.Fatalf("Start(%d bytes) err = %v", len(in), err)
 		}
+
+	}
+}
+
+func TestConfiguredContentLimitPreservesLargeResults(t *testing.T) {
+	c := baseCollab(api.CollaborationStrategySupervisor, "lead", "a")
+	c.Supervisor = &api.CollaborationSupervisor{Coordinator: "lead"}
+	allow(c, [2]string{"lead", "a"})
+	c.Limits.MaxContentBytes = 131072
+	e := newEngine(t, c)
+	input := strings.Repeat("i", 8193)
+	st, err := e.Start(input)
+	st = must(t, st, err)
+	result := strings.Repeat("\u00e9", int(c.Limits.MaxContentBytes)/2)
+	st = run(t, e, st, func(m Message) Event {
+		if m.MaxContentBytes != c.Limits.MaxContentBytes || m.Goal.Text != input {
+			t.Fatalf("dispatch lost configured limit or input: %+v", m)
+		}
+		return report(m, finalize(result))
+	})
+	if st.Phase != PhaseSucceeded || st.Outcome.Result.Text != result {
+		t.Fatalf("large final result was rejected or altered: phase=%s", st.Phase)
+	}
+	raw, err := Encode(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := Decode(raw)
+	if err != nil || restored.Outcome.Result.Text != result {
+		t.Fatalf("large result did not survive persistence: %v", err)
+	}
+}
+
+func TestConfiguredContentLimitRejectsOversizedProposal(t *testing.T) {
+	c := baseCollab(api.CollaborationStrategySupervisor, "lead", "a")
+	c.Supervisor = &api.CollaborationSupervisor{Coordinator: "lead"}
+	allow(c, [2]string{"lead", "a"})
+	c.Limits.MaxContentBytes = 16
+	for _, op := range []Operation{
+		finalize(strings.Repeat("x", 17)),
+		del("d1", "a", strings.Repeat("x", 17)),
+		handoff("h1", "a", strings.Repeat("x", 17)),
+	} {
+		e := newEngine(t, c)
+		if _, err := e.Start(strings.Repeat("x", 17)); err == nil {
+			t.Fatal("input ignored configured content limit")
+		}
+		st := start(t, e)
+		st = run(t, e, st, func(m Message) Event { return report(m, op) })
+		if st.Phase != PhaseFailed || !strings.Contains(st.Outcome.Reason, "exceeds 16 bytes") {
+			t.Fatalf("proposal ignored configured content limit: %+v", st.Outcome)
+		}
+	}
+}
+
+func TestOperationPayloadUsesConfiguredContentLimit(t *testing.T) {
+	for _, text := range []string{strings.Repeat("x", 131072), strings.Repeat("\x00", 32768)} {
+		ops := []Operation{complete(text)}
+		raw, err := EncodeOperations(ops, 131072)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(raw) <= 64<<10 {
+			t.Fatal("test must exercise the removed fixed 64 KiB payload ceiling")
+		}
+		decoded, err := DecodeOperations(raw, 131072)
+		if err != nil || decoded[0].Result != text {
+			t.Fatalf("large or escaped payload changed: %v", err)
+		}
+		if _, err := DecodeOperations(raw, int64(len(text))-1); err == nil {
+			t.Fatal("decoded content exceeded the configured limit")
+		}
+	}
+	for _, limit := range []int64{0, -1} {
+		if _, err := EncodeOperations([]Operation{complete("x")}, limit); err == nil {
+			t.Fatal("missing or negative content limit accepted by encoder")
+		}
+		if _, err := DecodeOperations([]byte(`{}`), limit); err == nil {
+			t.Fatal("missing or negative content limit accepted by decoder")
+		}
+	}
+	if got := operationPayloadBytes(1<<63 - 1); got != 1<<63-1 {
+		t.Fatalf("payload bound overflowed: %d", got)
 	}
 }
 
@@ -1013,16 +1096,18 @@ func TestNewDefinitionRejectsInvalidShapes(t *testing.T) {
 		t.Fatalf("good: %v", err)
 	}
 	cases := map[string]func(*api.WorkflowCollaboration){
-		"nil protocol":     func(c *api.WorkflowCollaboration) { c.Protocol = "MCP" },
-		"one member":       func(c *api.WorkflowCollaboration) { c.Members = c.Members[:1] },
-		"duplicate alias":  func(c *api.WorkflowCollaboration) { c.Members[1].Name = "lead" },
-		"unknown coord":    func(c *api.WorkflowCollaboration) { c.Supervisor.Coordinator = "ghost" },
-		"self interaction": func(c *api.WorkflowCollaboration) { allow(c, [2]string{"a", "a"}) },
-		"zero turns":       func(c *api.WorkflowCollaboration) { c.Limits.MaxTurns = 0 },
-		"turns above max":  func(c *api.WorkflowCollaboration) { c.Limits.MaxTurns = api.CollaborationMaxTurns + 1 },
-		"no tokens":        func(c *api.WorkflowCollaboration) { c.Limits.MaxTokens = 0 },
-		"extra block":      func(c *api.WorkflowCollaboration) { c.Peer = &api.CollaborationPeer{Finalizer: "a"} },
-		"unknown strategy": func(c *api.WorkflowCollaboration) { c.Strategy = "Mesh" },
+		"nil protocol":           func(c *api.WorkflowCollaboration) { c.Protocol = "MCP" },
+		"one member":             func(c *api.WorkflowCollaboration) { c.Members = c.Members[:1] },
+		"duplicate alias":        func(c *api.WorkflowCollaboration) { c.Members[1].Name = "lead" },
+		"unknown coord":          func(c *api.WorkflowCollaboration) { c.Supervisor.Coordinator = "ghost" },
+		"self interaction":       func(c *api.WorkflowCollaboration) { allow(c, [2]string{"a", "a"}) },
+		"zero turns":             func(c *api.WorkflowCollaboration) { c.Limits.MaxTurns = 0 },
+		"turns above max":        func(c *api.WorkflowCollaboration) { c.Limits.MaxTurns = api.CollaborationMaxTurns + 1 },
+		"no tokens":              func(c *api.WorkflowCollaboration) { c.Limits.MaxTokens = 0 },
+		"missing content limit":  func(c *api.WorkflowCollaboration) { c.Limits.MaxContentBytes = 0 },
+		"negative content limit": func(c *api.WorkflowCollaboration) { c.Limits.MaxContentBytes = -1 },
+		"extra block":            func(c *api.WorkflowCollaboration) { c.Peer = &api.CollaborationPeer{Finalizer: "a"} },
+		"unknown strategy":       func(c *api.WorkflowCollaboration) { c.Strategy = "Mesh" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1043,7 +1128,7 @@ func TestNewDefinitionRejectsInvalidShapes(t *testing.T) {
 
 func TestOperationPayloadIsStrict(t *testing.T) {
 	ok := `{"schemaVersion":"kognition.collaboration/v1","operations":[{"kind":"complete","result":"x"}]}`
-	if ops, err := DecodeOperations([]byte(ok)); err != nil || len(ops) != 1 {
+	if ops, err := DecodeOperations([]byte(ok), limits().MaxContentBytes); err != nil || len(ops) != 1 {
 		t.Fatalf("valid payload: %v %v", ops, err)
 	}
 	cases := map[string]string{
@@ -1056,20 +1141,20 @@ func TestOperationPayloadIsStrict(t *testing.T) {
 		"bad operationId": `{"schemaVersion":"kognition.collaboration/v1","operations":[{"kind":"delegate","operationId":"Bad ID","to":"a","goal":"g"}]}`,
 		"trailing":        ok + ` {}`,
 		"no operations":   `{"schemaVersion":"kognition.collaboration/v1","operations":[]}`,
-		"oversize":        `{"schemaVersion":"kognition.collaboration/v1","operations":[{"kind":"complete","result":"` + strings.Repeat("x", MaxContentBytes+1) + `"}]}`,
+		"oversize":        `{"schemaVersion":"kognition.collaboration/v1","operations":[{"kind":"complete","result":"` + strings.Repeat("x", int(limits().MaxContentBytes)+1) + `"}]}`,
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := DecodeOperations([]byte(in)); !errors.Is(err, ErrInvalidPayload) {
+			if _, err := DecodeOperations([]byte(in), limits().MaxContentBytes); !errors.Is(err, ErrInvalidPayload) {
 				t.Fatalf("err = %v", err)
 			}
 		})
 	}
-	raw, err := EncodeOperations([]Operation{del("d1", "a", "g")})
+	raw, err := EncodeOperations([]Operation{del("d1", "a", "g")}, limits().MaxContentBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ops, err := DecodeOperations(raw); err != nil || ops[0].To != "a" {
+	if ops, err := DecodeOperations(raw, limits().MaxContentBytes); err != nil || ops[0].To != "a" {
 		t.Fatalf("round trip: %v %v", ops, err)
 	}
 }
