@@ -166,7 +166,8 @@ func runAuthList(cmd *cobra.Command, _ []string) error {
 	}
 
 	out := cmd.OutOrStdout()
-	table := &textWriter{w: tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)}
+	tabs := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	table := &textWriter{w: tabs}
 	table.printf("RESOURCE\tVERBS\tRESOURCE NAMES\n")
 	for _, row := range set.Rows {
 		names := "*"
@@ -182,7 +183,7 @@ func runAuthList(cmd *cobra.Command, _ []string) error {
 	if table.err != nil {
 		return table.err
 	}
-	if err := table.w.(*tabwriter.Writer).Flush(); err != nil {
+	if err := tabs.Flush(); err != nil {
 		return err
 	}
 
