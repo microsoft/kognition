@@ -21,3 +21,28 @@ Evidence: `TestIsSelfDecision`, `TestKubernetesRuntimeApprovalInitiatorCannotDec
 `TestWriteRuntimeApprovalStoreErrorMapsSelfApprovalToForbidden`. Each was written
 first and failed before the check existed. A forged identity against a real API
 server is verified in the kind tier (T-0459).
+
+## T-0451 Controller-mediated creation paths
+
+Rule applied (plan principle 6): bounded controller-owned provisioning that
+follows from an object the author may create is allowed. A user-selected
+definition or delegated capability must not exceed what the author could select
+directly.
+
+| Author object | What the controller creates | Verdict |
+| --- | --- | --- |
+| `MemoryClaim` | A `MemoryVolume` in the same namespace, deterministic name, owner reference to the claim ([memory_reconciler.go](../../../../internal/controller/memory_reconciler.go)). No `MemoryGrant`. | **Bounded provisioning.** Allowed. |
+| `KnowledgeBaseIndexSchedule` | `KnowledgeBaseIndexRun` children in the same namespace for the `KnowledgeBase` it names; the curator role already holds both kinds ([kb_indexschedule_reconciler.go](../../../../internal/controller/kb_indexschedule_reconciler.go)). | **Bounded provisioning.** Allowed. |
+| `AgentAutoscaler` | Changes `spec.replicas` of the same-namespace `Agent` it names ([agent_autoscaler_reconciler.go](../../../../internal/controller/agent_autoscaler_reconciler.go)). | **Accepted.** `AgentAutoscaler` and `Agent` are both `config`, so no shipped role can scale an Agent it could not already edit. A custom role that grants the autoscaler without the Agent would gain scaling authority; operators must not split them. |
+| `Evaluation` and `EvaluationRun` | `EvaluationRun`, then target and judge `AgentJob`s in the same namespace ([evaluation_reconciler.go](../../../../internal/controller/evaluation_reconciler.go)). | **Accepted named exception.** Evaluating is part of authoring, so the builder holds `evaluationruns` create. The spend is the evaluation's own and is bounded by its dataset. |
+| Workflow collaboration steps | `AgentJob`s for the members the workflow admits, limited by `allowedInteractions` and communication policy ([transport.go](../../../../internal/collaboration/jobtransport/transport.go)). | **By design.** `use` on a Workflow authorizes running its steps. Execution is under the controller, not the submitter, so `invoke` on each member is not checked for the submitter. The workflow author's definition is the boundary. Recorded so operators treat editing a Workflow as granting its reachable Agents. |
+| `Solution` with a `target` | `AgentJob` for an Agent or AgentService, or `WorkflowRun` for a Workflow, chosen by the author ([solution_reconciler.go](../../../../internal/controller/solution_reconciler.go), `compileTargetExecution`). The run starts with no `create` check on `agentjobs` or `workflowruns` and no `use` or `invoke` check. | **Finding (T-0469).** A builder, who cannot submit work, can start any Agent or Workflow in the namespace through a Solution. The author selects the target, so this exceeds the author's authority. |
+| `Solution` generated resources | `Agent`, `Tool`, `Workflow`, `MemoryClaim`, and an `AgentPolicy` fixed to `enforce: true` over the Solution's own agents. | **Bounded provisioning.** The first four are `config` the builder may create. The policy only restricts. |
+
+Not adopted from the survey: it called `AgentAutoscaler` an escalation, but both kinds
+are `config` and the builder holds both, so there is no escalation in the shipped
+roles. It also classed workflow collaboration as a finding; it is the intended
+meaning of `use`.
+
+Open, no change here: the `WorkflowRun` the Solution controller creates carries no
+protected-submission annotation, so it is also outside the `use` check (G7, T-0467).

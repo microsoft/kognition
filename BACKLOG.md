@@ -3639,16 +3639,18 @@ endpoints, non-CRD audit evidence) are stated, not hidden.
 | ID | Task | US |
 |---|---|---|
 | T-0450 | **Done.** Characterized self-approval first. Where a submitter is recorded (workflow-executor `RuntimeApproval`), the failing tests were written first and a decider equal to the initiator is now refused in both stores and both decision endpoints; the residual for approvals with no recorded submitter (agent runtime, `ApprovalDecision` gate votes) is in the review record. Traces: FR-0413. | US-0117 |
-| T-0451 | Review each controller-mediated creation path (`Solution`, `MemoryClaim` to `MemoryVolume`, `KnowledgeBaseIndexSchedule` to `KnowledgeBaseIndexRun`, `AgentAutoscaler`, workflow collaboration `AgentJob`s, `EvaluationRun`): record what the controller creates, under whose authority, and the most an author lacking the corresponding create permission can obtain. Classify each as bounded controller-owned provisioning (allowed and recorded, for example `MemoryClaim` to `MemoryVolume`) or as a user-selected definition or delegated capability that must not exceed the author's authority. Add tests and fixes for any path of the second kind that exceeds it and record accepted residuals in a review record beside the plan. Traces: FR-0413. | US-0117 |
+| T-0451 | **Review done.** All six paths reviewed and classified in the [review record](docs/development-plans/features/kubernetes-access-control/separation-of-duties-review.md): `MemoryClaim`, `KnowledgeBaseIndexSchedule` and the `Solution` generated resources are bounded provisioning; `AgentAutoscaler`, `Evaluation` and workflow collaboration are accepted by design with stated operator guidance; `Solution` target execution exceeds the author's authority and is fixed by T-0469. Traces: FR-0413. | US-0117 |
 | T-0452 | **Blocked on OD-2.** Implement the approved grant-creation rule: admission authorizes the creator with a `SubjectAccessReview` on the grant's target before accepting `ToolGrant`, `ModelGrant`, `MemoryGrant`, `ExternalAgentGrant`, `CrossNamespaceGrant`, `AgentRole` and `AgentRoleBinding`, failing closed on evaluation error, and adjust the `kognition-grant-admin` rules to match. Traces: FR-0413. | US-0117 |
 | T-0467 | Decide and implement authorizing every `WorkflowRun` creation (not only protected submissions) with the submitter's identity for verb `use` on the named workflow, failing closed on evaluation error, preserving the ADR-0029 executor model; or record the residual if the decision is to keep the protected-only boundary. Write the failing test first. Traces: FR-0413, FR-0414. | US-0117 |
+| T-0469 | Close the `Solution` target escalation found by T-0451: when a `Solution` sets `target`, admission authorizes the requesting user with a `SubjectAccessReview` for `create` on `agentjobs` (Agent, AgentService) or `workflowruns` (Workflow) plus verb `invoke` on the Agent or `use` on the Workflow, failing closed on evaluation error, on create and on any update that changes the target or goal. Needs a `Solution` admission path in Kubernetes mode (none exists today). Write the failing test first, including a builder without submit rights being denied. Traces: FR-0413. | US-0117 |
 
 | ID | Test | Traces |
 |---|---|---|
 | TC-0398 | **Partially passing:** Self-approval: for workflow-executor approvals, the initiator cannot decide its own action (store and decision endpoints answer `ErrSelfApproval` and `403`, and the approval is unchanged) and a different approver can. **Residual, documented in the [review record](docs/development-plans/features/kubernetes-access-control/separation-of-duties-review.md):** agent-runtime approvals and `ApprovalDecision` gate votes record no durable submitter. The forged-identity case on a real API server moves to the kind tier (T-0459). | FR-0413, MVP-3 |
-| TC-0399 | **Pending:** Confused deputy: for each reviewed path, a principal without the related permission cannot obtain through the controller any user-selected definition, grant or provider spend it could not create directly; bounded controller-owned provisioning (such as `MemoryClaim` to `MemoryVolume`) is permitted and recorded; denials leave no created object. | FR-0413, MVP-3 |
+| TC-0399 | **Partially passing (review):** every path is classified and recorded; bounded provisioning (such as `MemoryClaim` to `MemoryVolume`) is permitted. **Open:** a builder without submit rights cannot start work through a `Solution` target (TC-0416, T-0469). | FR-0413, MVP-3 |
 | TC-0400 | **Blocked on OD-2:** A grant-admin cannot create a grant whose target it is not authorized for; an evaluation error rejects the grant (fail closed); a permitted grant is accepted and audited. | FR-0413, MVP-3 |
 | TC-0414 | **Pending:** A principal with `create` on `workflowruns` but without `use` on workflow B cannot create an ordinary (non-protected) `WorkflowRun` for B, and can for workflow A when `resourceNames` names A; an evaluation error rejects the create; or the accepted residual is documented. | FR-0413, FR-0414, MVP-3 |
+| TC-0416 | **Pending:** A principal who can create a `Solution` but lacks `create` on `agentjobs` or `workflowruns`, or `invoke` on the target Agent or `use` on the target Workflow, is denied a `Solution` with that target and no run is created; a principal holding them is accepted; an evaluation error rejects the `Solution`. | FR-0413, MVP-3 |
 
 #### US-0118 - Access Control Documentation - PLANNED
 
@@ -3860,7 +3862,7 @@ only T-0458 with Studio work, which is the lowest priority and waits.
 | 1 | P1 | US-0114: T-0440..T-0442 | Done in the first implementation PR of the stack. Design is [ADR-0031](docs/adr/0031-kubernetes-human-access-control.md) and the [plan](docs/development-plans/features/kubernetes-access-control/plan.md). | TC-0388..TC-0390 pass; every kind classified. The CI drift check that runs `tools/access-catalog --check` is T-0445 and starts once the template exists (US-0115). |
 | 2 | P1 | US-0115: T-0443, T-0445 | Done in the second implementation PR; T-0444 (opt-in aggregation) remains. OD-3 (install default) is implemented as the proposed default (enabled) and still needs maintainer confirmation. | TC-0391, TC-0392 pass in the Go chart tests; the regression suite and the CI drift step pass. |
 | 3 | P1 | US-0116: T-0446..T-0449 | Done in the third implementation PR except the forged-identity admission proof, which moves to the kind tier (T-0459). The envtest API server enforces RBAC. | TC-0394, TC-0396, TC-0397 pass and TC-0395 passes except the forgery part, in the `integration` tier against Kubernetes 1.30.x. |
-| 4 | P1 | US-0117: T-0450 (done), T-0451, T-0467 | Start after T-0446 (needs a real API server). T-0451 and T-0467 begin with a failing characterization test. T-0452 is blocked on OD-2. | TC-0398 (partial, residual recorded), TC-0399, TC-0414 pass; the review record lists accepted residuals. |
+| 4 | P1 | US-0117: T-0450 (done), T-0451 (review done), T-0467, T-0469 | T-0467 and T-0469 begin with a failing test and need a real API server (T-0446). T-0452 is blocked on OD-2. | TC-0398 (partial, residual recorded), TC-0399 (partial), TC-0414, TC-0416 pass; the review record lists accepted residuals. |
 | 5 | P1 | US-0118: T-0453..T-0455 | After ranks 2 and 3, so documentation states only verified behavior. Needs Node 24 for website validation. | TC-0401, TC-0402 pass. |
 | 6 | P2 | US-0119: T-0456, T-0457 | After rank 3. | TC-0403, TC-0404 pass. |
 | 7 | P2 | US-0120: T-0459, T-0460 | After rank 2; needs the kind tier. | TC-0406..TC-0408 pass with a retained evidence record. |
@@ -3975,8 +3977,8 @@ criteria.
 |---|---|
 | Epics | 25 |
 | User Stories | 123 |
-| Tasks (distinct IDs) | 468 across 474 definition rows; historical ID collisions remain |
-| Test Cases (distinct IDs) | 403 across 413 definition rows; historical ID collisions remain |
+| Tasks (distinct IDs) | 469 across 475 definition rows; historical ID collisions remain |
+| Test Cases (distinct IDs) | 404 across 414 definition rows; historical ID collisions remain |
 | MVP FRs covered | 97 |
 | NFRs covered | 13 |
 | DIFFs covered | 4 |
