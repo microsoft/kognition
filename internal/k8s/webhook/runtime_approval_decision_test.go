@@ -78,6 +78,8 @@ func TestRuntimeApprovalDecisionHandlerFailsClosedBeforeMutation(t *testing.T) {
 		{name: "access denied", tokenResponse: authenticatedTokenReview(), accessResponse: &authorizationv1.SubjectAccessReview{Status: authorizationv1.SubjectAccessReviewStatus{Denied: true}}, wantStatus: http.StatusForbidden},
 		{name: "explicit denial overrides allow", tokenResponse: authenticatedTokenReview(), accessResponse: &authorizationv1.SubjectAccessReview{Status: authorizationv1.SubjectAccessReviewStatus{Allowed: true, Denied: true}}, wantStatus: http.StatusForbidden},
 		{name: "access review unavailable", tokenResponse: authenticatedTokenReview(), accessError: errors.New("unavailable"), wantStatus: http.StatusServiceUnavailable},
+		{name: "evaluation error is unavailable even when allowed", tokenResponse: authenticatedTokenReview(), accessResponse: &authorizationv1.SubjectAccessReview{Status: authorizationv1.SubjectAccessReviewStatus{Allowed: true, EvaluationError: "policy unavailable"}}, wantStatus: http.StatusServiceUnavailable},
+		{name: "evaluation error without an allow is unavailable", tokenResponse: authenticatedTokenReview(), accessResponse: &authorizationv1.SubjectAccessReview{Status: authorizationv1.SubjectAccessReviewStatus{EvaluationError: "policy unavailable"}}, wantStatus: http.StatusServiceUnavailable},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

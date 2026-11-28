@@ -364,15 +364,25 @@ func TestSecretsAndPortForwardAreNeverGranted(t *testing.T) {
 	}
 }
 
-func TestAccessAdminCanBindOnlyKognitionRoles(t *testing.T) {
+func TestAccessAdminCanBindOnlyNamespaceBoundKognitionRoles(t *testing.T) {
 	catalog := Default()
 	rules, err := catalog.PolicyRules("kognition-access-admin")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, role := range catalog.Roles {
-		if !ruleAllows(rules, rbacGroup, "clusterroles", "bind", role.Name) {
-			t.Errorf("access-admin cannot bind %s", role.Name)
+		got := ruleAllows(rules, rbacGroup, "clusterroles", "bind", role.Name)
+		switch role.Binding {
+		case BindingNamespace:
+			if !got {
+				t.Errorf("access-admin cannot bind the namespace role %s", role.Name)
+			}
+		case BindingCluster:
+			// A RoleBinding to a cluster-bound role would still grant its namespaced
+			// rules, letting a namespace administrator delegate platform-owned rights.
+			if got {
+				t.Errorf("access-admin must not bind %s: it is bound cluster-wide", role.Name)
+			}
 		}
 	}
 	denied := []struct{ resource, verb, name string }{

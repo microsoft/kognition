@@ -185,13 +185,15 @@ func shippedKinds() []Kind {
 	}
 }
 
-// shippedRoleNames is every human role, in catalog order. kognition-access-admin
-// may bind exactly these ClusterRoles and no others.
-var shippedRoleNames = []string{
+// namespaceRoleNames are the roles bound per namespace. kognition-access-admin may
+// bind exactly these ClusterRoles. It must not bind the cluster-bound roles: a
+// RoleBinding to one still grants its namespaced rules, which would let a
+// namespace administrator delegate platform-owned rights.
+var namespaceRoleNames = []string{
 	"kognition-viewer", "kognition-run-viewer", "kognition-data-reader", "kognition-builder",
 	"kognition-curator", "kognition-consumer", "kognition-operator", "kognition-approver",
 	"kognition-autonomy-reviewer", "kognition-policy-admin", "kognition-grant-admin",
-	"kognition-access-admin", "kognition-auditor", "kognition-class-viewer", "kognition-platform-admin",
+	"kognition-access-admin", "kognition-auditor",
 }
 
 func shippedRoles() []Role {
@@ -275,7 +277,7 @@ func shippedRoles() []Role {
 			Grants: []Grant{
 				{APIGroup: rbacAPIGroup, Resources: []string{"roles", "rolebindings"}, Verbs: verbsRead},
 				{APIGroup: rbacAPIGroup, Resources: []string{"rolebindings"}, Verbs: []string{"create", "update", "patch", "delete"}},
-				{APIGroup: rbacAPIGroup, Resources: []string{"clusterroles"}, Verbs: []string{"bind"}, ResourceNames: shippedRoleNames},
+				{APIGroup: rbacAPIGroup, Resources: []string{"clusterroles"}, Verbs: []string{"bind"}, ResourceNames: namespaceRoleNames},
 			},
 		},
 		{

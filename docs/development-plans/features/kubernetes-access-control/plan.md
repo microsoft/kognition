@@ -135,7 +135,7 @@ means the kinds in section 5.
 | `kognition-autonomy-reviewer` | RoleBinding | R on `autonomyreviews`, `trustprofiles`; `update`, `patch` on `autonomyreviews/status` |
 | `kognition-policy-admin` | RoleBinding | W on `governance` |
 | `kognition-grant-admin` | RoleBinding | W on `grant` |
-| `kognition-access-admin` | RoleBinding | R on `roles`, `rolebindings`; W on `rolebindings`; verb `bind` on `clusterroles` limited by `resourceNames` to the `kognition-*` roles |
+| `kognition-access-admin` | RoleBinding | R on `roles`, `rolebindings`; W on `rolebindings`; verb `bind` on `clusterroles` limited by `resourceNames` to the namespace-bound `kognition-*` roles (not `kognition-class-viewer` or `kognition-platform-admin`) |
 | `kognition-auditor` | RoleBinding | R on every namespaced class except `data` (`config`, `knowledge`, `submit`, `runtime`, `grant`, `governance`, `decision`, `platform`, `system`) |
 | `kognition-class-viewer` | **ClusterRoleBinding** | R on `class` |
 | `kognition-platform-admin` | **ClusterRoleBinding** | W on `class` and `platform`; R on `system` including `knowledgebindingrecords` |
@@ -215,6 +215,13 @@ The `invoke` verb in `kognition-consumer` is granted for forward compatibility w
 the action API and for the executor-targeted check; it does not by itself let a
 person chat with an Agent (G1).
 
+The decision and reconcile endpoints treat a `SubjectAccessReview` evaluation error as
+"authorization unavailable" and never as an allow, even when the review also says
+`allowed`. This matches the workflow-use and executor checks. Kubernetes can report an
+evaluation error alongside an allow (for example when an unrelated binding references a
+missing role), so a dangling binding for an approver makes the decision endpoints
+return 503 until it is repaired; failing closed is the deliberate trade-off.
+
 The decision endpoint accepts bearer tokens through `TokenReview`. Client
 certificate or exec-plugin users who cannot present a bearer token are not covered
 by that path; closing this is the purpose of the later aggregated action API.
@@ -230,7 +237,7 @@ by that path; closing this is the purpose of the later aggregated action API.
 | Wildcard growth | Roles list explicit resources. A new CRD is added to a role only through the catalog. |
 | Bulk delete | `deletecollection` is excluded from every shipped role. |
 | Secret read as privilege escalation | No shipped role grants `secrets`. See G1. |
-| Over-broad `bind` | `kognition-access-admin` limits `bind` with `resourceNames`; Kubernetes' own escalation checks still apply. |
+| Over-broad `bind` | `kognition-access-admin` limits `bind` with `resourceNames` to the namespace-bound roles. It cannot bind the cluster-bound roles: a RoleBinding to one still grants its namespaced rules (for example write access to `ExternalAgent` and `Workspace`), which would let a namespace administrator delegate platform-owned rights. Found by the real-API-server tests; Kubernetes' own escalation checks still apply to everything else. |
 | Stale authority after revocation | Kubernetes evaluates RBAC per request. Group membership freshness depends on the operator's authentication integration and token lifetime and is documented, not guaranteed instant. |
 
 ## 9. Known gaps
@@ -253,7 +260,7 @@ must come from a real Kubernetes API server with RBAC enabled, not only fakes.
 | --- | --- |
 | Go unit | Every CRD is classified exactly once; classes match the CRD scope; roles generated from the catalog contain no wildcard, `deletecollection`, `secrets` or `*/status` outside the named exception; the catalog and chart output are in sync |
 | Helm | Rendered roles match the catalog; no bindings and no aggregation labels by default; a switch disables the roles; no role references a kind that is not installed |
-| Envtest | With RBAC enabled: for each role, bind a test principal and check allowed and denied requests for every kind and verb in the matrix, including cluster-scoped classes, `resourceNames` scoping of `use`, and the status exception |
+| Envtest | With RBAC enabled: for each role, bind a test principal and check allowed and denied requests for every kind and verb in the matrix, including cluster-scoped classes, `resourceNames` scoping of `use`, and the status exception. The aggregated built-in roles (`admin`, `edit`, `view`) are empty in envtest because no controller-manager populates them, so escalation against them is verified in the kind tier |
 | Kind | Real users and service accounts: end-to-end negative tests (no grant, wrong namespace, wrong kind), `access-admin` cannot bind a non-Kognition role, approval and autonomy-decision identity binding, revocation observed on the next request |
 | Traceability | Each requirement links to a story and test case; `tools/trace` renders the chain |
 
