@@ -30,10 +30,12 @@ resource kinds:
   `ApprovalDecision.spec.approver` must equal the requesting user, and an
   `AutonomyReview` decision requires `status.decidedBy` to equal the requesting
   user.
-- Interactive Agent chat from the CLI and Studio currently needs `pods` list,
-  `pods/portforward` create and `secrets` get (to read the runtime token). That
-  path cannot be granted to an end user without also granting Secret read, which
-  Kubernetes and managed offerings document as a privilege-escalation route.
+- Interactive Agent chat from the CLI and Studio creates an `AgentInstance` and
+  polls it. No shipped human role can create one, and `invoke` is not checked for
+  people on that path. Granting `create` and `get` on `agentinstances` would let
+  any holder run any Agent in the namespace and read every caller's results,
+  because RBAC cannot scope to the creator. (An unused runtime-direct variant
+  needs `pods/portforward` and `secrets` get; it is not offered.)
 
 Enterprises connect identity providers to Kubernetes themselves (OIDC, managed
 cloud integrations, certificates) and bind the resulting users and groups to
@@ -64,29 +66,40 @@ Roles. Kognition must fit that model without owning it.
    `edit` or `admin` unless the operator opts in. Workspace access is a
    RoleBinding in the workload namespace; a workspace is one namespace in this
    design.
-5. **Separate duties.** No shipped role other than `kognition-platform-admin`
-   combines authoring definitions, creating delegation resources (grants,
-   `SecretRef`, `AgentRole`), and deciding approvals. Controller-owned status is
-   writable only by controllers.
+5. **Separate duties.** No shipped role combines authoring definitions, creating
+   delegation resources (grants, `SecretRef`, `AgentRole`), and deciding
+   approvals. `kognition-platform-admin` is not an exception. The one named
+   overlap is `kognition-autonomy-reviewer`, which decides through
+   `autonomyreviews/status`. Controller-owned status is writable only by
+   controllers. `kognition-access-admin` is a privileged delegator: native RBAC
+   lets a holder of `bind` grant any listed role, so separation of duties across
+   subjects is the operator's responsibility.
 6. **Custom actions are real RBAC permissions.** The existing `use`, `invoke`,
    `approve`, `reject` and `reconcile` checks are a documented, stable contract
    expressed as RBAC rules, and any new action follows the same pattern.
-7. **Caller authority is preserved.** Controllers that act for a user (for
-   example workflow submission) authorize the submitting user with a
-   `SubjectAccessReview` and never substitute their own authority. A hosted
-   Studio forwards a credential the cluster accepts for each user and never runs
-   user requests as a shared privileged identity. Broad impersonation is not a
-   default.
+7. **Authority ceiling.** A user-selected capability (a workflow, a grant, a
+   definition) is authorized against the user's own identity with a
+   `SubjectAccessReview` before it is accepted. Two cases are not violations and
+   must stay named and bounded: execution under an operator-bound identity the
+   operator configured (the ADR-0029 workflow executor, whose target invocation is
+   authorized as the executor while submission is authorized as the caller's
+   `use`), and controller-owned provisioning that follows from an object the user
+   may create (a `MemoryClaim` causing a `MemoryVolume`). The `use` check is
+   enforced only for protected `WorkflowRun` submissions today; authorizing every
+   creation is a tracked gap. A hosted Studio forwards a credential the cluster
+   accepts for each user and never runs user requests as a shared privileged
+   identity. Broad impersonation is not a default.
 8. **Delegation resources are privileged.** Kubernetes `bind` and `escalate`
    protections do not cover Kognition grants. They are a separate role
-   (`kognition-grant-admin`); how creation of a grant is constrained is an open
-   decision (OD-2).
+   (`kognition-grant-admin`). `SecretRef` is a separate `credential` class
+   because its object can contain the credential; viewers and auditors cannot read
+   it. How creation of a grant is constrained is an open decision (OD-2).
 
 ## Open decisions
 
 | ID | Question | Proposed default | Blocks |
 | --- | --- | --- | --- |
-| OD-1 | How does an end user chat with an Agent without `secrets` get and `pods/portforward`? | Aggregated action API in a separate, separately approved stack. Until then the interactive path is documented as privileged and not offered as a least-privilege role. | FR-0416 |
+| OD-1 | How does an end user chat with an Agent, given that no human role can create an `AgentInstance` and `invoke` is not checked for people on that path? | No chat role until either admission checks `invoke` with the caller's identity on `AgentInstance` creation and result visibility is scoped, or the aggregated action API exists (separate, separately approved stack). Until then chat is documented as an unscoped privileged action. | FR-0416 |
 | OD-2 | How is creation of a grant constrained so a grant-admin cannot delegate more than they hold? | Admission authorizes the creator with a `SubjectAccessReview` on the target before accepting the grant. | FR-0413 |
 | OD-3 | Install roles by default? | Yes, inert, with a Helm switch to disable. | Chart task |
 | OD-4 | Hosted Studio identity mode. | Per-user credential forwarded to the Kubernetes API; impersonation requires its own ADR. | FR-0417 |
@@ -111,6 +124,12 @@ Roles. Kognition must fit that model without owning it.
   filtered.
 - `resourceNames` cannot restrict top-level `create`. Per-object restrictions on
   creating requests need subresource actions or admission checks.
+- `bind` restriction by `resourceNames` denies additional, unauthorized
+  permissions, not every non-Kognition role: native RBAC also lets a principal bind
+  a role whose permissions it already holds. A strict allowlist of bindable roles
+  needs a separate admission restriction owned by the operator.
+- `kognition-access-admin` can bind any listed role to anyone in the namespace,
+  including grant and approval roles.
 - Until OD-1 is resolved, least-privilege end-user chat is not achievable through
   the CLI or Studio. This is a documented limitation, not an accepted
   permanent state.
