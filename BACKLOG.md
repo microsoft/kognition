@@ -3589,7 +3589,7 @@ endpoints, non-CRD audit evidence) are stated, not hidden.
 | ID | Test | Traces |
 |---|---|---|
 | TC-0388 | **Passing:** Classification completeness: every shipped CRD kind has exactly one class; no entry names a missing CRD; cluster-scoped kinds appear only in `class` or `system`; a temporary CRD fixture with an unclassified kind fails with that kind's name. | FR-0411, MVP-3 |
-| TC-0389 | **Passing:** Role safety invariants over every generated role: no wildcard in groups, resources, verbs or names; no `deletecollection`; no `secrets`, `pods/exec`, `pods/portforward` or `serviceaccounts/token`; read-only access to `system` kinds; no `*/status` write except `autonomyreviews/status` for `kognition-autonomy-reviewer`; each role stays within its documented classes; no role depends on another. The catalog's answer for every (role, kind, verb) equals a reference evaluation of the generated rules. | FR-0411, FR-0410, MVP-3 |
+| TC-0389 | **Passing:** Role safety invariants over every generated role: no wildcard in groups, resources, verbs or names; no `deletecollection`; no `secrets`, `pods/exec`, `pods/portforward` or `serviceaccounts/token`; read-only access to `system` kinds; no `*/status` write except `autonomyreviews/status` for `kognition-autonomy-reviewer`; `SecretRef` (class `credential`) is reachable only by `kognition-grant-admin`; no role other than the named autonomy exception combines authoring, delegation and decision rights; each role stays within its documented classes; no role depends on another. The catalog's answer for every (role, kind, verb) equals a reference evaluation of the generated rules. | FR-0411, FR-0410, MVP-3 |
 | TC-0390 | **Passing:** The generator is deterministic (two runs are byte-identical with stable ordering); `--check` passes on a clean tree and fails on a modified template; the output parses as valid `rbacv1` objects. | FR-0411 |
 
 #### US-0115 - Chart-Shipped Human Roles - PLANNED
@@ -3621,13 +3621,13 @@ endpoints, non-CRD audit evidence) are stated, not hidden.
 | T-0446 | Add an `integration`-tagged envtest harness that starts kube-apiserver with the RBAC authorizer (verify the default flags and set `--authorization-mode=RBAC` explicitly if needed), installs the Kognition CRDs and the generated roles, creates principals with distinct credentials, and exposes helpers that evaluate an action by `SubjectAccessReview` and by a real request as that principal. Traces: FR-0419. | US-0116 |
 | T-0447 | Add a catalog-driven role by kind by verb matrix test: bind each role to a fresh principal (RoleBinding for namespaced roles, ClusterRoleBinding for cluster roles) and assert allowed exactly where the catalog says, including another namespace, cluster-scoped kinds and `status` writes. Traces: FR-0419, FR-0411. | US-0116 |
 | T-0448 | Test the custom actions: `use` limited by `resourceNames`, `approve` and `reject` independently grantable, `reconcile`, and the `autonomyreviews/status` exception; exercise the existing admission that binds `ApprovalDecision.spec.approver` and `AutonomyReview.status.decidedBy` to the caller under real authenticated identities. Traces: FR-0414, FR-0413. | US-0116 |
-| T-0449 | Add escalation and negative controls: `kognition-access-admin` can bind Kognition roles but not `cluster-admin` and cannot create ClusterRoleBindings or edit Roles; `kognition-builder` and `kognition-consumer` cannot create RoleBindings; no shipped role can read Secrets or open `pods/portforward`; deleting a binding denies the next request. Traces: FR-0419, FR-0413. | US-0116 |
+| T-0449 | Add escalation and negative controls: `kognition-access-admin` can bind Kognition roles but cannot bind a role that adds permissions it lacks (`cluster-admin`, a Secret-reading role), can bind a role whose permissions it already holds (the native subset case), and cannot create ClusterRoleBindings or edit Roles; `kognition-builder` and `kognition-consumer` cannot create RoleBindings; no shipped role can read Secrets or open `pods/portforward`; viewer and auditor cannot read `SecretRef`; deleting a binding denies the next request. Traces: FR-0419, FR-0413. | US-0116 |
 
 | ID | Test | Traces |
 |---|---|---|
 | TC-0394 | **Pending:** Matrix: for every role, kind, verb and scope the `SubjectAccessReview` result and the real request outcome agree with the catalog; cross-namespace and cluster-scoped checks are included; every denial leaves no created or changed object. | FR-0419, FR-0411, MVP-3 |
 | TC-0395 | **Pending:** Custom actions: `use` on workflow A is allowed and on B denied when `resourceNames` names A; `approve` without `reject` works and the reverse; `reconcile` is separate; a forged `approver` or `decidedBy` is rejected; anonymous callers are denied. | FR-0414, FR-0413, MVP-3 |
-| TC-0396 | **Pending:** Escalation: an access-admin cannot bind a role outside the Kognition set or create a cluster binding; a builder cannot create a ToolGrant, ModelGrant or SecretRef; no role reads Secrets; `kognition-platform-admin` is not cluster-admin. | FR-0419, FR-0413, MVP-3 |
+| TC-0396 | **Pending:** Escalation: an access-admin cannot bind a role that adds permissions it does not hold (`cluster-admin`, a Secret-reading role) or create a cluster binding, and binding a role whose permissions it already holds is permitted (the subset case, recorded as the native RBAC behavior); a builder cannot create a ToolGrant, ModelGrant or SecretRef; no role reads Secrets; viewer and auditor cannot read `SecretRef`; `kognition-platform-admin` is not cluster-admin. | FR-0419, FR-0413, MVP-3 |
 | TC-0397 | **Pending:** Request-time evaluation: removing a binding or changing a group takes effect on the next request; a `SubjectAccessReview` evaluation error on a webhook-checked action is treated as unavailable and never as allowed. | FR-0419, FR-0414 |
 
 #### US-0117 - Separation-of-Duties Hardening - PLANNED
@@ -3639,14 +3639,16 @@ endpoints, non-CRD audit evidence) are stated, not hidden.
 | ID | Task | US |
 |---|---|---|
 | T-0450 | Characterize self-approval first: where a submitter is recorded, determine whether the same identity can decide its own `RuntimeApproval` or vote on an `ApprovalDecision` gate it triggered. Write the failing test, then add an admission check comparing the recorded submitter with the decider if it is not already prevented; document the residual where no submitter is recorded. Traces: FR-0413. | US-0117 |
-| T-0451 | Review each controller-mediated creation path (`Solution`, `MemoryClaim` to `MemoryVolume`, `KnowledgeBaseIndexSchedule` to `KnowledgeBaseIndexRun`, `AgentAutoscaler`, workflow collaboration `AgentJob`s, `EvaluationRun`): record what the controller creates, under whose authority, and the most an author lacking the corresponding create permission can obtain. Add tests and fixes for any path that exceeds the author's authority and record accepted residuals in a review record beside the plan. Traces: FR-0413. | US-0117 |
+| T-0451 | Review each controller-mediated creation path (`Solution`, `MemoryClaim` to `MemoryVolume`, `KnowledgeBaseIndexSchedule` to `KnowledgeBaseIndexRun`, `AgentAutoscaler`, workflow collaboration `AgentJob`s, `EvaluationRun`): record what the controller creates, under whose authority, and the most an author lacking the corresponding create permission can obtain. Classify each as bounded controller-owned provisioning (allowed and recorded, for example `MemoryClaim` to `MemoryVolume`) or as a user-selected definition or delegated capability that must not exceed the author's authority. Add tests and fixes for any path of the second kind that exceeds it and record accepted residuals in a review record beside the plan. Traces: FR-0413. | US-0117 |
 | T-0452 | **Blocked on OD-2.** Implement the approved grant-creation rule: admission authorizes the creator with a `SubjectAccessReview` on the grant's target before accepting `ToolGrant`, `ModelGrant`, `MemoryGrant`, `ExternalAgentGrant`, `CrossNamespaceGrant`, `AgentRole` and `AgentRoleBinding`, failing closed on evaluation error, and adjust the `kognition-grant-admin` rules to match. Traces: FR-0413. | US-0117 |
+| T-0467 | Decide and implement authorizing every `WorkflowRun` creation (not only protected submissions) with the submitter's identity for verb `use` on the named workflow, failing closed on evaluation error, preserving the ADR-0029 executor model; or record the residual if the decision is to keep the protected-only boundary. Write the failing test first. Traces: FR-0413, FR-0414. | US-0117 |
 
 | ID | Test | Traces |
 |---|---|---|
 | TC-0398 | **Pending:** Self-approval: a principal holding both consumer and approver cannot decide its own run or request, and a different approver can; the check covers both approval paths; the residual is documented where no submitter is recorded. | FR-0413, MVP-3 |
-| TC-0399 | **Pending:** Confused deputy: for each reviewed path, a principal without the related permission cannot obtain through the controller any resource, grant or provider spend it could not create directly; denials leave no created object. | FR-0413, MVP-3 |
+| TC-0399 | **Pending:** Confused deputy: for each reviewed path, a principal without the related permission cannot obtain through the controller any user-selected definition, grant or provider spend it could not create directly; bounded controller-owned provisioning (such as `MemoryClaim` to `MemoryVolume`) is permitted and recorded; denials leave no created object. | FR-0413, MVP-3 |
 | TC-0400 | **Blocked on OD-2:** A grant-admin cannot create a grant whose target it is not authorized for; an evaluation error rejects the grant (fail closed); a permitted grant is accepted and audited. | FR-0413, MVP-3 |
+| TC-0414 | **Pending:** A principal with `create` on `workflowruns` but without `use` on workflow B cannot create an ordinary (non-protected) `WorkflowRun` for B, and can for workflow A when `resourceNames` names A; an evaluation error rejects the create; or the accepted residual is documented. | FR-0413, FR-0414, MVP-3 |
 
 #### US-0118 - Access Control Documentation - PLANNED
 
@@ -3656,7 +3658,7 @@ endpoints, non-CRD audit evidence) are stated, not hidden.
 
 | ID | Task | US |
 |---|---|---|
-| T-0453 | Add the reader guide `docs/concepts/access-control.md` and register it with the website (`website/site.mjs`, sidebar, tests): responsibility boundary, role catalog, bundles, neutral binding examples, custom actions, limitations (interactive chat, bearer-only decision endpoints, non-CRD evidence) and the verification command. State only behavior verified by US-0116. Traces: FR-0418, FR-0410. | US-0118 |
+| T-0453 | Add the reader guide `docs/concepts/access-control.md` and register it with the website (`website/site.mjs`, sidebar, tests): responsibility boundary, role catalog, bundles, neutral binding examples, custom actions, limitations (interactive chat needs `AgentInstance` rights no role grants, `use` enforced for protected submissions only, `SecretRef` unreadable by viewer and auditor, access-admin as a privileged delegator, bearer-only decision endpoints, non-CRD evidence) and the verification command. State only behavior verified by US-0116. Traces: FR-0418, FR-0410. | US-0118 |
 | T-0454 | Update the operator documents: the [security guide](docs/security.md) (Kubernetes access control and the bearer-token boundary of decision endpoints), the Kubernetes and AKS getting-started guides (grant access after install), [Studio](docs/studio.md) and the CLI reference; add content-map and resource-model links. Traces: FR-0418. | US-0118 |
 | T-0455 | Generate the role and class tables used in the documents from the catalog and add a drift test so documentation, chart and catalog cannot diverge. Traces: FR-0418, FR-0411. | US-0118 |
 
@@ -3702,19 +3704,21 @@ endpoints, non-CRD audit evidence) are stated, not hidden.
 
 #### US-0121 - Aggregated Action API - NOT APPROVED
 
-> As **Diego**, I want to invoke an authorized Agent and, as an approver, decide requests without `secrets` read or `pods/portforward`, so that least-privilege end users can actually use Kognition.
+> As **Diego**, I want to invoke an authorized Agent and, as an approver, decide requests without unscoped access to other callers' results, so that least-privilege end users can actually use Kognition.
 
 **Traces:** FR-0416, FR-0414 | MVP-3 (security support; not an MVP gate)
 
 | ID | Task | US |
 |---|---|---|
 | T-0461 | Write the ADR and threat model for an aggregated `actions` API: trust of the aggregation proxy, forwarded identity, delegated authorization, availability and failure behavior, and the exact actions (invoke, approve, reject, cancel). Needs its own approval and security review. Traces: FR-0416, FR-0414. | US-0121 |
-| T-0462 | After approval, implement the extension API server with delegated authentication and authorization, the invoke action without `secrets` or `pods/portforward`, approval actions with client-certificate parity, and chart, CLI and Studio integration. Traces: FR-0416, FR-0414. | US-0121 |
+| T-0462 | After approval, implement the extension API server with delegated authentication and authorization, the invoke action without unscoped access to other callers' results, approval actions with client-certificate parity, and chart, CLI and Studio integration. Traces: FR-0416, FR-0414. | US-0121 |
+| T-0468 | Evaluate, before or instead of T-0462, a smaller path for OD-1: admission authorizes verb `invoke` on the named Agent with the caller's identity on `AgentInstance` creation, and result visibility is scoped so a consumer cannot read other callers' instances; then decide whether to add `agentinstances` rights to a human role. Record the decision. Traces: FR-0416, FR-0414. | US-0121 |
 
 | ID | Test | Traces |
 |---|---|---|
 | TC-0409 | **Not scheduled:** An action is allowed or denied identically for bearer-token and client-certificate principals, including `resourceNames` scoping. | FR-0416, FR-0414, MVP-3 |
-| TC-0410 | **Not scheduled:** A consumer without `secrets` or `pods/portforward` invokes an authorized Agent; a wrong Agent or namespace is denied; forged forwarded identity headers are rejected. | FR-0416, MVP-3 |
+| TC-0410 | **Not scheduled:** A consumer invokes an authorized Agent without reading other callers' results; a wrong Agent or namespace is denied; forged forwarded identity headers are rejected. | FR-0416, MVP-3 |
+| TC-0415 | **Not scheduled:** A principal without `invoke` on Agent B cannot create an `AgentInstance` for B; a principal with `invoke` on A can; an evaluation error rejects the create. | FR-0416, FR-0414, MVP-3 |
 
 #### US-0122 - Hosted Studio Per-User Identity - NOT APPROVED
 
@@ -3856,7 +3860,7 @@ only T-0458 with Studio work, which is the lowest priority and waits.
 | 1 | P1 | US-0114: T-0440..T-0442 | Done in the first implementation PR of the stack. Design is [ADR-0031](docs/adr/0031-kubernetes-human-access-control.md) and the [plan](docs/development-plans/features/kubernetes-access-control/plan.md). | TC-0388..TC-0390 pass; every kind classified. The CI drift check that runs `tools/access-catalog --check` is T-0445 and starts once the template exists (US-0115). |
 | 2 | P1 | US-0115: T-0443, T-0445 | After rank 1. Confirm OD-3 (install default) with the maintainer before merging; implement as the proposed default meanwhile. | TC-0391, TC-0392 pass in Helm tests and the regression script. |
 | 3 | P1 | US-0116: T-0446..T-0449 | After rank 2. Verify the envtest API server's authorization mode first. | TC-0394..TC-0397 pass in the `integration` tier against Kubernetes 1.30.x. |
-| 4 | P1 | US-0117: T-0450, T-0451 | Start after T-0446 (needs a real API server). Both begin with a failing characterization test. T-0452 is blocked on OD-2. | TC-0398, TC-0399 pass; the review record lists accepted residuals. |
+| 4 | P1 | US-0117: T-0450, T-0451, T-0467 | Start after T-0446 (needs a real API server). All begin with a failing characterization test. T-0452 is blocked on OD-2. | TC-0398, TC-0399, TC-0414 pass; the review record lists accepted residuals. |
 | 5 | P1 | US-0118: T-0453..T-0455 | After ranks 2 and 3, so documentation states only verified behavior. Needs Node 24 for website validation. | TC-0401, TC-0402 pass. |
 | 6 | P2 | US-0119: T-0456, T-0457 | After rank 3. | TC-0403, TC-0404 pass. |
 | 7 | P2 | US-0120: T-0459, T-0460 | After rank 2; needs the kind tier. | TC-0406..TC-0408 pass with a retained evidence record. |
@@ -3971,8 +3975,8 @@ criteria.
 |---|---|
 | Epics | 25 |
 | User Stories | 123 |
-| Tasks (distinct IDs) | 466 across 470 definition rows; historical ID collisions remain |
-| Test Cases (distinct IDs) | 401 across 411 definition rows; historical ID collisions remain |
+| Tasks (distinct IDs) | 468 across 474 definition rows; historical ID collisions remain |
+| Test Cases (distinct IDs) | 403 across 413 definition rows; historical ID collisions remain |
 | MVP FRs covered | 97 |
 | NFRs covered | 13 |
 | DIFFs covered | 4 |
