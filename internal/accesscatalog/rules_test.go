@@ -105,7 +105,7 @@ func expectedRoles() []expectedRole {
 			{kinds: namespacedKindsOf(ClassGovernance), verbs: writeVerbs},
 		}},
 		{name: "kognition-grant-admin", binding: BindingNamespace, grants: []expectedGrant{
-			{kinds: namespacedKindsOf(ClassGrant), verbs: writeVerbs},
+			{kinds: namespacedKindsOf(ClassGrant, ClassCredential), verbs: writeVerbs},
 		}},
 		{name: "kognition-access-admin", binding: BindingNamespace},
 		{name: "kognition-auditor", binding: BindingNamespace, grants: []expectedGrant{
@@ -321,6 +321,32 @@ func TestOnlyTheAutonomyReviewerWritesStatus(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// SecretRef with the internal backend stores the credential in an annotation,
+// so any role that can read the object can read the credential.
+func TestOnlyGrantAdminReachesCredentialKinds(t *testing.T) {
+	catalog := Default()
+	requireCatalog(t, catalog)
+	reachable := 0
+	for _, kind := range catalog.Kinds {
+		if kind.Class != ClassCredential {
+			continue
+		}
+		for _, role := range catalog.Roles {
+			for _, verb := range requestVerbs {
+				if catalog.Permits(role.Name, kind.Name, "", verb) {
+					reachable++
+					if role.Name != "kognition-grant-admin" {
+						t.Errorf("%s may %s %s, which can carry credential values", role.Name, verb, kind.Name)
+					}
+				}
+			}
+		}
+	}
+	if reachable == 0 {
+		t.Fatal("kognition-grant-admin must be able to manage the credential class")
 	}
 }
 
