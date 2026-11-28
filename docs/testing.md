@@ -118,6 +118,15 @@ go run .\tools\securitygate identity-fixture
 helm lint deploy/helm/kognition
 & .\deploy\helm\kognition\tests\helm-regression-tests.ps1
 
+# Human access roles (ADR-0031). The chart template is generated from the access
+# catalog in internal/accesscatalog; regenerate it after changing a role or kind
+# and verify it has not drifted. The Go tests render the chart with helm and
+# compare every role with the catalog.
+.\make.ps1 access-catalog
+.\make.ps1 access-catalog-check
+go test .\internal\accesscatalog .\tools\access-catalog
+go test .\internal\traceability -run 'HumanRole|RenderedHuman|AccessAdminBinds|CommittedHuman'
+
 # Deployed Kubernetes memory gateway, raw-service authorization boundary,
 # revoked-grant provenance filtering, lifecycle/cascade audit, and denied
 # operation audit latency for get/list/search.

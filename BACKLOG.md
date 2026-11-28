@@ -143,7 +143,7 @@ All identifiers follow the schema defined in PROJECT.md Section 0.5.
 | EPIC-0022 | Demo Trustworthiness Hardening | MVP-3, MVP-4, MVP-7 | US-0088..US-0090 | EPIC-0008, EPIC-0009, EPIC-0014, EPIC-0018 | In progress |
 | EPIC-0023 | Kognition Studio Authoring Completion | MVP-1, MVP-3, MVP-4, MVP-7 | US-0092..US-0099 | Existing API slices of EPIC-0001, EPIC-0004, EPIC-0005, EPIC-0006, EPIC-0008, EPIC-0009, EPIC-0013, EPIC-0018, EPIC-0021 | In progress: authoring and core tutorial locally verified; installed/protected-action and pilot qualification open |
 | EPIC-0024 | External A2A Agents (ExternalAgent) | MVP-3, MVP-4 (security support) | US-0100..US-0113 | EPIC-0003, EPIC-0004, EPIC-0006, EPIC-0008, EPIC-0009, EPIC-0019, EPIC-0023 | Planned: v1 (US-0100..US-0106) approved; later evolution (US-0107..US-0113) designed, not approved |
-| EPIC-0025 | Kubernetes Human Access Control | MVP-3 (security support) | US-0114..US-0123 | EPIC-0008, EPIC-0009, EPIC-0015, EPIC-0018, EPIC-0023 | In progress: US-0114 done; stack 1 (US-0114..US-0120) owner-directed 2026-11-27; US-0121..US-0123 designed, not approved |
+| EPIC-0025 | Kubernetes Human Access Control | MVP-3 (security support) | US-0114..US-0123 | EPIC-0008, EPIC-0009, EPIC-0015, EPIC-0018, EPIC-0023 | In progress: US-0114 done, US-0115 in progress; stack 1 (US-0114..US-0120) owner-directed 2026-11-27; US-0121..US-0123 designed, not approved |
 
 ---
 
@@ -3592,7 +3592,7 @@ endpoints, non-CRD audit evidence) are stated, not hidden.
 | TC-0389 | **Passing:** Role safety invariants over every generated role: no wildcard in groups, resources, verbs or names; no `deletecollection`; no `secrets`, `pods/exec`, `pods/portforward` or `serviceaccounts/token`; read-only access to `system` kinds; no `*/status` write except `autonomyreviews/status` for `kognition-autonomy-reviewer`; each role stays within its documented classes; no role depends on another. The catalog's answer for every (role, kind, verb) equals a reference evaluation of the generated rules. | FR-0411, FR-0410, MVP-3 |
 | TC-0390 | **Passing:** The generator is deterministic (two runs are byte-identical with stable ordering); `--check` passes on a clean tree and fails on a modified template; the output parses as valid `rbacv1` objects. | FR-0411 |
 
-#### US-0115 - Chart-Shipped Human Roles - PLANNED
+#### US-0115 - Chart-Shipped Human Roles - IN PROGRESS (T-0444 and TC-0393 open)
 
 > As **Patricia**, I want the chart to install inert, maintained Kognition ClusterRoles, so that I can bind my existing groups to them instead of hand-writing RBAC for 55 kinds.
 
@@ -3606,8 +3606,8 @@ endpoints, non-CRD audit evidence) are stated, not hidden.
 
 | ID | Test | Traces |
 |---|---|---|
-| TC-0391 | **Pending:** Kubernetes mode renders the 15 expected ClusterRoles with names and labels; standalone mode renders none; `rbac.humanRoles.enabled=false` renders none; no RoleBinding or ClusterRoleBinding references a human role in any mode; no aggregation labels by default. | FR-0412 |
-| TC-0392 | **Pending:** Every resource in a rendered role belongs to an installed CRD (or the RBAC resources used by `kognition-access-admin`); that role's `bind` is limited to exactly the `kognition-*` role names; rendered output equals generator output. | FR-0412, FR-0411, MVP-3 |
+| TC-0391 | **Passing:** Kubernetes mode renders the 15 expected ClusterRoles with names and labels; standalone mode renders none; `rbac.humanRoles.enabled=false` renders none; no RoleBinding or ClusterRoleBinding references a human role in any mode; no aggregation labels by default. | FR-0412 |
+| TC-0392 | **Passing:** Every resource in a rendered role belongs to an installed CRD (or the RBAC resources used by `kognition-access-admin`); that role's `bind` is limited to exactly the `kognition-*` role names; rendered output equals generator output. | FR-0412, FR-0411, MVP-3 |
 | TC-0393 | **Pending:** Aggregation is off by default; each allowed target adds exactly the documented labels; an unknown target fails schema validation; no aggregated built-in role gains `secrets` or wildcard access. | FR-0412 |
 
 #### US-0116 - Authorization Proven on a Real API Server - PLANNED
@@ -3854,7 +3854,7 @@ only T-0458 with Studio work, which is the lowest priority and waits.
 | Rank | Priority | Work | Readiness and dependencies | Completion evidence |
 |---|---|---|---|---|
 | 1 | P1 | US-0114: T-0440..T-0442 | Done in the first implementation PR of the stack. Design is [ADR-0031](docs/adr/0031-kubernetes-human-access-control.md) and the [plan](docs/development-plans/features/kubernetes-access-control/plan.md). | TC-0388..TC-0390 pass; every kind classified. The CI drift check that runs `tools/access-catalog --check` is T-0445 and starts once the template exists (US-0115). |
-| 2 | P1 | US-0115: T-0443, T-0445 | After rank 1. Confirm OD-3 (install default) with the maintainer before merging; implement as the proposed default meanwhile. | TC-0391, TC-0392 pass in Helm tests and the regression script. |
+| 2 | P1 | US-0115: T-0443, T-0445 | Done in the second implementation PR; T-0444 (opt-in aggregation) remains. OD-3 (install default) is implemented as the proposed default (enabled) and still needs maintainer confirmation. | TC-0391, TC-0392 pass in the Go chart tests; the regression suite and the CI drift step pass. |
 | 3 | P1 | US-0116: T-0446..T-0449 | After rank 2. Verify the envtest API server's authorization mode first. | TC-0394..TC-0397 pass in the `integration` tier against Kubernetes 1.30.x. |
 | 4 | P1 | US-0117: T-0450, T-0451 | Start after T-0446 (needs a real API server). Both begin with a failing characterization test. T-0452 is blocked on OD-2. | TC-0398, TC-0399 pass; the review record lists accepted residuals. |
 | 5 | P1 | US-0118: T-0453..T-0455 | After ranks 2 and 3, so documentation states only verified behavior. Needs Node 24 for website validation. | TC-0401, TC-0402 pass. |

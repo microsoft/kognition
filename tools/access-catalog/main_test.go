@@ -72,6 +72,18 @@ func TestRunCheckFailsOnDriftAndLeavesTheFile(t *testing.T) {
 	}
 }
 
+func TestRunCheckAcceptsAWindowsCheckoutOfACleanFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "human-roles.yaml")
+	crlf := bytes.ReplaceAll(expectedTemplate(t), []byte("\n"), []byte("\r\n"))
+	if err := os.WriteFile(path, crlf, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--check", "--out", path}, &stdout, &stderr); code != 0 {
+		t.Fatalf("a CRLF checkout of an unmodified file must pass --check; exit %d, stderr: %s", code, stderr.String())
+	}
+}
+
 func TestRunCheckFailsWhenTheFileIsMissing(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"--check", "--out", filepath.Join(t.TempDir(), "absent.yaml")}, &stdout, &stderr); code != 1 {

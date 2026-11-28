@@ -47,6 +47,21 @@
       },
       "additionalProperties": true
     },
+    "rbac": {
+      "type": "object",
+      "properties": {
+        "humanRoles": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "webhook": {
       "type": "object",
       "properties": {
