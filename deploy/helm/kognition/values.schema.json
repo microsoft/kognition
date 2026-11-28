@@ -65,6 +65,13 @@
     "webhook": {
       "type": "object",
       "properties": {
+        "failurePolicy": {
+          "type": "string",
+          "enum": ["Fail", "Ignore"]
+        },
+        "allowFailOpen": {
+          "type": "boolean"
+        },
         "caBundle": {
           "type": "string",
           "maxLength": 131072,

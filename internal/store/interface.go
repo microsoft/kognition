@@ -18,6 +18,10 @@ var ErrNotFound = errors.New("resource not found")
 // ErrConflict is returned on optimistic concurrency violation.
 var ErrConflict = errors.New("resource version conflict")
 
+// ErrSelfApproval is returned when the principal that initiated an action tries
+// to decide that same action's RuntimeApproval.
+var ErrSelfApproval = errors.New("initiator cannot decide its own RuntimeApproval")
+
 // ErrAlreadyExists is returned when creating a resource that already exists.
 var ErrAlreadyExists = errors.New("resource already exists")
 

@@ -2425,6 +2425,8 @@ func TestHandle_MutatorAddsLabel_AllKinds_LabelPreservedInPatch(t *testing.T) {
 		"KnowledgeBaseClaim",
 		"KnowledgeBaseIndexRun",
 		"KnowledgeBaseIndexSchedule",
+		"Solution",
+		"AgentJob",
 	}
 
 	for _, kind := range kinds {
@@ -2520,6 +2522,8 @@ func TestWebhookConversionsRejectMalformedJSONForEveryKind(t *testing.T) {
 		"KnowledgeBaseClaim",
 		"KnowledgeBaseIndexRun",
 		"KnowledgeBaseIndexSchedule",
+		"Solution",
+		"AgentJob",
 	}
 	handler := NewHandler(intadmission.NewChain(nil, nil), testScheme(), testLogger())
 	validOriginal := []byte(`{"apiVersion":"kognition.dev/v1alpha1","metadata":{"name":"test"}}`)

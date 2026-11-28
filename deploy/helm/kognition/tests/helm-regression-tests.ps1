@@ -168,8 +168,9 @@ foreach ($invalid in @(
     "k8sController.workflowExecutor.bindingAdminGroups[0]=system:authenticated",
     "k8sController.workflowExecutor.bindingAdminGroups[0]=system:serviceaccounts:default"
 )) {
-    Assert-HelmTemplateFails -SetValues ($workflowExecutorValues + $invalid) -Pattern @("workflowExecutor") -TestName "Executor rejects $invalid"
+    Assert-HelmTemplateFails -SetValues ($workflowExecutorValues + $invalid) -Pattern @("workflowExecutor", "webhook.failurePolicy must be Fail") -TestName "Executor rejects $invalid"
 }
+Assert-HelmTemplateFails -SetValues ($workflowExecutorValues + @("webhook.failurePolicy=Ignore", "webhook.allowFailOpen=true")) -Pattern @("workflowExecutor") -TestName "Executor still requires fail-closed admission when fail-open is allowed"
 $collaborationValues = $workflowExecutorValues + @(
     "k8sController.managedNamespaces[0]=kognition-work",
     "k8sController.workflowExecutor.collaboration.enabled=true"
