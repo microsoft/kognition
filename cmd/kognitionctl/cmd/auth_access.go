@@ -129,14 +129,28 @@ func runAuthCanI(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	} else if decision.Allowed {
-		fmt.Fprintln(cmd.OutOrStdout(), "yes")
-	} else {
-		fmt.Fprintln(cmd.OutOrStdout(), "no")
+		if _, err := fmt.Fprintln(cmd.OutOrStdout(), "yes"); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintln(cmd.OutOrStdout(), "no"); err != nil {
+		return err
 	}
 	if !decision.Allowed {
 		return ErrAccessDenied
 	}
 	return nil
+}
+
+// textWriter keeps the first write error so a run of prints needs one check.
+type textWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (t *textWriter) printf(format string, args ...any) {
+	if t.err == nil {
+		_, t.err = fmt.Fprintf(t.w, format, args...)
+	}
 }
 
 func runAuthList(cmd *cobra.Command, _ []string) error {
@@ -152,8 +166,8 @@ func runAuthList(cmd *cobra.Command, _ []string) error {
 	}
 
 	out := cmd.OutOrStdout()
-	writer := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "RESOURCE\tVERBS\tRESOURCE NAMES")
+	table := &textWriter{w: tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)}
+	table.printf("RESOURCE\tVERBS\tRESOURCE NAMES\n")
 	for _, row := range set.Rows {
 		names := "*"
 		if len(row.ResourceNames) > 0 {
@@ -163,22 +177,27 @@ func runAuthList(cmd *cobra.Command, _ []string) error {
 		if row.Wildcard {
 			resource += " (wildcard)"
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\n", resource, strings.Join(row.Verbs, ","), names)
+		table.printf("%s\t%s\t%s\n", resource, strings.Join(row.Verbs, ","), names)
 	}
-	if err := writer.Flush(); err != nil {
+	if table.err != nil {
+		return table.err
+	}
+	if err := table.w.(*tabwriter.Writer).Flush(); err != nil {
 		return err
 	}
+
+	notes := &textWriter{w: out}
 	if len(set.Rows) == 0 {
-		fmt.Fprintf(out, "No Kognition permissions found in namespace %q.\n", set.Namespace)
+		notes.printf("No Kognition permissions found in namespace %q.\n", set.Namespace)
 	}
-	fmt.Fprintf(out, "\nNamespace %q. This list is advisory; the server authorizes every request.\n", set.Namespace)
-	fmt.Fprintln(out, "Cluster-scoped kinds (the classes) are not included; use \"auth can-i\" for those.")
+	notes.printf("\nNamespace %q. This list is advisory; the server authorizes every request.\n", set.Namespace)
+	notes.printf("Cluster-scoped kinds (the classes) are not included; use \"auth can-i\" for those.\n")
 	if set.Incomplete || set.EvaluationError != "" {
 		reason := set.EvaluationError
 		if reason == "" {
 			reason = "an authorizer could not enumerate its rules"
 		}
-		fmt.Fprintf(out, "Warning: the list is incomplete (%s). Absence from the list does not mean denial.\n", reason)
+		notes.printf("Warning: the list is incomplete (%s). Absence from the list does not mean denial.\n", reason)
 	}
-	return nil
+	return notes.err
 }
