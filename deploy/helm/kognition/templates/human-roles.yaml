@@ -44,7 +44,6 @@ rules:
     - modelinvocationprofiles
     - models
     - prompts
-    - secretrefs
     - solutions
     - toolgrants
     - tools
@@ -437,7 +436,6 @@ rules:
     - runtimeapprovalquotatickets
     - runtimeapprovals
     - runtimeapprovaltombstones
-    - secretrefs
     - solutions
     - toolgrants
     - toolinvocationruns
