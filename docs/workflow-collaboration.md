@@ -68,6 +68,15 @@ interaction: `allowedInteractions` and `AgentCommunicationPolicy` remain the onl
 authority, and a member can still decide not to delegate. Control characters are
 rejected, and descriptions are collapsed to one line before they enter a prompt.
 
+### Keep member results bounded
+
+Each member's plain-text result, and each `goal`, `context` or `result` field in
+a coordination payload, is limited to 8 KiB (8192 bytes of UTF-8 text). The
+controller includes this limit in member prompts. For long requests, ask branches
+for concise findings and the synthesizer for a bounded summary; the team token
+budget does not increase the per-result byte limit. Oversized replies are rejected,
+not silently truncated.
+
 ## Define a step
 
 ```yaml
@@ -129,7 +138,8 @@ contains runnable Parallel and Supervisor workflows and their member Agents.
 Member runtimes report usage in the result artifact metadata under
 `kognition.dev/usage` as `{"totalTokens": n}`. The controller sums reported usage
 against `limits.maxTokens`, including the member call that accepts or rejects a
-handoff. If a member reports no usable count, the controller
+handoff and completed member calls whose replies are empty or invalid. If a member
+reports no usable count, the controller
 charges the whole remaining allowance rather than assuming zero, so an
 unmetered member cannot bypass the limit. Model gateway metering of the member
 Agent still applies independently.
@@ -246,6 +256,13 @@ A step fails with a reason such as `MemberFailed`, `MemberRejected`,
 `MemberRequestedInput`, `InvalidPayload` or `NoResult`, or when it reaches a
 limit or its timeout. An optional Parallel branch may fail without failing the
 step. Completed turns stay recorded in the ledger.
+
+`NoResult` means the completed reply is blank or cannot supply an allowed terminal
+operation. A non-empty plain-text reply over the 8 KiB limit fails with
+`InvalidPayload` and a message identifying the size limit. Both outcomes retain
+reported token usage; failure to use a reply does not mean the model call was free.
+When a required Parallel branch fails, the remaining work is cancelled and the
+synthesizer is not started.
 
 ## Limits of the current design
 

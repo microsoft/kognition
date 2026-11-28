@@ -4,6 +4,7 @@
 package a2atransport
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -122,6 +123,60 @@ func TestInterpretCompletedResults(t *testing.T) {
 		}
 		if obs.Status != collaboration.ReportCompleted || len(obs.Operations) != 1 || obs.Operations[0].Kind != tc.kind {
 			t.Fatalf("%s: %+v", name, obs)
+		}
+	}
+}
+
+func TestInterpretCompletedResultBoundsAndUsage(t *testing.T) {
+	for _, kind := range []collaboration.OperationKind{collaboration.OpComplete, collaboration.OpFinalize} {
+		for _, tc := range []struct {
+			name    string
+			text    string
+			failure string
+		}{
+			{name: "at limit", text: strings.Repeat("x", collaboration.MaxContentBytes)},
+			{name: "over limit", text: strings.Repeat("x", collaboration.MaxContentBytes+1), failure: FailureInvalidPayload},
+			{name: "UTF-8 over limit", text: strings.Repeat("\u00e9", collaboration.MaxContentBytes/2+1), failure: FailureInvalidPayload},
+			{name: "empty", text: " \n\t ", failure: FailureNoResult},
+			{name: "malformed operations", text: `{"schemaVersion":"` + collaboration.SchemaVersion + `","operations":[{"kind":"nope"}]}`, failure: FailureInvalidPayload},
+		} {
+			t.Run(string(kind)+"/"+tc.name, func(t *testing.T) {
+				task := taskIn(a2a.TaskStateCompleted, a2a.NewTextPart(tc.text))
+				task.Artifacts = append(task.Artifacts, &a2a.Artifact{
+					Metadata: map[string]any{collaboration.UsageMetadataKey: map[string]any{"totalTokens": float64(2133)}},
+				})
+				msg := startMsg(kind)
+				msg.Allowance = 5000
+				obs := interpret(msg, "reviewer", task)
+				if !obs.Settled || obs.Actor != "reviewer" || !obs.TokensKnown || obs.TokensUsed != 2133 {
+					t.Fatalf("outcome lost identity or usage: %+v", obs)
+				}
+				if tc.failure != "" {
+					if obs.Status != collaboration.ReportFailed || !strings.HasPrefix(obs.Failure, tc.failure) || len(obs.Operations) != 0 {
+						t.Fatalf("invalid result: %+v", obs)
+					}
+					if strings.Contains(tc.name, "over limit") && !strings.Contains(obs.Failure, fmt.Sprintf("exceeds %d bytes", collaboration.MaxContentBytes)) {
+						t.Fatalf("size failure lacks the limit: %+v", obs)
+					}
+					return
+				}
+				if obs.Status != collaboration.ReportCompleted || len(obs.Operations) != 1 || obs.Operations[0].Kind != kind || obs.Operations[0].Result != tc.text {
+					t.Fatalf("bounded result must be preserved: %+v", obs)
+				}
+			})
+		}
+	}
+}
+
+func TestPromptIncludesContentBounds(t *testing.T) {
+	for _, allowed := range [][]collaboration.OperationKind{
+		{collaboration.OpComplete},
+		{collaboration.OpFinalize},
+		{collaboration.OpFinalize, collaboration.OpDelegate, collaboration.OpHandoff},
+	} {
+		p := Prompt(startMsg(allowed...), []string{"analyst"}, Team{})
+		if !strings.Contains(p, fmt.Sprintf("%d bytes", collaboration.MaxContentBytes)) || !strings.Contains(p, "UTF-8") {
+			t.Fatalf("prompt lacks content bounds:\n%s", p)
 		}
 	}
 }

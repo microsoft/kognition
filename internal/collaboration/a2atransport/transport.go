@@ -124,11 +124,11 @@ func interpret(msg collaboration.Message, actor string, task *a2a.Task) driver.O
 }
 
 func completed(msg collaboration.Message, obs driver.Observation, task *a2a.Task) driver.Observation {
+	obs.TokensUsed, obs.TokensKnown = usage(task, msg.Allowance)
 	text, ops, err := artifacts(task)
 	if msg.Kind == collaboration.DispatchPrepare {
 		obs.Status = collaboration.ReportCompleted
 		obs.Accepted = err == nil && ops == nil && strings.HasPrefix(strings.ToUpper(strings.TrimSpace(text)), "ACCEPT")
-		obs.TokensUsed, obs.TokensKnown = usage(task, msg.Allowance)
 		return obs
 	}
 	if err != nil {
@@ -139,11 +139,13 @@ func completed(msg collaboration.Message, obs driver.Observation, task *a2a.Task
 		ops, err = plain(msg, text)
 		if err != nil {
 			obs.Status, obs.Failure = collaboration.ReportFailed, FailureNoResult
+			if errors.Is(err, collaboration.ErrInvalidPayload) {
+				obs.Failure = FailureInvalidPayload + ": " + err.Error()
+			}
 			return obs
 		}
 	}
 	obs.Status, obs.Operations = collaboration.ReportCompleted, ops
-	obs.TokensUsed, obs.TokensKnown = usage(task, msg.Allowance)
 	return obs
 }
 

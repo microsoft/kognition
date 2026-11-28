@@ -135,6 +135,7 @@ func replyInstructions(allowed []collaboration.OperationKind, others []string, d
 	} else {
 		b.WriteString("Reply with your result as plain text.\n")
 	}
+	fmt.Fprintf(&b, "Keep your result within %d bytes of UTF-8 text. Summarize long material to fit this limit.\n", collaboration.MaxContentBytes)
 	var extra []string
 	if has(collaboration.OpDelegate) {
 		extra = append(extra, `{"kind":"delegate","operationId":"<id>","to":"<member>","goal":"<goal>"}`)
@@ -155,6 +156,7 @@ func replyInstructions(allowed []collaboration.OperationKind, others []string, d
 			b.WriteString(strings.Join(described, ""))
 		}
 		b.WriteString("A member sees only the goal text you write, not your task and not other members' results. Put everything it needs into that goal, including any earlier findings it must review or build on.\n")
+		fmt.Fprintf(&b, "Each goal, context or result field must also fit within %d bytes of UTF-8 text.\n", collaboration.MaxContentBytes)
 		fmt.Fprintf(&b, "To involve another member instead, reply with only a JSON document of the form {\"schemaVersion\":%q,\"operations\":[...]} whose operations are drawn from: %s. Other members can be reached only this way; no tool is needed or available for it.\n", collaboration.SchemaVersion, strings.Join(extra, ", "))
 	}
 	return b.String()
