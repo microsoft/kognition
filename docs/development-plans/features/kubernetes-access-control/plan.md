@@ -143,7 +143,7 @@ means the kinds in section 5.
 | `kognition-viewer` | RoleBinding | R on `config`, `knowledge`, `governance`, `grant`, `platform` (not `credential`) |
 | `kognition-run-viewer` | RoleBinding | R on `submit`, `runtime`, `decision` |
 | `kognition-data-reader` | RoleBinding | R on `data` |
-| `kognition-builder` | RoleBinding | W on `config`; `create` and `delete` on `evaluationruns` |
+| `kognition-builder` | RoleBinding | W on `config`; R, `create` and `delete` on `evaluationruns` |
 | `kognition-curator` | RoleBinding | W on `knowledge` |
 | `kognition-consumer` | RoleBinding | `create` on `workflowruns` and `agentjobs`; verb `use` on `workflows`; verb `invoke` on `agents` |
 | `kognition-operator` | RoleBinding | everything in `kognition-run-viewer`; verb `reconcile` on `runtimeapprovals/reconcile` |

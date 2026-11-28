@@ -14,6 +14,7 @@
 
     Supported targets:
         all build clean tidy test integration vet fmt lint quality quality-deep
+        access-catalog access-catalog-check
         proto proto-lint
         docker docker-k8s docker-standalone refresh-k8s-controller
         up down migrate
@@ -196,6 +197,10 @@ function Target-Lint {
     Target-Fmt
     Write-Host 'Lint passed'
 }
+
+function Target-AccessCatalog { Invoke-Native 'go' @('run', './tools/access-catalog') }
+
+function Target-AccessCatalogCheck { Invoke-Native 'go' @('run', './tools/access-catalog', '--check') }
 
 function Target-Quality {
     Resolve-Tool 'golangci-lint' | Out-Null
@@ -1851,6 +1856,8 @@ function Target-Help {
                 '  vet                  go vet ./...',
                 '  fmt                  Verify gofmt formatting',
                 '  lint                 vet + fmt',
+                '  access-catalog       Regenerate the human-role Helm template from the access catalog',
+                '  access-catalog-check Fail if the human-role Helm template is out of date',
                 '  quality              Run the full Go quality policy',
                 '  quality-deep         Report complexity and duplication debt',
                 '  proto                buf generate',
@@ -1951,6 +1958,8 @@ switch ($parsed.Target) {
     'vet'                  { Target-Vet }
     'fmt'                  { Target-Fmt }
     'lint'                 { Target-Lint }
+    'access-catalog'       { Target-AccessCatalog }
+    'access-catalog-check' { Target-AccessCatalogCheck }
     'quality'              { Target-Quality }
     'quality-deep'         { Target-QualityDeep }
     'proto'                { Target-Proto }

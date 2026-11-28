@@ -143,7 +143,7 @@ All identifiers follow the schema defined in PROJECT.md Section 0.5.
 | EPIC-0022 | Demo Trustworthiness Hardening | MVP-3, MVP-4, MVP-7 | US-0088..US-0090 | EPIC-0008, EPIC-0009, EPIC-0014, EPIC-0018 | In progress |
 | EPIC-0023 | Kognition Studio Authoring Completion | MVP-1, MVP-3, MVP-4, MVP-7 | US-0092..US-0099 | Existing API slices of EPIC-0001, EPIC-0004, EPIC-0005, EPIC-0006, EPIC-0008, EPIC-0009, EPIC-0013, EPIC-0018, EPIC-0021 | In progress: authoring and core tutorial locally verified; installed/protected-action and pilot qualification open |
 | EPIC-0024 | External A2A Agents (ExternalAgent) | MVP-3, MVP-4 (security support) | US-0100..US-0113 | EPIC-0003, EPIC-0004, EPIC-0006, EPIC-0008, EPIC-0009, EPIC-0019, EPIC-0023 | Planned: v1 (US-0100..US-0106) approved; later evolution (US-0107..US-0113) designed, not approved |
-| EPIC-0025 | Kubernetes Human Access Control | MVP-3 (security support) | US-0114..US-0123 | EPIC-0008, EPIC-0009, EPIC-0015, EPIC-0018, EPIC-0023 | Planned: stack 1 (US-0114..US-0120) owner-directed 2026-11-27; US-0121..US-0123 designed, not approved |
+| EPIC-0025 | Kubernetes Human Access Control | MVP-3 (security support) | US-0114..US-0123 | EPIC-0008, EPIC-0009, EPIC-0015, EPIC-0018, EPIC-0023 | In progress: US-0114 done; stack 1 (US-0114..US-0120) owner-directed 2026-11-27; US-0121..US-0123 designed, not approved |
 
 ---
 
@@ -3541,7 +3541,7 @@ US-0109/US-0108.
 | TC-0386 | **Not scheduled:** A second protocol value can be added with no change to the Workflow API and no regression of the A2A path. | FR-0617, MVP-5 |
 | TC-0387 | **Not scheduled:** Two clusters interoperate in both directions with the same card model. | FR-0616, MVP-5 |
 
-### EPIC-0025 - Kubernetes Human Access Control - PLANNED
+### EPIC-0025 - Kubernetes Human Access Control - IN PROGRESS
 
 > **Goal:** Give people and automation a maintained, least-privilege way to use Kognition in Kubernetes mode: native Kubernetes roles for every resource kind and action, proven against a real API server and documented with an explicit responsibility boundary. Identity-provider integration stays with the platform operator.
 > **Design:** [Access control plan](docs/development-plans/features/kubernetes-access-control/plan.md) and [ADR-0031](docs/adr/0031-kubernetes-human-access-control.md) (Proposed). Requirements: FR-0410..FR-0419 in [PROJECT.md](PROJECT.md).
@@ -3574,7 +3574,7 @@ authority it should not hold. Every shipped kind has an access class and a new k
 cannot ship without one. The known gaps (interactive chat, bearer-only decision
 endpoints, non-CRD audit evidence) are stated, not hidden.
 
-#### US-0114 - Access Catalog and Classification - PLANNED
+#### US-0114 - Access Catalog and Classification - DONE
 
 > As **Patricia**, I want every Kognition resource kind classified by the consequence of granting access, with the human roles generated from that classification, so that a new kind cannot ship without an access decision and roles cannot drift.
 
@@ -3588,9 +3588,9 @@ endpoints, non-CRD audit evidence) are stated, not hidden.
 
 | ID | Test | Traces |
 |---|---|---|
-| TC-0388 | **Pending:** Classification completeness: every shipped CRD kind has exactly one class; no entry names a missing CRD; cluster-scoped kinds appear only in `class` or `system`; a temporary CRD fixture with an unclassified kind fails with that kind's name. | FR-0411, MVP-3 |
-| TC-0389 | **Pending:** Role safety invariants over every generated role: no wildcard in groups, resources, verbs or names; no `deletecollection`; no `secrets`, `pods/exec`, `pods/portforward` or `serviceaccounts/token`; read-only access to `system` kinds; no `*/status` write except `autonomyreviews/status` for `kognition-autonomy-reviewer`; `SecretRef` (class `credential`) is reachable only by `kognition-grant-admin`; no role other than the named autonomy exception combines authoring, delegation and decision rights; each role stays within its documented classes; no role depends on another. The catalog's answer for every (role, kind, verb) equals a reference evaluation of the generated rules. | FR-0411, FR-0410, MVP-3 |
-| TC-0390 | **Pending:** The generator is deterministic (two runs are byte-identical with stable ordering); `--check` passes on a clean tree and fails on a modified template; the output parses as valid `rbacv1` objects. | FR-0411 |
+| TC-0388 | **Passing:** Classification completeness: every shipped CRD kind has exactly one class; no entry names a missing CRD; cluster-scoped kinds appear only in `class` or `system`; a temporary CRD fixture with an unclassified kind fails with that kind's name. | FR-0411, MVP-3 |
+| TC-0389 | **Passing:** Role safety invariants over every generated role: no wildcard in groups, resources, verbs or names; no `deletecollection`; no `secrets`, `pods/exec`, `pods/portforward` or `serviceaccounts/token`; read-only access to `system` kinds; no `*/status` write except `autonomyreviews/status` for `kognition-autonomy-reviewer`; `SecretRef` (class `credential`) is reachable only by `kognition-grant-admin`; no role other than the named autonomy exception combines authoring, delegation and decision rights; each role stays within its documented classes; no role depends on another. The catalog's answer for every (role, kind, verb) equals a reference evaluation of the generated rules. | FR-0411, FR-0410, MVP-3 |
+| TC-0390 | **Passing:** The generator is deterministic (two runs are byte-identical with stable ordering); `--check` passes on a clean tree and fails on a modified template; the output parses as valid `rbacv1` objects. | FR-0411 |
 
 #### US-0115 - Chart-Shipped Human Roles - PLANNED
 
@@ -3865,7 +3865,7 @@ only T-0458 with Studio work, which is the lowest priority and waits.
 
 | Rank | Priority | Work | Readiness and dependencies | Completion evidence |
 |---|---|---|---|---|
-| 1 | P1 | US-0114: T-0440..T-0442 | Ready. Design is [ADR-0031](docs/adr/0031-kubernetes-human-access-control.md) and the [plan](docs/development-plans/features/kubernetes-access-control/plan.md). | TC-0388..TC-0390 pass; every kind classified; generator drift check in CI. |
+| 1 | P1 | US-0114: T-0440..T-0442 | Done in the first implementation PR of the stack. Design is [ADR-0031](docs/adr/0031-kubernetes-human-access-control.md) and the [plan](docs/development-plans/features/kubernetes-access-control/plan.md). | TC-0388..TC-0390 pass; every kind classified. The CI drift check that runs `tools/access-catalog --check` is T-0445 and starts once the template exists (US-0115). |
 | 2 | P1 | US-0115: T-0443, T-0445 | After rank 1. Confirm OD-3 (install default) with the maintainer before merging; implement as the proposed default meanwhile. | TC-0391, TC-0392 pass in Helm tests and the regression script. |
 | 3 | P1 | US-0116: T-0446..T-0449 | After rank 2. Verify the envtest API server's authorization mode first. | TC-0394..TC-0397 pass in the `integration` tier against Kubernetes 1.30.x. |
 | 4 | P1 | US-0117: T-0450, T-0451, T-0467, T-0470, T-0472, T-0473 | Start after T-0446 (needs a real API server). T-0451, T-0467 and T-0470 begin with a failing characterization test; T-0470 is a prerequisite for shipping the consumer role's `agentjobs` permission. T-0472 and T-0473 are small, independent and ready now. T-0471 is optional (P3). T-0452 and T-0468 are blocked on the OD-2 and OD-1 decisions (see the ADR review section). | TC-0398, TC-0399, TC-0414, TC-0417, TC-0419, TC-0420 pass; the review record lists accepted residuals. |

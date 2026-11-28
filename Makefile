@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 .PHONY: build test integration lint quality quality-deep proto clean docker fmt vet install-hooks services \
+	access-catalog access-catalog-check \
 	deploy-standalone deploy-kubernetes undeploy-standalone undeploy-kubernetes \
 	install uninstall fresh-kubernetes-demo foundry-creds kind-load cert-manager \
 	docker-k8s docker-standalone \
@@ -123,6 +124,14 @@ vet:
 ## fmt: Check formatting
 fmt:
 	@test -z "$$($(GOFMT) -l .)" || (echo "Files need formatting:" && $(GOFMT) -l . && exit 1)
+
+## access-catalog: Regenerate the human-role Helm template from the access catalog
+access-catalog:
+	go run ./tools/access-catalog
+
+## access-catalog-check: Fail if the human-role Helm template is out of date
+access-catalog-check:
+	go run ./tools/access-catalog --check
 
 ## proto: Generate protobuf code
 proto:
