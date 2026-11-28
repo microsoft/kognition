@@ -131,6 +131,24 @@ func TestRuntimeApprovalDecisionHandlerRejectsRuntimeIdentityBeforeAuthorization
 	}
 }
 
+func TestRuntimeApprovalDecisionHandlerMapsSelfApprovalToForbidden(t *testing.T) {
+	invocationID := "invocation-a"
+	name := runtimeapproval.CanonicalName("team-a", invocationID)
+	decisions := &recordingRuntimeApprovalDecisionStore{err: store.ErrSelfApproval}
+	handler := NewRuntimeApprovalDecisionHandler(
+		&recordingTokenReviewer{response: authenticatedTokenReview()},
+		&recordingSubjectAccessReviewer{response: &authorizationv1.SubjectAccessReview{Status: authorizationv1.SubjectAccessReviewStatus{Allowed: true}}},
+		decisions,
+	)
+	response := serveRuntimeApprovalDecision(t, handler, "token-a", map[string]any{
+		"namespace": "team-a", "name": name, "invocationID": invocationID,
+		"decision": "approve", "expectedResourceVersion": 7,
+	})
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusForbidden, response.Body.String())
+	}
+}
+
 func authenticatedTokenReview() *authenticationv1.TokenReview {
 	return &authenticationv1.TokenReview{Status: authenticationv1.TokenReviewStatus{
 		Authenticated: true,

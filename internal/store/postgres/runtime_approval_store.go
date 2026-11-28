@@ -318,7 +318,12 @@ func (s *Store) DecideRuntimeApproval(ctx context.Context, workspace, invocation
 	if decision.ExpectedResourceVersion <= 0 || !runtimeapproval.ValidDecisionActor(decision.Issuer, decision.Subject) {
 		return api.RuntimeApproval{}, fmt.Errorf("RuntimeApproval decision requires expected resource version and canonical actor")
 	}
-	return s.transitionRuntimeApprovalDecision(ctx, workspace, invocationID, decision.ExpectedResourceVersion, func(approval *api.RuntimeApproval, now time.Time) bool {
+	selfDecision := false
+	approval, err := s.transitionRuntimeApprovalDecision(ctx, workspace, invocationID, decision.ExpectedResourceVersion, func(approval *api.RuntimeApproval, now time.Time) bool {
+		if runtimeapproval.IsSelfDecision(*approval, decision.Issuer, decision.Subject) {
+			selfDecision = true
+			return false
+		}
 		approval.Status.DecidedByIssuer = decision.Issuer
 		approval.Status.DecidedBySubject = decision.Subject
 		if !now.Before(approval.Spec.ExpiresAt) {
@@ -330,6 +335,10 @@ func (s *Store) DecideRuntimeApproval(ctx context.Context, workspace, invocation
 		runtimeapproval.PopulateDecisionAudit(approval)
 		return true
 	})
+	if selfDecision {
+		return api.RuntimeApproval{}, store.ErrSelfApproval
+	}
+	return approval, err
 }
 
 func (s *Store) ExpireRuntimeApprovalDecision(ctx context.Context, workspace, invocationID string, expectedResourceVersion int64) (api.RuntimeApproval, error) {

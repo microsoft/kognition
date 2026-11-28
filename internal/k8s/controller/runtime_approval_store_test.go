@@ -316,6 +316,46 @@ func TestKubernetesRuntimeApprovalCreateReplayDecisionAndConservativeExpiry(t *t
 	}
 }
 
+func TestKubernetesRuntimeApprovalInitiatorCannotDecideItsOwnAction(t *testing.T) {
+	ctx := context.Background()
+	storage := newRuntimeApprovalTestStore(t, newFakeClient(t))
+	keys := kubernetesRuntimeApprovalTestKeys(t)
+	storage.ConfigureRuntimeApprovalBindingKeys(keys)
+	proposed, payload := conformancetest.ExecutorApprovalProposal(t, keys, "self-approval")
+	initiator := proposed.Spec.ExecutorAction.Initiator
+	_, created, err := storage.CreateOrGetRuntimeApproval(ctx, proposed, payload, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = storage.DecideRuntimeApproval(ctx, "team-a", "self-approval", store.RuntimeApprovalDecision{
+		Decision: api.RuntimeApprovalDecisionApproved, ExpectedResourceVersion: created.ResourceVersion,
+		Issuer: initiator.Issuer, Subject: initiator.Subject,
+	})
+	if !errors.Is(err, store.ErrSelfApproval) {
+		t.Fatalf("initiator decision error = %v, want ErrSelfApproval", err)
+	}
+	for _, decision := range []string{api.RuntimeApprovalDecisionApproved, api.RuntimeApprovalDecisionRejected} {
+		if _, err := storage.DecideRuntimeApproval(ctx, "team-a", "self-approval", store.RuntimeApprovalDecision{
+			Decision: decision, ExpectedResourceVersion: created.ResourceVersion, Issuer: initiator.Issuer, Subject: initiator.Subject,
+		}); !errors.Is(err, store.ErrSelfApproval) {
+			t.Fatalf("initiator %s error = %v, want ErrSelfApproval", decision, err)
+		}
+	}
+	current, err := storage.GetRuntimeApprovalByInvocation(ctx, "team-a", "self-approval")
+	if err != nil || current.Status.DecisionState != api.RuntimeApprovalDecisionPending || current.ResourceVersion != created.ResourceVersion {
+		t.Fatalf("refused self-approval changed the approval: %#v, err %v", current.Status, err)
+	}
+
+	decided, err := storage.DecideRuntimeApproval(ctx, "team-a", "self-approval", store.RuntimeApprovalDecision{
+		Decision: api.RuntimeApprovalDecisionApproved, ExpectedResourceVersion: created.ResourceVersion,
+		Issuer: initiator.Issuer, Subject: "independent-approver",
+	})
+	if err != nil || decided.Status.DecisionState != api.RuntimeApprovalDecisionApproved {
+		t.Fatalf("independent approver decision = %#v, err %v", decided.Status, err)
+	}
+}
+
 func TestKubernetesRuntimeApprovalCreateRetriesTransientWorkspaceLeaseContention(t *testing.T) {
 	ctx := context.Background()
 	contendedClient := &runtimeApprovalTransientWorkspaceLeaseClient{

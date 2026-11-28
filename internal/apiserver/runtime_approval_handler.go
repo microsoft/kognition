@@ -177,6 +177,8 @@ func writeRuntimeApprovalStoreError(response http.ResponseWriter, err error, fal
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(response, http.StatusNotFound, "RuntimeApproval not found")
+	case errors.Is(err, store.ErrSelfApproval):
+		writeError(response, http.StatusForbidden, "forbidden")
 	case errors.Is(err, store.ErrConflict):
 		writeError(response, http.StatusConflict, "RuntimeApproval conflict")
 	default:

@@ -140,6 +140,8 @@ func (h *RuntimeApprovalDecisionHandler) ServeHTTP(response http.ResponseWriter,
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, store.ErrSelfApproval):
+			http.Error(response, "forbidden", http.StatusForbidden)
 		case errors.Is(err, store.ErrNotFound):
 			http.Error(response, "RuntimeApproval not found", http.StatusNotFound)
 		case errors.Is(err, store.ErrConflict):

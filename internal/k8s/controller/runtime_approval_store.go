@@ -235,7 +235,12 @@ func (s *StoreAdapter) DecideRuntimeApproval(ctx context.Context, workspace, inv
 	if decision.ExpectedResourceVersion <= 0 || !runtimeapproval.ValidDecisionActor(decision.Issuer, decision.Subject) {
 		return api.RuntimeApproval{}, fmt.Errorf("RuntimeApproval decision requires expected resource version and canonical actor")
 	}
-	return s.transitionKubernetesRuntimeApprovalDecision(ctx, workspace, invocationID, decision.ExpectedResourceVersion, func(approval *api.RuntimeApproval, effectiveNow time.Time) bool {
+	selfDecision := false
+	approval, err := s.transitionKubernetesRuntimeApprovalDecision(ctx, workspace, invocationID, decision.ExpectedResourceVersion, func(approval *api.RuntimeApproval, effectiveNow time.Time) bool {
+		if runtimeapproval.IsSelfDecision(*approval, decision.Issuer, decision.Subject) {
+			selfDecision = true
+			return false
+		}
 		approval.Status.DecidedByIssuer = decision.Issuer
 		approval.Status.DecidedBySubject = decision.Subject
 		if !effectiveNow.Before(approval.Spec.ExpiresAt) {
@@ -248,6 +253,10 @@ func (s *StoreAdapter) DecideRuntimeApproval(ctx context.Context, workspace, inv
 		runtimeapproval.PopulateDecisionAudit(approval)
 		return true
 	})
+	if selfDecision {
+		return api.RuntimeApproval{}, store.ErrSelfApproval
+	}
+	return approval, err
 }
 
 func (s *StoreAdapter) ExpireRuntimeApprovalDecision(ctx context.Context, workspace, invocationID string, expectedResourceVersion int64) (api.RuntimeApproval, error) {
