@@ -302,6 +302,7 @@ by that path; closing this is the purpose of the later aggregated action API.
 | G8 | `SecretRef` with the `internal` backend stores the credential in an annotation, so readers of the object read the credential. | `credential` class held only by grant-admin. Auditor and viewer cannot read it. Moving credential values out of the object is a follow-up that would allow broader reads. |
 | G9 | `create` on `agentjobs` lets the creator author an Agent (inline `spec.agentSpec`) and invoke any Agent in the namespace (`spec.agentRef`) with no caller-identity check, so the consumer role can bypass builder rights and scoped `invoke` grants. | **Closed (T-0470).** Admission authorizes the requesting user: `invoke` on the named Agent, `create` on `agents` for an inline spec, failing closed, with the controller's own service account as the only exemption. |
 | G10 | `kognition-access-admin` can delete any RoleBinding in its namespace, including bindings platform components rely on; Kubernetes' `bind` checks do not cover deletion. | Documented as namespace-wide revocation authority. Optional admission hardening in T-0471. |
+| G11 | `webhook.failurePolicy` defaults to `Fail` but the schema accepts `Ignore`. With `Ignore`, every authorization-in-admission check fails open while the webhook is unavailable. | Reject `Ignore` for the validating webhook, or require an explicit opt-out documented as unsupported for production (T-0472). Proposed in the ADR review section. |
 
 ## 10. Qualification
 

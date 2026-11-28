@@ -181,7 +181,7 @@ results in the namespace.
 | --- | --- | --- | --- |
 | A. Ship nothing; document chat as privileged | Status quo. | No risk added. | Least-privilege chat is impossible through the CLI or Studio. |
 | B. Admission `invoke` check on `AgentInstance` creation, no read access | Require `invoke` on the Agent, grant `create` only. | Closes the authority gap. | The client cannot read the answer without `get`; unusable. |
-| C. Admission `invoke` check plus `create` and `get`, with namespace-wide visibility accepted and documented (recommended now) | A new, narrowly named role `kognition-chat` holds `create` and `get` on `agentinstances`; admission requires `invoke` on the named Agent for the caller. | Small, reuses the proven check, and fits the model: the namespace is the isolation boundary, and `run-viewer` and `auditor` already read every instance there. Per-Agent scoping works through `resourceNames` on `invoke`. | Anyone holding `kognition-chat` can read other holders' chat prompts and results in the same namespace. Isolation between people needs separate namespaces. |
+| C. Admission `invoke` check plus `create` and `get`, with namespace-wide visibility accepted and documented (recommended now) | A new, narrowly named role `kognition-chat` holds `create` and `get` on `agentinstances`; admission requires `invoke` on the named Agent for the caller. | Small, reuses the proven check, and fits the model: the namespace is the isolation boundary, and `run-viewer` and `auditor` already read every instance there. Per-Agent scoping works through `resourceNames` on `invoke`. | Anyone holding `kognition-chat` can read other holders' chat prompts, outputs and tool-call details in the same namespace. Isolation between people needs separate namespaces. |
 | D. Aggregated action API (the staged stack) | A server filters by the caller's identity. | True per-caller isolation, and client-certificate parity for approvals. | Large; separate approval and security review. |
 
 **Recommendation: C now, D as the long-term answer.** C delivers least-privilege
@@ -193,24 +193,146 @@ Requirements if C is approved:
 
 - Admission checks verb `invoke` on the named Agent for the requesting user on
   `AgentInstance` creation, failing closed. The controller service account is
-  exempt (it creates instances for jobs and autoscaling after their own checks).
+  exempt (it creates instances for Agent replicas and jobs after their own checks).
   The same check already protects `AgentJob`.
 - `kognition-chat` is a separate role, not part of `kognition-consumer`, so the
   result-visibility exposure is an explicit, opt-in binding.
 - The role is added to the catalog with its own tests, and the documentation states
-  plainly that chat prompts and results are readable by every holder of
-  `kognition-chat`, `kognition-run-viewer` and `kognition-auditor` in the namespace.
+  plainly that chat prompts, outputs and tool-call details are readable by every
+  holder of `kognition-chat`, `kognition-run-viewer` and `kognition-auditor` in the
+  namespace.
 
 **What the owners are asked to decide.**
 
-1. Accept namespace-wide visibility of chat results for holders of the role, or
-   require D before shipping any chat role.
+1. Accept namespace-wide visibility of chat output and tool-call detail for holders
+   of the role, or require D before shipping any chat role.
 2. If accepted, approve a separate `kognition-chat` role.
 3. Confirm per-person isolation is delivered by namespace separation until D exists.
 
 **Implementation (T-0468).** The `invoke` check on `AgentInstance`, the role and its
 envtest matrix, and the documentation, written first. If the owners require D, this
 task is replaced by US-0121.
+
+### Review of these proposals against Kubernetes practice
+
+The proposals were checked against the Kubernetes documentation and the code.
+
+**Confirmed.**
+
+- *A custom verb checked with a `SubjectAccessReview` is the established pattern.*
+  The RBAC documentation defines `bind` and `escalate` this way: creating or
+  updating a binding needs all the permissions of the role **or** the `bind` verb
+  on it ([RBAC, privilege escalation prevention][rbac]). A `grant` verb is the
+  same idea for Kognition grants, and `use`, `invoke`, `approve` and `reconcile`
+  already work this way here.
+- *`CrossNamespaceGrant` already follows the Gateway API `ReferenceGrant` model.*
+  The owner of the referenced object creates the grant in its own namespace
+  ([ReferenceGrant][refgrant]). Here the resolver reads grants from `spec.from`,
+  so the grant must live in the owning namespace.
+- *Result isolation cannot be done with RBAC alone.* `resourceNames` limits
+  requests that name an object (and `list` or `watch` only with a matching
+  `metadata.name` field selector); it cannot limit top-level `create`, and RBAC has
+  no notion of "objects this user created".
+
+**Refinements adopted in the recommendations above.**
+
+1. **Require `spec.from` to equal the grant's namespace.** Today a mismatch is
+   merely inert. The check should state it, so the verb is always evaluated in the
+   namespace that owns the target.
+2. **Wildcards are broader than the model they resemble.** `ReferenceGrant` has no
+   wildcard namespace and names each peer. `to: "*"` and `name: "*"` need the
+   cluster-wide `grant` verb (as proposed), and the owners should also decide
+   whether to keep them at all (decision 2 below).
+3. **Wildcard roles inherit custom verbs.** The RBAC documentation warns that a
+   wildcard verb grants any custom verb added later. An operator role with
+   `verbs: ["*"]` on `kognition.dev` would hold `grant`, `use`, `invoke` and
+   `approve`. The documentation must say so; the shipped roles already forbid
+   wildcards by test.
+4. **Chat results are more than prompts.** `AgentInstance.status` carries
+   `output` and `toolCallsDetail`, which holds bounded tool arguments and results.
+   The visibility the owners accept for option C includes those. The spec a person
+   can set is small (`agentRef`, `revision`, `agentRevision`, `sessionContext`),
+   `status` is a subresource and is not writable, and `CognitiveQuota` admission
+   already applies on create, so the write side adds little beyond `invoke`.
+5. **A fifth option for OD-1 exists.**
+
+| Option | How it works | Strengths | Weaknesses |
+| --- | --- | --- | --- |
+| E. Per-creator read grant | Admission stamps the creator on the instance. A controller creates a Role with `get` limited by `resourceNames` to that instance, and a RoleBinding to the creator. The chat role holds `create` only. | Per-caller isolation with native RBAC and no extension API. | The controller must be able to create Roles and RoleBindings, which is the delegation surface this ADR restricts. Propagation delay before the first read. `list` and `watch` stay unavailable. Needs its own security review. |
+
+   E sits between C and D. It is worth choosing only if the owners reject
+   namespace-wide visibility but do not want to wait for D. It is not the
+   recommendation, because it adds a privileged controller path for a feature C
+   delivers with an existing check.
+
+**A decision the proposals leave to the owners: the admission mechanism.** The
+checks in T-0452 and T-0468 depend only on fields of the object being admitted, so
+they can be written either as validating webhook hooks (as T-0469 and T-0470 are) or
+as `ValidatingAdmissionPolicy` with the CEL `authorizer` variable, which is stable
+since Kubernetes 1.30 and runs in the API server without a webhook
+([ValidatingAdmissionPolicy][vap]).
+
+| | Webhook hook (current) | ValidatingAdmissionPolicy |
+| --- | --- | --- |
+| Fits the existing chain, shared fail-closed tests and the controller exemption | Yes | The exemption is a username baked in by the chart |
+| Can read another object (a `Solution` naming an `AgentService`) | Yes | No |
+| Depends on webhook availability | Yes (mitigated by `failurePolicy: Fail`) | No |
+| Kubernetes floor | None added | 1.30 |
+| Proof on a real API server | Hook unit tests plus a SAR-backed envtest | Real enforcement in envtest |
+
+   The recommendation is to **keep one house style for now and use the webhook
+   chain**, because T-0469 needs object lookup, the chain and its tests exist, and a
+   second mechanism raises the review burden. Record a follow-on to move
+   field-only checks (`AgentJob`, grants, `AgentInstance`) to
+   `ValidatingAdmissionPolicy` once the supported Kubernetes floor is declared as
+   1.30 or later. The owners may prefer to start with policies; the checks are small
+   enough that either choice is reversible.
+
+**A gap found by this review: webhook `failurePolicy` is operator-settable.** The
+chart defaults `webhook.failurePolicy` to `Fail`, but the value schema accepts
+`Ignore`. With `Ignore` every authorization-in-admission check (the new
+Solution, AgentJob, grant and chat checks, and the existing approval validators)
+silently fails open while the webhook is unavailable. Recommendation: the
+validating webhook that carries these checks must be `Fail`; reject `Ignore` in the
+schema, or require an explicit, named opt-out that the documentation calls
+unsupported for production (plan G11, T-0472).
+
+**A small fidelity gap.** The Solution, AgentJob and (proposed) grant reviews send
+the user name, groups and extra values but not the user `uid`, which the existing
+workflow `use` review does send. Authorizers keyed on `uid` would not see it.
+Propagate it (T-0473).
+
+### How to proceed
+
+Work that does not depend on the owners can start now. The two decisions unblock the
+rest.
+
+| Step | Depends on | Status |
+| --- | --- | --- |
+| T-0472 fail-closed webhook `failurePolicy`, T-0473 propagate `uid` | Nothing | Ready |
+| T-0467 authorize every `WorkflowRun` creation | Nothing | Ready |
+| US-0118 documentation, US-0119 access-check command, US-0120 kind end-to-end | Nothing (the documents state only verified behavior) | Ready |
+| OD-3 install default, confirm with the maintainer | Maintainer | Open, implemented as proposed |
+| OD-2 decision, then T-0452 | Platform and security owners | Blocked |
+| OD-1 decision, then T-0468 (or US-0121) | Platform and security owners | Blocked |
+| Mechanism decision (webhook or policy) for T-0452 and T-0468 | Platform owners | Open, default webhook |
+
+**Decisions requested from the owners, in one place.**
+
+1. OD-2: approve option C, the `grant` verb, shipped `kognition-grant-admin` holding
+   it namespace-wide, cluster-wide verb for wildcard shares, and the
+   hold-the-permissions rule for `AgentRole`.
+2. OD-2 sub-decision: keep `to: "*"` and `name: "*"` in `CrossNamespaceGrant`, or
+   deprecate them in favor of explicit lists as `ReferenceGrant` does.
+3. OD-1: accept namespace-wide visibility of chat output and tool-call detail for
+   `kognition-chat` holders, choose option E, or require D first.
+4. Admission mechanism for T-0452 and T-0468: webhook chain (default) or
+   `ValidatingAdmissionPolicy`, and the Kubernetes floor if policies are chosen.
+5. `failurePolicy`: reject `Ignore` for the validating webhook.
+
+[rbac]: https://kubernetes.io/docs/reference/access-authn-authz/rbac/#privilege-escalation-prevention-and-bootstrapping
+[refgrant]: https://gateway-api.sigs.k8s.io/reference/api-types/referencegrant/
+[vap]: https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/
 
 ## Consequences
 
