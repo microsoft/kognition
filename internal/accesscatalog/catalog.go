@@ -33,8 +33,10 @@ const (
 	ClassRuntime Class = "runtime"
 	// ClassData is stored content.
 	ClassData Class = "data"
-	// ClassGrant is delegation and credential binding.
+	// ClassGrant is delegation of capability.
 	ClassGrant Class = "grant"
+	// ClassCredential is credential binding; reading an object can read the credential.
+	ClassCredential Class = "credential"
 	// ClassGovernance is policy, quota and trust configuration.
 	ClassGovernance Class = "governance"
 	// ClassDecision is human decisions and their records.
@@ -154,7 +156,7 @@ func shippedKinds() []Kind {
 		namespaced("ExternalAgentGrant", "externalagentgrants", ClassGrant),
 		namespaced("MemoryGrant", "memorygrants", ClassGrant),
 		namespaced("ModelGrant", "modelgrants", ClassGrant),
-		namespaced("SecretRef", "secretrefs", ClassGrant),
+		namespaced("SecretRef", "secretrefs", ClassCredential),
 		namespaced("ToolGrant", "toolgrants", ClassGrant),
 
 		namespaced("AgentCommunicationPolicy", "agentcommunicationpolicies", ClassGovernance),
@@ -267,7 +269,7 @@ func shippedRoles() []Role {
 		{
 			Name: "kognition-grant-admin", Binding: BindingNamespace,
 			Summary: "Manage grants, agent roles and secret references.",
-			Grants:  []Grant{{Classes: []Class{ClassGrant}, Verbs: verbsWrite}},
+			Grants:  []Grant{{Classes: []Class{ClassGrant, ClassCredential}, Verbs: verbsWrite}},
 		},
 		{
 			Name: "kognition-access-admin", Binding: BindingNamespace,

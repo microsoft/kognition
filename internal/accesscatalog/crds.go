@@ -120,7 +120,7 @@ func (c Catalog) VerifyShippedCRDs(crds []ShippedCRD) error {
 
 func validClass(class Class) bool {
 	switch class {
-	case ClassConfig, ClassKnowledge, ClassSubmit, ClassRuntime, ClassData, ClassGrant,
+	case ClassConfig, ClassKnowledge, ClassSubmit, ClassRuntime, ClassData, ClassGrant, ClassCredential,
 		ClassGovernance, ClassDecision, ClassPlatform, ClassClass, ClassSystem:
 		return true
 	}
