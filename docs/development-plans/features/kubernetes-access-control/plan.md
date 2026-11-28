@@ -55,6 +55,7 @@ authenticator produces; this plan uses neutral examples.
 | `ApprovalDecision.spec.approver` must equal the requesting user; `spec` is immutable. | [approval_decision_validator.go](../../../../internal/admission/approval_decision_validator.go) |
 | An `AutonomyReview` decision requires `status.decidedBy` to equal the requesting user. | [autonomy_review_validator.go](../../../../internal/admission/autonomy_review_validator.go) |
 | CLI and Studio chat in Kubernetes mode reads the `Agent`, then creates an `AgentInstance` and polls it (`get`). It does not read Secrets or use `pods/portforward`. No shipped human role can `create` an `AgentInstance` (it is a `runtime` kind), and `invoke` is not checked for people on this path. The `pods`, `pods/portforward` and `secrets` helpers in `k8sclient.go` serve a runtime-direct variant that no active command or Studio route calls. | [agent_instance_invoke.go](../../../../cmd/kognitionctl/cmd/agent_instance_invoke.go), [chat.go](../../../../cmd/kognitionctl/cmd/chat.go), [k8sclient.go](../../../../cmd/kognitionctl/cmd/k8sclient.go) |
+| An `AgentJob` is expanded by its reconciler without any check on who created it: `spec.agentSpec` is copied into a new `Agent` (authoring), and `spec.agentRef` is turned into an `AgentInstance` (invocation). `create` on `agentjobs` therefore carries authoring and invocation authority (G9). | [agent_job_reconciler.go](../../../../internal/controller/agent_job_reconciler.go) |
 | `SecretRef` with the `internal` backend carries the credential value in an object annotation, so reading the object reads the credential. | [secret_ref.go](../../../../internal/gateway/secret_ref.go) |
 | The Kubernetes-mode CLI resolves the caller with `SelfSubjectReview`. | [k8sclient.go](../../../../cmd/kognitionctl/cmd/k8sclient.go) |
 
@@ -185,6 +186,23 @@ Rules about the catalog:
   Treat the role like namespace-admin over Kognition authority: bind it to few,
   trusted, audited subjects, and separate duties with the operator's own controls
   (for example admission policy on RoleBindings).
+- `kognition-access-admin` can also revoke any RoleBinding in its namespace. `W`
+  includes `delete`, and Kubernetes' `bind` and subset checks apply to creating and
+  changing a binding, not to deleting one. The role can therefore remove bindings it
+  could not create, including the bindings platform components rely on in a managed
+  namespace. This is availability and revocation authority, not an escalation: the
+  role still cannot create a binding for a role outside its allowlist, and cannot
+  add itself to one by editing. Revocation is part of the job (removing access
+  granted earlier), so `delete` stays. The authority is qualified, not removed:
+  bind the role only where namespace-wide revocation is acceptable, and treat
+  platform bindings as reconciled state (a Helm upgrade or GitOps sync restores
+  them). Restricting deletion to approved role references needs an admission policy
+  owned by the operator or the optional hardening in T-0471 (G10).
+- `kognition-consumer` holds `create` on `agentjobs`, which is only safe with
+  caller-identity checks at submission: `invoke` on the named Agent for
+  `spec.agentRef`, and `create` on `agents` for an inline `spec.agentSpec`, so that
+  a consumer cannot author through a job or run an Agent outside a scoped `invoke`
+  grant. These checks are a prerequisite for shipping the permission (T-0470, G9).
 
 ### Recommended bundles
 
@@ -226,7 +244,8 @@ subjects:
 | Action | RBAC rule | Checked by |
 | --- | --- | --- |
 | Use a workflow | resource `workflows`, verb `use`, name = workflow | workflow submission admission, with the submitter's identity, for protected submissions only today (G7) |
-| Invoke an agent | resource `agents`, verb `invoke`, name = agent | workflow executor target authorization, for the executor identity only; not checked for a person creating an `AgentInstance` (G1) |
+| Invoke an agent | resource `agents`, verb `invoke`, name = agent | workflow executor target authorization, for the executor identity only; not checked for a person creating an `AgentInstance` (G1). Required for `AgentJob` submission by admission (T-0470, G9) |
+| Author through a job | resource `agents`, verb `create`, for an inline `AgentJob.spec.agentSpec` | admission (T-0470, G9) |
 | Approve or reject a runtime approval | resource `runtimeapprovals/decision`, verbs `approve`, `reject`, name = approval | decision endpoint (`TokenReview` + `SubjectAccessReview`) |
 | Reconcile a runtime approval | resource `runtimeapprovals/reconcile`, verb `reconcile` | reconciliation endpoint |
 | Vote on a workflow approval gate | resource `approvaldecisions`, verb `create`; `spec.approver` = requesting user | admission |
@@ -238,10 +257,9 @@ the cluster a `SubjectAccessReview` about a name it defines. That is a valid use
 RBAC, but it means a bare `kubectl` user cannot "do" these verbs: a Kognition
 component must expose the operation and perform the check.
 
-The `invoke` verb in `kognition-consumer` is granted for forward compatibility with
-the action API and for the executor-targeted check; it does not by itself let a
-person chat with an Agent. Chat creates an `AgentInstance`, which no shipped human
-role can do (G1).
+The `invoke` verb in `kognition-consumer` is granted for the executor-targeted check
+and for `AgentJob` submission (T-0470); it does not by itself let a person chat with
+an Agent. Chat creates an `AgentInstance`, which no shipped human role can do (G1).
 
 The decision and reconcile endpoints treat a `SubjectAccessReview` evaluation error as
 "authorization unavailable" and never as an allow, even when the review also says
@@ -261,6 +279,8 @@ by that path; closing this is the purpose of the later aggregated action API.
 | Builder grants itself access | Grants and `SecretRef` are only in `kognition-grant-admin`; the builder role excludes them. Constraining what a grant-admin may delegate is open (ADR-0031 OD-2). |
 | Self-approval: a person holds consumer and approver and approves their own run | RBAC cannot express this. The workflow-executor approval records its initiator and the decision is refused when the decider is the initiator. Approvals raised by an agent runtime and `ApprovalDecision` gate votes record no durable submitter, so they stay a residual: bind the two roles to different subjects. See the [review record](./separation-of-duties-review.md). |
 | Confused deputy: a controller creates resources from a user-authored object (`Solution`, `MemoryClaim`, `KnowledgeBaseIndexSchedule`, `AgentAutoscaler`, workflow collaboration) | Classify each controller-mediated path. Bounded controller-owned provisioning that follows from an object the author may create is allowed (a builder's `MemoryClaim` makes the reconciler create a `MemoryVolume`, which no human role may create). A user-selected definition or delegated capability must not exceed what the author could select. Reviewed: one escalation found and fixed, `Solution` target execution (T-0469, admission now authorizes the requesting user); the rest are bounded or accepted by design. See the [review record](./separation-of-duties-review.md). |
+| Job submission launders authority: a consumer with `create` on `agentjobs` authors an Agent through `spec.agentSpec` or runs any Agent through `spec.agentRef` | Admission authorizes the requesting user with `invoke` on the named Agent and `create` on `agents` for an inline spec, fail closed; the controller's own service account, which creates jobs for Solutions, Workflows and Evaluations after their own checks, is the only exemption (T-0470, G9). |
+| Revocation of platform bindings: access-admin deletes a RoleBinding it could not create | Kubernetes does not restrict deletion by role reference. Documented and qualified as namespace-wide revocation authority; platform bindings are reconciled state; optional admission hardening in T-0471 (G10). |
 | Namespace-wide approval eligibility | `create` on `approvaldecisions` cannot name a gate. Eligibility is per namespace. Narrower eligibility is a separate feature. |
 | Wildcard growth | Roles list explicit resources. A new CRD is added to a role only through the catalog. |
 | Bulk delete | `deletecollection` is excluded from every shipped role. |
@@ -280,6 +300,8 @@ by that path; closing this is the purpose of the later aggregated action API.
 | G6 | No command shows a person what they may do. | `kognitionctl` access check using `SelfSubjectRulesReview` (FR-0415). Advisory only. |
 | G7 | `use` on `workflows` is checked only for protected `WorkflowRun` submissions. An ordinary `WorkflowRun` create bypasses the per-workflow restriction. | Documented. A task in EPIC-0025 decides and implements authorizing every `WorkflowRun` creation with the submitter's identity. |
 | G8 | `SecretRef` with the `internal` backend stores the credential in an annotation, so readers of the object read the credential. | `credential` class held only by grant-admin. Auditor and viewer cannot read it. Moving credential values out of the object is a follow-up that would allow broader reads. |
+| G9 | `create` on `agentjobs` lets the creator author an Agent (inline `spec.agentSpec`) and invoke any Agent in the namespace (`spec.agentRef`) with no caller-identity check, so the consumer role can bypass builder rights and scoped `invoke` grants. | Admission authorizes the requesting user: `invoke` on the named Agent, `create` on `agents` for an inline spec, failing closed, with the controller's own service account as the only exemption (T-0470). Prerequisite for shipping the consumer role's `agentjobs` permission. |
+| G10 | `kognition-access-admin` can delete any RoleBinding in its namespace, including bindings platform components rely on; Kubernetes' `bind` checks do not cover deletion. | Documented as namespace-wide revocation authority. Optional admission hardening in T-0471. |
 
 ## 10. Qualification
 
