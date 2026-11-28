@@ -125,3 +125,40 @@ it, and cannot delete in another namespace. So the exposure is revocation and
 availability of bindings in its own namespace, not escalation. The plan documents it
 as namespace-wide revocation authority. T-0471 tracks an optional admission policy
 that denies deleting chart-owned bindings.
+
+### T-0467 Authorization of every WorkflowRun creation
+
+`create` on `workflowruns` cannot be limited to a name, so the per-workflow `use`
+grant was only a boundary on the protected submission path. Admission now asks the
+cluster whether the requesting user may `use` the Workflow named by
+`spec.workflowRef` for every `WorkflowRun` creation, and for updates that change the
+workflow, input or parameters. It fails closed (review error, missing reviewer,
+anonymous user). The controller service account is the only exemption, because it
+creates runs for Solution targets after the Solution check. The protected path keeps
+its own check on the exact Workflow revision; the hook adds to it and does not
+replace it.
+
+Operator impact: a subject that creates runs needs `use` on the Workflow as well as
+`create` on `workflowruns`. The shipped consumer role holds both; a custom role that
+held only `create` stops working, which is the intended boundary.
+
+Evidence: unit tests for the hook, a handler test, the chart test (runs reach the
+validating webhook), and `TestOrdinaryWorkflowRunIsAuthorizedAgainstRealRBAC` on a
+real API server (consumer allowed, builder denied, namespaces isolated, and a role
+with `create` plus `use` on one workflow limited to that workflow).
+
+### T-0472 Fail-closed admission
+
+`webhook.failurePolicy` defaulted to `Fail` but the schema accepted `Ignore`, which
+makes every authorization decision made in admission fail open while the webhook is
+unavailable. The schema now accepts only `Fail` or `Ignore`, and the chart refuses to
+render `Ignore` unless `webhook.allowFailOpen=true` is set, which is documented as
+unsupported for production. The workflow executor requirement (always `Fail`) is
+unchanged and is still enforced when the opt-out is set. Chart tests cover the
+default, the refusal, the explicit opt-out and an invalid value.
+
+### T-0473 User identity in admission reviews
+
+The admission `UserInfo` now carries the authenticated `uid`, the webhook handler
+populates it and the `SubjectAccessReview` sends it, so authorizers keyed on `uid`
+see the same identity the workflow `use` review already sent.

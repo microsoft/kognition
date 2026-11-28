@@ -17,8 +17,8 @@ import (
 )
 
 // submissionAuthorizationHooks authorize the author of anything the controller
-// later starts on their behalf: a Solution target (T-0469) and an AgentJob
-// (T-0470).
+// later starts on their behalf: a Solution target (T-0469), an AgentJob (T-0470)
+// and every WorkflowRun (T-0467).
 func submissionAuthorizationHooks(config *rest.Config, st store.Store) ([]admission.ValidatingHook, error) {
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
@@ -27,14 +27,15 @@ func submissionAuthorizationHooks(config *rest.Config, st store.Store) ([]admiss
 	reviewer := webhook.NewSubjectAccessReviewer(clientset.AuthorizationV1().SubjectAccessReviews())
 	return []admission.ValidatingHook{
 		admission.NewSolutionTargetAuthorizer(reviewer, st, solutionTargetExemptUsernamesFromEnv()...),
-		admission.NewAgentJobAuthorizer(reviewer, agentJobExemptUsernamesFromEnv()...),
+		admission.NewAgentJobAuthorizer(reviewer, controllerUsernamesFromEnv()...),
+		admission.NewWorkflowRunAuthorizer(reviewer, controllerUsernamesFromEnv()...),
 	}, nil
 }
 
-// agentJobExemptUsernamesFromEnv is the controller service account, the only
-// platform identity that creates AgentJobs (for Solutions, Workflows and
+// controllerUsernamesFromEnv is the controller service account, the only platform
+// identity that creates AgentJobs and WorkflowRuns (for Solutions, Workflows and
 // Evaluations, after their own authorization).
-func agentJobExemptUsernamesFromEnv() []string {
+func controllerUsernamesFromEnv() []string {
 	namespace := strings.TrimSpace(os.Getenv("KOGNITION_CONTROLLER_NAMESPACE"))
 	account := strings.TrimSpace(os.Getenv("KOGNITION_CONTROLLER_SERVICE_ACCOUNT"))
 	if namespace == "" || account == "" || strings.ContainsAny(account, ":/") {

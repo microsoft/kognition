@@ -468,8 +468,11 @@ intentGateway:
 webhook:
   # Enable admission webhooks (requires cert-manager for TLS).
   enabled: true
-  # failurePolicy for webhook configurations: Fail or Ignore.
+  # failurePolicy for webhook configurations. Must be Fail: authorization checks
+  # made in admission fail open while the webhook is unavailable under Ignore.
   failurePolicy: Fail
+  # Explicit opt-out that lets failurePolicy be Ignore. Unsupported for production.
+  allowFailOpen: false
   # reinvocationPolicy for the mutating webhook: Never or IfNeeded.
   reinvocationPolicy: Never
   # timeoutSeconds for webhook calls.

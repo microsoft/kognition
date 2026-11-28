@@ -61,7 +61,7 @@ func TestSubmissionAuthorizationAdmissionChart(test *testing.T) {
 		return "", false
 	}
 
-	for _, resource := range []string{"solutions", "agentjobs"} {
+	for _, resource := range []string{"solutions", "agentjobs", "workflowruns"} {
 		if !validated(resource) {
 			test.Fatalf("%s create and update never reach the validating webhook, so the submitter is not authorized", resource)
 		}

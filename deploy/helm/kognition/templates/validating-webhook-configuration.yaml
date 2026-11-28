@@ -2,6 +2,9 @@
 # Licensed under the MIT License.
 
 {{- if and (eq .Values.mode "kubernetes") .Values.webhook.enabled }}
+{{- if and (ne .Values.webhook.failurePolicy "Fail") (not .Values.webhook.allowFailOpen) }}
+{{- fail "webhook.failurePolicy must be Fail: admission authorization (Solution targets, AgentJobs, approval decisions) fails open when the webhook is unavailable and failurePolicy is Ignore. Set webhook.allowFailOpen=true to accept that explicitly; it is unsupported for production." }}
+{{- end }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:

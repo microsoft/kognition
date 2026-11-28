@@ -49,7 +49,7 @@ authenticator produces; this plan uses neutral examples.
 | --- | --- |
 | The chart installs roles only for controllers, webhooks and gateways. No human-facing role exists. | [templates](../../../../deploy/helm/kognition/templates/) |
 | 55 CRDs, all in `kognition.dev`: 49 namespaced and 6 cluster-scoped (five classes and `KnowledgeBindingRecord`). 40 define a `status` subresource. | [CRDs](../../../../deploy/helm/kognition/crds/) |
-| `workflows` + verb `use` is authorized with the submitter's identity, but only for submissions marked as requiring acceptance (the protected path). Ordinary `WorkflowRun` creation is not checked for `use` (G7). | [webhook.go](../../../../internal/k8s/webhook/webhook.go), [workflow_run_submission.go](../../../../internal/k8s/webhook/workflow_run_submission.go) |
+| `workflows` + verb `use` is authorized with the submitter's identity for every `WorkflowRun` creation by an admission hook (T-0467). The protected path (submissions marked as requiring acceptance) additionally performs its own, stricter check on the exact Workflow revision. | [workflowrun_authorizer.go](../../../../internal/admission/workflowrun_authorizer.go), [webhook.go](../../../../internal/k8s/webhook/webhook.go), [workflow_run_submission.go](../../../../internal/k8s/webhook/workflow_run_submission.go) |
 | `agents` + verb `invoke` is authorized for the workflow executor's service account (the operator-bound executor identity of ADR-0029), not for the submitting person. The person's authority is the `use` check at submission; target invocation runs under the executor's authority. | [workflow_executor_target.go](../../../../internal/k8s/controller/workflow_executor_target.go) |
 | `runtimeapprovals/decision` with verbs `approve` or `reject`, and `runtimeapprovals/reconcile` with verb `reconcile`, are authorized by `TokenReview` + `SubjectAccessReview`. | [runtime_approval_decision.go](../../../../internal/k8s/webhook/runtime_approval_decision.go), [runtime_approval_reconciliation.go](../../../../internal/k8s/webhook/runtime_approval_reconciliation.go) |
 | `ApprovalDecision.spec.approver` must equal the requesting user; `spec` is immutable. | [approval_decision_validator.go](../../../../internal/admission/approval_decision_validator.go) |
@@ -173,10 +173,11 @@ Rules about the catalog:
 - Per-object scoping works for custom action verbs and subresources through
   `resourceNames` (for example `use` on one workflow). It does not work for
   top-level `create`, so creating a `WorkflowRun` is permitted namespace-wide.
-  Which workflow a run may start is restricted by the `use` check, and today that
-  check runs only for protected submissions (G7). Until every `WorkflowRun` creation
-  is authorized, a per-workflow `use` grant is not a boundary against a person who
-  can create an ordinary `WorkflowRun`.
+  Which workflow a run may start is restricted by the `use` check, which admission
+  now makes for every `WorkflowRun` creation (G7, T-0467), so a per-workflow `use`
+  grant is a real boundary. A subject that creates runs therefore needs `use` on the
+  Workflow as well as `create` on `workflowruns`; the shipped consumer role holds
+  both.
 - `kognition-access-admin` is a privileged delegator, not a low-risk role. Native
   RBAC lets a principal with `bind` on a ClusterRole grant it without holding its
   permissions, so an access-admin can bind any listed role, including
@@ -243,7 +244,7 @@ subjects:
 
 | Action | RBAC rule | Checked by |
 | --- | --- | --- |
-| Use a workflow | resource `workflows`, verb `use`, name = workflow | workflow submission admission, with the submitter's identity, for protected submissions only today (G7) |
+| Use a workflow | resource `workflows`, verb `use`, name = workflow | admission, with the submitter's identity, for every `WorkflowRun` creation (T-0467); the protected path adds its own revision-exact check |
 | Invoke an agent | resource `agents`, verb `invoke`, name = agent | workflow executor target authorization, for the executor identity only; not checked for a person creating an `AgentInstance` (G1). Required for `AgentJob` submission by admission (T-0470, G9) |
 | Author through a job | resource `agents`, verb `create`, for an inline `AgentJob.spec.agentSpec` | admission (T-0470, G9) |
 | Approve or reject a runtime approval | resource `runtimeapprovals/decision`, verbs `approve`, `reject`, name = approval | decision endpoint (`TokenReview` + `SubjectAccessReview`) |
@@ -298,11 +299,11 @@ by that path; closing this is the purpose of the later aggregated action API.
 | G4 | No deny and no field-level RBAC. | Mitigated by classes, subresource actions and admission. |
 | G5 | Hosted Studio has no per-user identity design. | Design in the plan for FR-0417; implementation later. |
 | G6 | No command shows a person what they may do. | `kognitionctl` access check using `SelfSubjectRulesReview` (FR-0415). Advisory only. |
-| G7 | `use` on `workflows` is checked only for protected `WorkflowRun` submissions. An ordinary `WorkflowRun` create bypasses the per-workflow restriction. | Documented. A task in EPIC-0025 decides and implements authorizing every `WorkflowRun` creation with the submitter's identity. |
+| G7 | `use` on `workflows` was checked only for protected `WorkflowRun` submissions, so an ordinary `WorkflowRun` create bypassed the per-workflow restriction. | **Closed (T-0467).** Admission authorizes `use` on the named Workflow for every creation (and for updates that change the workflow, input or parameters), failing closed, with the controller service account exempt for Solution targets. |
 | G8 | `SecretRef` with the `internal` backend stores the credential in an annotation, so readers of the object read the credential. | `credential` class held only by grant-admin. Auditor and viewer cannot read it. Moving credential values out of the object is a follow-up that would allow broader reads. |
 | G9 | `create` on `agentjobs` lets the creator author an Agent (inline `spec.agentSpec`) and invoke any Agent in the namespace (`spec.agentRef`) with no caller-identity check, so the consumer role can bypass builder rights and scoped `invoke` grants. | **Closed (T-0470).** Admission authorizes the requesting user: `invoke` on the named Agent, `create` on `agents` for an inline spec, failing closed, with the controller's own service account as the only exemption. |
 | G10 | `kognition-access-admin` can delete any RoleBinding in its namespace, including bindings platform components rely on; Kubernetes' `bind` checks do not cover deletion. | Documented as namespace-wide revocation authority. Optional admission hardening in T-0471. |
-| G11 | `webhook.failurePolicy` defaults to `Fail` but the schema accepts `Ignore`. With `Ignore`, every authorization-in-admission check fails open while the webhook is unavailable. | Reject `Ignore` for the validating webhook, or require an explicit opt-out documented as unsupported for production (T-0472). Proposed in the ADR review section. |
+| G11 | `webhook.failurePolicy` defaulted to `Fail` but the schema accepted `Ignore`. With `Ignore`, every authorization-in-admission check failed open while the webhook was unavailable. | **Closed (T-0472).** The value schema accepts only `Fail` or `Ignore`, and rendering with `Ignore` is refused unless `webhook.allowFailOpen=true` is set, which is documented as unsupported for production. |
 
 ## 10. Qualification
 

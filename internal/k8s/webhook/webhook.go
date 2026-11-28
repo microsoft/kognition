@@ -173,6 +173,7 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		Object:    internalJSON,
 		UserInfo: intadmission.UserInfo{
 			Username: req.UserInfo.Username,
+			UID:      req.UserInfo.UID,
 			Groups:   req.UserInfo.Groups,
 			Extra:    admissionIdentityExtra(req.UserInfo.Extra),
 		},

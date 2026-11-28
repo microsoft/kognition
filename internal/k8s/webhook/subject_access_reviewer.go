@@ -35,7 +35,7 @@ func (r *SubjectAccessReviewer) Allowed(ctx context.Context, user intadmission.U
 		extra[key] = append(authorizationv1.ExtraValue(nil), values...)
 	}
 	review, err := r.reviews.Create(ctx, &authorizationv1.SubjectAccessReview{Spec: authorizationv1.SubjectAccessReviewSpec{
-		User: user.Username, Groups: append([]string(nil), user.Groups...), Extra: extra,
+		User: user.Username, UID: user.UID, Groups: append([]string(nil), user.Groups...), Extra: extra,
 		ResourceAttributes: &authorizationv1.ResourceAttributes{
 			Namespace: attributes.Namespace, Group: attributes.Group, Resource: attributes.Resource, Verb: attributes.Verb, Name: attributes.Name,
 		},

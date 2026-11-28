@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestAgentJobExemptUsernamesFromEnv(t *testing.T) {
+func TestControllerUsernamesFromEnv(t *testing.T) {
 	tests := []struct {
 		name      string
 		namespace string
@@ -24,7 +24,7 @@ func TestAgentJobExemptUsernamesFromEnv(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("KOGNITION_CONTROLLER_NAMESPACE", test.namespace)
 			t.Setenv("KOGNITION_CONTROLLER_SERVICE_ACCOUNT", test.account)
-			got := agentJobExemptUsernamesFromEnv()
+			got := controllerUsernamesFromEnv()
 			if len(got) != len(test.want) || (len(got) > 0 && !reflect.DeepEqual(got, test.want)) {
 				t.Fatalf("usernames = %v, want %v", got, test.want)
 			}

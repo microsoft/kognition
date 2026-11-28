@@ -44,6 +44,7 @@ type Request struct {
 // UserInfo identifies the caller that originated the admission request.
 type UserInfo struct {
 	Username string
+	UID      string
 	Groups   []string
 	Extra    map[string][]string
 }
