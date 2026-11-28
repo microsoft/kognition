@@ -55,6 +55,20 @@ runtimeAuth:
   # -- Conservative Kubernetes expiry allowance. May only be increased.
   maximumClockSkew: "30s"
 
+# -- Access control for people and automation (Kubernetes mode only). See
+# ADR-0031 and the access-control plan.
+rbac:
+  humanRoles:
+    # -- Install the kognition-* ClusterRoles that grant people access to
+    # Kognition resources. They are inert: the chart creates no bindings and no
+    # aggregation into the built-in view, edit or admin roles. Bind them to your
+    # users, groups and service accounts with RoleBindings in workload
+    # namespaces (ClusterRoleBindings for kognition-class-viewer and
+    # kognition-platform-admin). The role names are fixed and cluster-wide, so
+    # install them from one release per cluster. The template is generated from
+    # internal/accesscatalog; do not edit it by hand.
+    enabled: true
+
 # -- Security hardening for control-plane workloads (apiserver,
 # controller-manager, k8s-controller, memory-service). Their images are
 # distroless static (nonroot), so the strict profile below — including
