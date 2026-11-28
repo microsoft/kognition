@@ -57,9 +57,10 @@ type collabCounters struct {
 }
 
 type collabLimits struct {
-	MaxTurns       int32 `json:"maxTurns"`
-	MaxDelegations int32 `json:"maxDelegations"`
-	MaxTokens      int64 `json:"maxTokens"`
+	MaxTurns        int32 `json:"maxTurns"`
+	MaxDelegations  int32 `json:"maxDelegations"`
+	MaxTokens       int64 `json:"maxTokens"`
+	MaxContentBytes int64 `json:"maxContentBytes"`
 }
 
 type collabMember struct {
@@ -270,7 +271,7 @@ func buildCollabStep(step collabRunStep, st collaboration.State, jobs map[string
 		Step: step.name, Attempt: step.attempt, Available: true,
 		Strategy: string(st.Strategy), Phase: string(st.Phase),
 		Counters: collabCounters{Turns: st.Counters.Turns, Messages: st.Counters.Messages, Delegations: st.Counters.Delegations, TokensUsed: st.Counters.TokensUsed},
-		Limits:   collabLimits{MaxTurns: spec.Limits.MaxTurns, MaxDelegations: spec.Limits.MaxDelegations, MaxTokens: spec.Limits.MaxTokens},
+		Limits:   collabLimits{MaxTurns: spec.Limits.MaxTurns, MaxDelegations: spec.Limits.MaxDelegations, MaxTokens: spec.Limits.MaxTokens, MaxContentBytes: spec.Limits.MaxContentBytes},
 		Members:  []collabMember{}, Tasks: []collabTask{}, Dispatches: []collabDispatch{},
 	}
 	if st.Outcome != nil {

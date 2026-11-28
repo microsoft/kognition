@@ -142,6 +142,10 @@ type CollaborationLimits struct {
 	MaxParallelTasks int32 `json:"maxParallelTasks"`
 	// +kubebuilder:validation:Minimum=1
 	MaxTokens int64 `json:"maxTokens"`
+	// MaxContentBytes is the user-defined UTF-8 byte limit for each input, goal,
+	// handoff context and result.
+	// +kubebuilder:validation:Minimum=1
+	MaxContentBytes int64 `json:"maxContentBytes"`
 }
 
 // CollaborationSupervisor configures the Supervisor strategy.

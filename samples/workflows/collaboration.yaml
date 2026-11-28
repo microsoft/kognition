@@ -175,6 +175,7 @@ spec:
           maxDelegationDepth: 1
           maxParallelTasks: 2
           maxTokens: 32768
+          maxContentBytes: 131072
 ---
 # Supervisor: the writer coordinates and may delegate to the analyst and the
 # reviewer. Only the listed interactions are admitted. The guidance and the member
@@ -229,3 +230,4 @@ spec:
           maxDelegationDepth: 1
           maxParallelTasks: 2
           maxTokens: 32768
+          maxContentBytes: 131072

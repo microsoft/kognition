@@ -70,7 +70,7 @@ func done(m collaboration.Message, o ...collaboration.Operation) Observation {
 
 func limits() api.CollaborationLimits {
 	return api.CollaborationLimits{MaxTurns: 20, MaxMessages: 100, MaxDelegations: 10, MaxDelegationDepth: 3,
-		MaxParallelTasks: 4, MaxTokens: 100000}
+		MaxParallelTasks: 4, MaxTokens: 100000, MaxContentBytes: 8192}
 }
 
 func collab(strategy api.CollaborationStrategy, members ...string) *api.WorkflowCollaboration {

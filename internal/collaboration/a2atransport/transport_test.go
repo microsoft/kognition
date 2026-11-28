@@ -22,8 +22,10 @@ func taskIn(state a2a.TaskState, parts ...*a2a.Part) *a2a.Task {
 	return task
 }
 
+const testContentBytes = 8192
+
 func startMsg(allowed ...collaboration.OperationKind) collaboration.Message {
-	return collaboration.Message{Kind: collaboration.DispatchStart, AllowedOperations: allowed}
+	return collaboration.Message{Kind: collaboration.DispatchStart, AllowedOperations: allowed, MaxContentBytes: testContentBytes}
 }
 
 func TestInterpretCancelConfirmsOnceRemoteIsTerminal(t *testing.T) {
@@ -85,7 +87,7 @@ func TestInterpretStates(t *testing.T) {
 
 func TestInterpretCompletedResults(t *testing.T) {
 	structured, err := collaboration.EncodeOperations([]collaboration.Operation{
-		{Kind: collaboration.OpDelegate, OperationID: "d1", To: "a", Goal: "g"}})
+		{Kind: collaboration.OpDelegate, OperationID: "d1", To: "a", Goal: "g"}}, testContentBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,9 +136,9 @@ func TestInterpretCompletedResultBoundsAndUsage(t *testing.T) {
 			text    string
 			failure string
 		}{
-			{name: "at limit", text: strings.Repeat("x", collaboration.MaxContentBytes)},
-			{name: "over limit", text: strings.Repeat("x", collaboration.MaxContentBytes+1), failure: FailureInvalidPayload},
-			{name: "UTF-8 over limit", text: strings.Repeat("\u00e9", collaboration.MaxContentBytes/2+1), failure: FailureInvalidPayload},
+			{name: "at limit", text: strings.Repeat("x", testContentBytes)},
+			{name: "over limit", text: strings.Repeat("x", testContentBytes+1), failure: FailureInvalidPayload},
+			{name: "UTF-8 over limit", text: strings.Repeat("\u00e9", testContentBytes/2+1), failure: FailureInvalidPayload},
 			{name: "empty", text: " \n\t ", failure: FailureNoResult},
 			{name: "malformed operations", text: `{"schemaVersion":"` + collaboration.SchemaVersion + `","operations":[{"kind":"nope"}]}`, failure: FailureInvalidPayload},
 		} {
@@ -155,7 +157,7 @@ func TestInterpretCompletedResultBoundsAndUsage(t *testing.T) {
 					if obs.Status != collaboration.ReportFailed || !strings.HasPrefix(obs.Failure, tc.failure) || len(obs.Operations) != 0 {
 						t.Fatalf("invalid result: %+v", obs)
 					}
-					if strings.Contains(tc.name, "over limit") && !strings.Contains(obs.Failure, fmt.Sprintf("exceeds %d bytes", collaboration.MaxContentBytes)) {
+					if strings.Contains(tc.name, "over limit") && !strings.Contains(obs.Failure, fmt.Sprintf("exceeds %d bytes", testContentBytes)) {
 						t.Fatalf("size failure lacks the limit: %+v", obs)
 					}
 					return
@@ -175,8 +177,47 @@ func TestPromptIncludesContentBounds(t *testing.T) {
 		{collaboration.OpFinalize, collaboration.OpDelegate, collaboration.OpHandoff},
 	} {
 		p := Prompt(startMsg(allowed...), []string{"analyst"}, Team{})
-		if !strings.Contains(p, fmt.Sprintf("%d bytes", collaboration.MaxContentBytes)) || !strings.Contains(p, "UTF-8") {
+		if !strings.Contains(p, fmt.Sprintf("%d bytes", testContentBytes)) || !strings.Contains(p, "UTF-8") {
 			t.Fatalf("prompt lacks content bounds:\n%s", p)
+		}
+
+	}
+}
+
+func TestInterpretConfiguredContentLimit(t *testing.T) {
+	for _, limit := range []int64{16, 131072} {
+		for _, kind := range []collaboration.OperationKind{collaboration.OpComplete, collaboration.OpFinalize} {
+			for _, extra := range []int{0, 1} {
+				text := strings.Repeat("\u00e9", int(limit)/2) + strings.Repeat("x", extra)
+				raw, err := collaboration.EncodeOperations([]collaboration.Operation{{Kind: kind, Result: text}}, limit+1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rawPart := a2a.NewRawPart(raw)
+				rawPart.MediaType = collaboration.MediaType
+				dataPart := a2a.NewDataPart(map[string]any{
+					"schemaVersion": collaboration.SchemaVersion,
+					"operations":    []any{map[string]any{"kind": string(kind), "result": text}},
+				})
+				dataPart.MediaType = collaboration.MediaType
+				for _, part := range []*a2a.Part{a2a.NewTextPart(text), rawPart, dataPart, a2a.NewTextPart(string(raw))} {
+					msg := startMsg(kind)
+					msg.MaxContentBytes = limit
+					obs := Interpret(msg, "a", taskIn(a2a.TaskStateCompleted, part))
+					if extra == 0 {
+						if obs.Status != collaboration.ReportCompleted || len(obs.Operations) != 1 || obs.Operations[0].Result != text {
+							t.Fatalf("%d-byte %s result was rejected or changed: %+v", limit, kind, obs)
+						}
+					} else if obs.Status != collaboration.ReportFailed || !strings.HasPrefix(obs.Failure, FailureInvalidPayload) {
+						t.Fatalf("oversized %d-byte %s result was accepted: %+v", limit, kind, obs)
+					}
+				}
+			}
+		}
+		msg := startMsg(collaboration.OpFinalize)
+		msg.MaxContentBytes = limit
+		if p := Prompt(msg, nil, Team{}); !strings.Contains(p, fmt.Sprintf("%d bytes", limit)) {
+			t.Fatalf("prompt lost user-defined content limit: %s", p)
 		}
 	}
 }

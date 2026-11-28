@@ -82,7 +82,7 @@ func testRun() controller.WorkflowCollaborationRun {
 func startMsg(recipient string) collaboration.Message {
 	return collaboration.Message{
 		DispatchID: "d1", Kind: collaboration.DispatchStart, TaskID: "t1", Recipient: recipient, Turn: 1,
-		Goal: collaboration.Content{Text: "summarize the findings"}, Allowance: 1000,
+		Goal: collaboration.Content{Text: "summarize the findings"}, Allowance: 1000, MaxContentBytes: 8192,
 		AllowedOperations: []collaboration.OperationKind{collaboration.OpFinalize},
 	}
 }
@@ -208,9 +208,10 @@ func TestObserveOversizedJobOutputPreservesUsage(t *testing.T) {
 	if err := tr.Send(ctx, msg); err != nil {
 		t.Fatal(err)
 	}
+
 	st.setStatus(t, "work", JobName(testRun(), msg.DispatchID), api.AgentJobStatus{
 		Phase:      api.PhaseReady,
-		Output:     strings.Repeat("x", collaboration.MaxContentBytes+1),
+		Output:     strings.Repeat("x", 8193),
 		TokenUsage: &api.TokenUsage{TotalTokens: 2133},
 	})
 	obs, err := tr.Observe(ctx, msg)
@@ -222,6 +223,26 @@ func TestObserveOversizedJobOutputPreservesUsage(t *testing.T) {
 	}
 	if !obs.TokensKnown || obs.TokensUsed != 2133 {
 		t.Fatalf("reported usage was discarded: %+v", obs)
+	}
+}
+
+func TestObserveJobUsesConfiguredContentLimit(t *testing.T) {
+	st := newFakeStore()
+	tr := newTransport(t, st, nil)
+	msg := startMsg("researcher")
+	msg.MaxContentBytes = 131072
+	ctx := context.Background()
+	if err := tr.Send(ctx, msg); err != nil {
+		t.Fatal(err)
+	}
+	output := strings.Repeat("x", 131072)
+	st.setStatus(t, "work", JobName(testRun(), msg.DispatchID), api.AgentJobStatus{
+		Phase: api.PhaseReady, Output: output, TokenUsage: &api.TokenUsage{TotalTokens: 321},
+	})
+	obs, err := tr.Observe(ctx, msg)
+	if err != nil || obs.Status != collaboration.ReportCompleted || len(obs.Operations) != 1 ||
+		obs.Operations[0].Result != output || !obs.TokensKnown || obs.TokensUsed != 321 {
+		t.Fatalf("configured large result or actual usage was lost: %+v %v", obs, err)
 	}
 }
 

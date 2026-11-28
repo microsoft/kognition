@@ -52,7 +52,7 @@ func (r *WorkflowReconciler) advanceCollaborationStep(ctx context.Context, wf *v
 	}
 	run := collaborationRunFor(wf, r.ownerKind, step, ss.Attempts, input)
 	var progress WorkflowCollaborationProgress
-	inputErr := collaboration.ValidateInput(input)
+	inputErr := collaboration.ValidateInput(input, step.Collaboration.Limits.MaxContentBytes)
 	if inputErr != nil {
 		if resuming {
 			if err := r.collaborationRunner.Stop(ctx, run, "InvalidInput"); err != nil {
@@ -82,7 +82,7 @@ func (r *WorkflowReconciler) advanceCollaborationStep(ctx context.Context, wf *v
 		return collaborationRunning, 0, nil
 	case progress.Succeeded:
 		ss.Phase = v1alpha1.PhaseReady
-		ss.Output, _ = truncateOutput(progress.Output)
+		ss.Output = progress.Output
 		if err := r.emitEvent(ctx, wf, "CollaborationStepCompleted", fmt.Sprintf("collaboration step %q completed", step.Name), map[string]string{"step": step.Name}); err != nil {
 			return collaborationSucceeded, 0, fmt.Errorf("append workflow event: %w", err)
 		}

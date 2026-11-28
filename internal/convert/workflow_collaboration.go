@@ -23,6 +23,7 @@ func workflowCollaborationToK8s(in *api.WorkflowCollaboration) *k8s.WorkflowColl
 			MaxDelegationDepth: in.Limits.MaxDelegationDepth,
 			MaxParallelTasks:   in.Limits.MaxParallelTasks,
 			MaxTokens:          in.Limits.MaxTokens,
+			MaxContentBytes:    in.Limits.MaxContentBytes,
 		},
 	}
 	if in.Members != nil {
@@ -85,6 +86,7 @@ func workflowCollaborationFromK8s(in *k8s.WorkflowCollaboration) *api.WorkflowCo
 			MaxDelegationDepth: in.Limits.MaxDelegationDepth,
 			MaxParallelTasks:   in.Limits.MaxParallelTasks,
 			MaxTokens:          in.Limits.MaxTokens,
+			MaxContentBytes:    in.Limits.MaxContentBytes,
 		},
 	}
 	if in.Members != nil {

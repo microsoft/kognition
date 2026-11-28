@@ -25,9 +25,6 @@ const (
 	// ExecutorOrigin labels content that the trusted executor produced.
 	ExecutorOrigin = "executor"
 
-	// MaxContentBytes bounds one inline content item.
-	MaxContentBytes = 8 << 10
-
 	// MaxStateBytes bounds the encoded ledger. It stays below the 1 MiB
 	// Kubernetes object limit; the engine fails closed when it is exceeded.
 	MaxStateBytes = 900 << 10
@@ -365,9 +362,12 @@ func unionOrigins(sets ...[]string) []string {
 	return out
 }
 
-func contentErr(field, text string) error {
-	if len(text) > MaxContentBytes {
-		return fmt.Errorf("%s exceeds %d bytes", field, MaxContentBytes)
+func contentErr(field, text string, maxContentBytes int64) error {
+	if maxContentBytes < 1 {
+		return errors.New("limits.maxContentBytes must be positive")
+	}
+	if int64(len(text)) > maxContentBytes {
+		return fmt.Errorf("%s exceeds %d bytes", field, maxContentBytes)
 	}
 	return nil
 }

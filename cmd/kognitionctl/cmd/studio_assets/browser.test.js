@@ -237,6 +237,7 @@ async function newTeamStep(page, name, opts = {}) {
   await page.locator("#btn-new-workflow").click();
   await builderField(page, "Name").fill(name);
   await page.getByRole("button", { name: "+ Team step", exact: true }).click();
+  await page.locator("#inspector-body").getByLabel("maxContentBytes", { exact: true }).fill("131072");
   return { mutations, inspector: page.locator("#inspector-body"), yaml: page.locator("#yaml-area") };
 }
 
@@ -267,6 +268,7 @@ test("Workflow Team Parallel step edits bounded branches and deploys on the Kube
   expect(team.strategy).toBe("Parallel");
   expect(team.parallel).toEqual({ branches: [{ member: "member-1" }, { member: "member-2", optional: true }], synthesizer: "member-3" });
   expect(team.allowedInteractions).toBeUndefined();
+  expect(team.limits.maxContentBytes).toBe(131072);
   await inspector.getByLabel("Type", { exact: true }).selectOption("agent");
   await inspector.getByLabel(/^Agent\s*\*?$/).selectOption("reviewer");
   await page.locator('[data-view="yaml"]').click();
@@ -329,6 +331,22 @@ test("Workflow Team problems panel reports admission-rule violations", async ({ 
   const panel = page.locator("#workflow-graph-panel");
   await expect(panel.getByText(/maxHandoffs must be between 1 and limits.maxDelegations/)).toBeVisible();
   await expect(panel.getByText(/member "member-1" needs an agent/)).toBeVisible();
+});
+
+test("Workflow Team requires an explicit user-defined content byte limit", async ({ page }) => {
+  const { mutations, inspector } = await newTeamStep(page, "content-limit");
+  await inspector.getByLabel(/^Agent for member-1/).selectOption("analyst");
+  await inspector.getByLabel(/^Agent for member-2/).selectOption("reviewer");
+  const limit = inspector.getByLabel("maxContentBytes", { exact: true });
+  for (const invalid of ["", "0", "-1"]) {
+    await limit.fill(invalid);
+    await page.locator("#btn-deploy").click();
+    await expect(page.locator("#status")).toContainText("limits.maxContentBytes");
+    expect(mutations).toHaveLength(0);
+  }
+  await limit.fill("262144");
+  const team = await teamDeployed(page, mutations);
+  expect(team.limits.maxContentBytes).toBe(262144);
 });
 
 test("Workflow Team member can reference an ExternalAgent and drops agent-only fields", async ({ page }) => {

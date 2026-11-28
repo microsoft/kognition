@@ -106,16 +106,16 @@ func New(def Definition) (*Engine, error) {
 }
 
 // ValidateInput validates the resolved input of a collaboration activation.
-func ValidateInput(input string) error {
+func ValidateInput(input string, maxContentBytes int64) error {
 	if strings.TrimSpace(input) == "" {
 		return errors.New("input is required")
 	}
-	return contentErr("input", input)
+	return contentErr("input", input, maxContentBytes)
 }
 
 // Start opens a ledger for the activation input.
 func (e *Engine) Start(input string) (State, error) {
-	if err := ValidateInput(input); err != nil {
+	if err := ValidateInput(input, e.def.Limits.MaxContentBytes); err != nil {
 		return State{}, fmt.Errorf("%w: %w", ErrInvalidEvent, err)
 	}
 	st := State{
@@ -590,7 +590,7 @@ func (e *Engine) applyReport(st *State, r TurnReport) error {
 // settleDuringStop keeps a usable terminal result and discards coordination.
 func (e *Engine) settleDuringStop(st *State, ti int, ops []Operation) {
 	t := &st.Tasks[ti]
-	if ValidateOperations(ops) == nil && len(ops) == 1 {
+	if ValidateOperations(ops, e.def.Limits.MaxContentBytes) == nil && len(ops) == 1 {
 		op := ops[0]
 		if op.Kind == OpComplete && !t.Final || op.Kind == OpFinalize && t.Final {
 			e.settleTask(st, ti, TaskSucceeded, "", &Content{Text: op.Result, Origins: unionOrigins(t.Lineage, []string{t.Recipient})})
@@ -616,7 +616,7 @@ func (e *Engine) mayDelegate(t *Task) bool {
 
 func (e *Engine) applyOperations(st *State, ti int, ops []Operation) {
 	t := &st.Tasks[ti]
-	if err := ValidateOperations(ops); err != nil {
+	if err := ValidateOperations(ops, e.def.Limits.MaxContentBytes); err != nil {
 		e.invalid(st, ti, err.Error())
 		return
 	}
@@ -1002,6 +1002,7 @@ type Message struct {
 	Transfer          *Transfer
 	Origins           []string
 	Allowance         int64
+	MaxContentBytes   int64
 	AllowedOperations []OperationKind
 	Target            *Message // the dispatch a Cancel refers to
 }
@@ -1018,7 +1019,7 @@ func (e *Engine) Message(st State, dispatch string) (Message, error) {
 	}
 	m := Message{
 		DispatchID: d.ID, Kind: d.Kind, TaskID: d.TaskID, Recipient: d.Recipient, Requester: t.Requester,
-		Turn: d.Turn, Epoch: d.Epoch, Note: d.Note, Allowance: d.Allowance,
+		Turn: d.Turn, Epoch: d.Epoch, Note: d.Note, Allowance: d.Allowance, MaxContentBytes: e.def.Limits.MaxContentBytes,
 	}
 	switch d.Kind {
 	case DispatchStart, DispatchContinue:

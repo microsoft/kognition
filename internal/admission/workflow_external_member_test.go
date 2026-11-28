@@ -28,7 +28,7 @@ func externalMemberWorkflow(members ...v1alpha1.CollaborationMember) v1alpha1.Wo
 			Members:             members,
 			AllowedInteractions: []v1alpha1.CollaborationInteraction{{From: coordinator, To: other}},
 			Supervisor:          &v1alpha1.CollaborationSupervisor{Coordinator: coordinator},
-			Limits:              v1alpha1.CollaborationLimits{MaxTurns: 4, MaxMessages: 16, MaxDelegations: 1, MaxDelegationDepth: 1, MaxParallelTasks: 2, MaxTokens: 8192},
+			Limits:              v1alpha1.CollaborationLimits{MaxTurns: 4, MaxMessages: 16, MaxDelegations: 1, MaxDelegationDepth: 1, MaxParallelTasks: 2, MaxTokens: 8192, MaxContentBytes: 8192},
 		},
 	}}
 	wf.Spec.Edges = nil
@@ -39,11 +39,30 @@ func TestWorkflowValidator_CollaborationStepRequiresInput(t *testing.T) {
 	local := func(name string) v1alpha1.CollaborationMember {
 		return v1alpha1.CollaborationMember{Name: name, AgentRef: v1alpha1.AgentReference{Name: name + "-agent"}}
 	}
+
 	wf := externalMemberWorkflow(local("lead"), local("other"))
 	wf.Spec.Steps[0].Input = "  "
 	response := NewWorkflowValidator(WithCollaborationEnabled(true)).Validate(context.Background(), workflowRequest(wf))
 	if response.Allowed || !strings.Contains(response.Reason, "input is required for collaboration steps") {
 		t.Fatalf("expected rejection for empty input, got allowed=%t reason=%q", response.Allowed, response.Reason)
+	}
+}
+
+func TestWorkflowValidator_CollaborationRequiresUserContentLimit(t *testing.T) {
+	for _, limit := range []int64{0, -1, 1, 131072, 1<<63 - 1} {
+		wf := externalMemberWorkflow(
+			v1alpha1.CollaborationMember{Name: "lead", AgentRef: v1alpha1.AgentReference{Name: "lead-agent"}},
+			v1alpha1.CollaborationMember{Name: "other", AgentRef: v1alpha1.AgentReference{Name: "other-agent"}},
+		)
+		wf.Spec.Steps[0].Collaboration.Limits.MaxContentBytes = limit
+		response := NewWorkflowValidator(WithCollaborationEnabled(true)).Validate(context.Background(), workflowRequest(wf))
+		if limit < 1 {
+			if response.Allowed || !strings.Contains(response.Reason, "limits.maxContentBytes") {
+				t.Fatalf("invalid limit %d was accepted: %+v", limit, response)
+			}
+		} else if !response.Allowed {
+			t.Fatalf("positive user-defined limit %d was rejected: %s", limit, response.Reason)
+		}
 	}
 }
 

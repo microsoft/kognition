@@ -1265,6 +1265,11 @@ async function deploy() {
     setStatus(TEAM_UNSUPPORTED_MESSAGE, "error");
     return;
   }
+  if (draft.kind === "Workflow") {
+    const problem = (draft.spec?.steps || []).filter(step => step.type === "collaboration")
+      .flatMap(step => teamProblems(step, draft)).find(problem => problem.startsWith("limits.maxContentBytes"));
+    if (problem) { setStatus(problem, "error"); return; }
+  }
   if (!StudioResources.validate()) return;
   const submittedDraft = JSON.stringify(draft);
   const body = JSON.parse(submittedDraft);
@@ -4249,6 +4254,7 @@ function teamProblems(step, workflow) {
     if (!Number.isInteger(limits[key]) || limits[key] < 1 || limits[key] > max) problems.push(`limits.${key} must be between 1 and ${max}.`);
   }
   if (!Number.isInteger(limits.maxTokens) || limits.maxTokens < 1) problems.push("limits.maxTokens must be greater than zero.");
+  if (!Number.isSafeInteger(limits.maxContentBytes) || limits.maxContentBytes < 1) problems.push("limits.maxContentBytes must be an explicitly specified positive safe integer.");
 
   const known = (alias) => aliases.has(alias);
   const outgoing = new Map();
@@ -4537,9 +4543,9 @@ function renderWorkflowTeam(host, step) {
     }, true));
   }
 
-  const limitHints = { ...Object.fromEntries(Object.entries(TEAM_LIMIT_MAX).map(([key, max]) => [key, `1–${max}`])), maxTokens: "Token allowance for the whole team; at least 1" };
+  const limitHints = { ...Object.fromEntries(Object.entries(TEAM_LIMIT_MAX).map(([key, max]) => [key, `1–${max}`])), maxTokens: "Token allowance for the whole team; at least 1", maxContentBytes: "Required UTF-8 byte limit per input, goal, handoff context and result; no default. Storage limits still apply." };
   host.appendChild(section("Team limits", "Hard bounds enforced while the team runs.", (body) => {
-    for (const key of ["maxTurns", "maxMessages", "maxDelegations", "maxDelegationDepth", "maxParallelTasks", "maxTokens"]) {
+    for (const key of ["maxTurns", "maxMessages", "maxDelegations", "maxDelegationDepth", "maxParallelTasks", "maxTokens", "maxContentBytes"]) {
       body.appendChild(numberField(key, team.limits[key], (value) => {
         edit(`edit team ${key}`, () => { team.limits[key] = value; });
       }, limitHints[key]));
