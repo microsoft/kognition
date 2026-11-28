@@ -105,6 +105,113 @@ Roles. Kognition must fit that model without owning it.
 | OD-4 | Hosted Studio identity mode. | Per-user credential forwarded to the Kubernetes API; impersonation requires its own ADR. | FR-0417 |
 | OD-5 | How does an auditor read evidence stored outside CRDs (ConfigMap ledgers, HTTP trust query)? | Define in a later design; the first auditor role covers CRD evidence only. | FR-0415 |
 
+OD-1 and OD-2 sit on privileged delegation boundaries, so they are worked through
+below with options, a recommendation, and the exact decision the owners are asked
+to make. Both are recommendations for platform and security-owner review. Nothing
+here is accepted until they approve it.
+
+### Proposal for OD-2: constraining who may create a grant
+
+**Problem.** `kognition-grant-admin` can create `ToolGrant`, `ModelGrant`,
+`MemoryGrant`, `ExternalAgentGrant`, `CrossNamespaceGrant`, `AgentRole` and
+`AgentRoleBinding`. Nothing records that the creator may delegate the thing it
+names, so a role that can write grants can delegate any Tool, Model, Memory or
+cross-namespace share in its namespace, and `CrossNamespaceGrant` accepts `to: "*"`
+and `name: "*"`. Kubernetes closes the same hole for RBAC with the `bind` and
+`escalate` checks; Kognition grants have no equivalent.
+
+| Option | How it works | Strengths | Weaknesses |
+| --- | --- | --- | --- |
+| A. Do nothing in admission; treat grant-admin as trusted | Rely on binding the role to few subjects. | No code. | A custom role with `create` on a grant kind can delegate anything. No way to scope a grant author to some Tools or Models. Contradicts the least-privilege goal. |
+| B. Require `get` on the target | Admission checks the creator can read the named object. | Simple. | Every viewer can read, so it constrains nothing. |
+| C. A dedicated `grant` verb on the target (recommended) | Admission asks the cluster whether the creator may `grant` on the named target, for example verb `grant` on `tools/<name>`. | Mirrors Kubernetes `bind`. One verb across kinds. Scopes with `resourceNames` like `use` and `invoke` already do. Fails closed. Reuses the proven `SubjectAccessReview` pattern. | New verb to document and maintain. The shipped role must carry it, or it would break today's behavior. |
+| D. The creator must hold the granted permission (Kubernetes `escalate` model) | Check the creator holds each permission the grant confers. | Exact for `AgentRole` rules (resources and verbs). | Tool `invoke`, Model use and Memory access are not human RBAC actions, so there is nothing to hold. Needs new verbs per kind anyway. |
+| E. Two-person approval for grants | An `ApprovalDecision`-style gate on grant creation. | Strongest separation. | New workflow and latency; a different product feature. |
+
+**Recommendation: C.** Admission authorizes the *requesting user* on the target
+before accepting the grant, failing closed on any evaluation error, anonymous user
+or unresolvable target. The controller's own service account is the only exemption.
+
+| Grant | Required, in the grant's namespace |
+| --- | --- |
+| `ToolGrant` | verb `grant` on `tools/<toolRef>` |
+| `ModelGrant` | verb `grant` on `models/<modelRef>` |
+| `MemoryGrant` | verb `grant` on `memoryclaims/<memoryClaimRef>` |
+| `ExternalAgentGrant` | verb `grant` on `externalagents/<ref>` |
+| `AgentRole` | verb `grant` on `agentroles/<name>`; for each rule, the creator must also hold the listed verbs on the listed kinds (option D applies here because the rules are RBAC-shaped) |
+| `AgentRoleBinding` | verb `grant` on `agentroles/<roleRef>` |
+| `CrossNamespaceGrant` | verb `grant` on each named kind and name in `from`; a wildcard name or `to: "*"` requires the verb cluster-wide (no namespace) |
+
+The check runs on create and on any update that changes the target, and not on
+delete, so revocation stays available. `kognition-grant-admin` is generated with
+`grant` on those kinds in its namespace, so the shipped role keeps working; an
+operator narrows it by binding a custom Role with `resourceNames`. Existing grants
+are untouched. The plan's `grant` class and the catalog gain the verb, with the
+catalog test enforcing that no other role holds it.
+
+**What the owners are asked to decide.**
+
+1. Approve option C and the verb name `grant`.
+2. Confirm the shipped `kognition-grant-admin` holds `grant` namespace-wide by
+   default (no regression) and that narrowing is the operator's job.
+3. Confirm wildcard and cross-namespace shares require the cluster-wide verb.
+4. Confirm `AgentRole` also applies the hold-the-permissions rule.
+
+**Residual after C.** It prevents delegating what the author may not delegate. It
+does not stop a trusted grant-admin who holds `grant` from granting it to the wrong
+Agent; that is what the grant review process, not RBAC, is for. It also does not
+separate authoring from granting for a subject bound to both roles, which is a
+bundle choice (see the recommended bundles).
+
+**Implementation (T-0452).** An admission hook beside the Solution and AgentJob
+authorizers, the verb added to the catalog and chart, unit and handler tests, and a
+real-API-server test, written first. `AgentRole` rule resources are Kognition kind
+strings, so the hook maps them to plural resource names and rejects any it cannot
+map (fail closed).
+
+### Proposal for OD-1: end-user chat with an Agent
+
+**Problem.** CLI and Studio chat create an `AgentInstance` and poll it. No shipped
+role can create one, `invoke` is not checked for a person on that path, and RBAC
+cannot limit a reader to the instances they created. Granting `create` and `get`
+as-is would let any holder run any Agent and read every caller's prompts and
+results in the namespace.
+
+| Option | How it works | Strengths | Weaknesses |
+| --- | --- | --- | --- |
+| A. Ship nothing; document chat as privileged | Status quo. | No risk added. | Least-privilege chat is impossible through the CLI or Studio. |
+| B. Admission `invoke` check on `AgentInstance` creation, no read access | Require `invoke` on the Agent, grant `create` only. | Closes the authority gap. | The client cannot read the answer without `get`; unusable. |
+| C. Admission `invoke` check plus `create` and `get`, with namespace-wide visibility accepted and documented (recommended now) | A new, narrowly named role `kognition-chat` holds `create` and `get` on `agentinstances`; admission requires `invoke` on the named Agent for the caller. | Small, reuses the proven check, and fits the model: the namespace is the isolation boundary, and `run-viewer` and `auditor` already read every instance there. Per-Agent scoping works through `resourceNames` on `invoke`. | Anyone holding `kognition-chat` can read other holders' chat prompts and results in the same namespace. Isolation between people needs separate namespaces. |
+| D. Aggregated action API (the staged stack) | A server filters by the caller's identity. | True per-caller isolation, and client-certificate parity for approvals. | Large; separate approval and security review. |
+
+**Recommendation: C now, D as the long-term answer.** C delivers least-privilege
+chat without waiting for the extension API, but only if the owners explicitly accept
+its exposure. D remains the way to get per-caller result isolation and is staged
+separately.
+
+Requirements if C is approved:
+
+- Admission checks verb `invoke` on the named Agent for the requesting user on
+  `AgentInstance` creation, failing closed. The controller service account is
+  exempt (it creates instances for jobs and autoscaling after their own checks).
+  The same check already protects `AgentJob`.
+- `kognition-chat` is a separate role, not part of `kognition-consumer`, so the
+  result-visibility exposure is an explicit, opt-in binding.
+- The role is added to the catalog with its own tests, and the documentation states
+  plainly that chat prompts and results are readable by every holder of
+  `kognition-chat`, `kognition-run-viewer` and `kognition-auditor` in the namespace.
+
+**What the owners are asked to decide.**
+
+1. Accept namespace-wide visibility of chat results for holders of the role, or
+   require D before shipping any chat role.
+2. If accepted, approve a separate `kognition-chat` role.
+3. Confirm per-person isolation is delivered by namespace separation until D exists.
+
+**Implementation (T-0468).** The `invoke` check on `AgentInstance`, the role and its
+envtest matrix, and the documentation, written first. If the owners require D, this
+task is replaced by US-0121.
+
 ## Consequences
 
 **Positive.**
