@@ -118,7 +118,7 @@ func (h *RuntimeApprovalReconciliationHandler) ServeHTTP(response http.ResponseW
 			Namespace: input.Namespace, Verb: "reconcile", Group: "kognition.dev", Resource: "runtimeapprovals", Subresource: "reconcile", Name: input.Name,
 		},
 	}}, metav1.CreateOptions{})
-	if err != nil || accessReview == nil {
+	if err != nil || accessReview == nil || accessReview.Status.EvaluationError != "" {
 		http.Error(response, "authorization unavailable", http.StatusServiceUnavailable)
 		return
 	}

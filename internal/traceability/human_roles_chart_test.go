@@ -231,7 +231,7 @@ func TestRenderedHumanRolesReferenceOnlyInstalledKinds(test *testing.T) {
 	}
 }
 
-func TestAccessAdminBindsExactlyTheRenderedHumanRoles(test *testing.T) {
+func TestAccessAdminBindsExactlyTheNamespaceBoundHumanRoles(test *testing.T) {
 	chart := renderHumanRoleChart(test, "--set", "mode=kubernetes")
 	admin, ok := chart.roles["kognition-access-admin"]
 	if !ok {
@@ -249,8 +249,18 @@ func TestAccessAdminBindsExactlyTheRenderedHumanRoles(test *testing.T) {
 		}
 	}
 	sort.Strings(bound)
-	if want := sortedKeys(chart.roles); !reflect.DeepEqual(bound, want) {
-		test.Fatalf("access-admin may bind %v, want exactly the rendered human roles %v", bound, want)
+	var want []string
+	for _, role := range accesscatalog.Default().Roles {
+		if role.Binding == accesscatalog.BindingNamespace {
+			want = append(want, role.Name)
+		}
+	}
+	sort.Strings(want)
+	if len(want) == 0 || len(want) == len(chart.roles) {
+		test.Fatalf("the check needs both namespace-bound and cluster-bound roles; got %d of %d", len(want), len(chart.roles))
+	}
+	if !reflect.DeepEqual(bound, want) {
+		test.Fatalf("access-admin may bind %v, want exactly the namespace-bound roles %v", bound, want)
 	}
 }
 

@@ -127,6 +127,13 @@ helm lint deploy/helm/kognition
 go test .\internal\accesscatalog .\tools\access-catalog
 go test .\internal\traceability -run 'HumanRole|RenderedHuman|AccessAdminBinds|CommittedHuman'
 
+# The same roles against a real kube-apiserver with RBAC enabled (envtest). The
+# suite renders the chart with helm, installs the roles, binds one authenticated
+# principal per role and checks the outcome of real requests. It needs helm and
+# the envtest binaries; it takes under a minute.
+$env:KUBEBUILDER_ASSETS = (setup-envtest use 1.30.x -p path)
+go test -tags integration -count=1 .\internal\k8s\accesscontrol
+
 # Deployed Kubernetes memory gateway, raw-service authorization boundary,
 # revoked-grant provenance filtering, lifecycle/cascade audit, and denied
 # operation audit latency for get/list/search.

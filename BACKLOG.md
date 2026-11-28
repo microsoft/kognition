@@ -143,7 +143,7 @@ All identifiers follow the schema defined in PROJECT.md Section 0.5.
 | EPIC-0022 | Demo Trustworthiness Hardening | MVP-3, MVP-4, MVP-7 | US-0088..US-0090 | EPIC-0008, EPIC-0009, EPIC-0014, EPIC-0018 | In progress |
 | EPIC-0023 | Kognition Studio Authoring Completion | MVP-1, MVP-3, MVP-4, MVP-7 | US-0092..US-0099 | Existing API slices of EPIC-0001, EPIC-0004, EPIC-0005, EPIC-0006, EPIC-0008, EPIC-0009, EPIC-0013, EPIC-0018, EPIC-0021 | In progress: authoring and core tutorial locally verified; installed/protected-action and pilot qualification open |
 | EPIC-0024 | External A2A Agents (ExternalAgent) | MVP-3, MVP-4 (security support) | US-0100..US-0113 | EPIC-0003, EPIC-0004, EPIC-0006, EPIC-0008, EPIC-0009, EPIC-0019, EPIC-0023 | Planned: v1 (US-0100..US-0106) approved; later evolution (US-0107..US-0113) designed, not approved |
-| EPIC-0025 | Kubernetes Human Access Control | MVP-3 (security support) | US-0114..US-0123 | EPIC-0008, EPIC-0009, EPIC-0015, EPIC-0018, EPIC-0023 | In progress: US-0114 done, US-0115 in progress; stack 1 (US-0114..US-0120) owner-directed 2026-11-27; US-0121..US-0123 designed, not approved |
+| EPIC-0025 | Kubernetes Human Access Control | MVP-3 (security support) | US-0114..US-0123 | EPIC-0008, EPIC-0009, EPIC-0015, EPIC-0018, EPIC-0023 | In progress: US-0114 done; US-0115 and US-0116 in progress; stack 1 (US-0114..US-0120) owner-directed 2026-11-27; US-0121..US-0123 designed, not approved |
 
 ---
 
@@ -3607,10 +3607,10 @@ endpoints, non-CRD audit evidence) are stated, not hidden.
 | ID | Test | Traces |
 |---|---|---|
 | TC-0391 | **Passing:** Kubernetes mode renders the 15 expected ClusterRoles with names and labels; standalone mode renders none; `rbac.humanRoles.enabled=false` renders none; no RoleBinding or ClusterRoleBinding references a human role in any mode; no aggregation labels by default. | FR-0412 |
-| TC-0392 | **Passing:** Every resource in a rendered role belongs to an installed CRD (or the RBAC resources used by `kognition-access-admin`); that role's `bind` is limited to exactly the `kognition-*` role names; rendered output equals generator output. | FR-0412, FR-0411, MVP-3 |
+| TC-0392 | **Passing:** Every resource in a rendered role belongs to an installed CRD (or the RBAC resources used by `kognition-access-admin`); that role's `bind` is limited to exactly the namespace-bound `kognition-*` role names; rendered output equals generator output. | FR-0412, FR-0411, MVP-3 |
 | TC-0393 | **Pending:** Aggregation is off by default; each allowed target adds exactly the documented labels; an unknown target fails schema validation; no aggregated built-in role gains `secrets` or wildcard access. | FR-0412 |
 
-#### US-0116 - Authorization Proven on a Real API Server - PLANNED
+#### US-0116 - Authorization Proven on a Real API Server - IN PROGRESS (forged-identity admission proof moves to the kind tier, T-0459)
 
 > As **Gabriela**, I want evidence from a real Kubernetes API server that each role allows exactly what it should, so that I can trust the roles without reading them.
 
@@ -3625,10 +3625,10 @@ endpoints, non-CRD audit evidence) are stated, not hidden.
 
 | ID | Test | Traces |
 |---|---|---|
-| TC-0394 | **Pending:** Matrix: for every role, kind, verb and scope the `SubjectAccessReview` result and the real request outcome agree with the catalog; cross-namespace and cluster-scoped checks are included; every denial leaves no created or changed object. | FR-0419, FR-0411, MVP-3 |
-| TC-0395 | **Pending:** Custom actions: `use` on workflow A is allowed and on B denied when `resourceNames` names A; `approve` without `reject` works and the reverse; `reconcile` is separate; a forged `approver` or `decidedBy` is rejected; anonymous callers are denied. | FR-0414, FR-0413, MVP-3 |
-| TC-0396 | **Pending:** Escalation: an access-admin cannot bind a role that adds permissions it does not hold (`cluster-admin`, a Secret-reading role) or create a cluster binding, and binding a role whose permissions it already holds is permitted (the subset case, recorded as the native RBAC behavior); a builder cannot create a ToolGrant, ModelGrant or SecretRef; no role reads Secrets; viewer and auditor cannot read `SecretRef`; `kognition-platform-admin` is not cluster-admin. | FR-0419, FR-0413, MVP-3 |
-| TC-0397 | **Pending:** Request-time evaluation: removing a binding or changing a group takes effect on the next request; a `SubjectAccessReview` evaluation error on a webhook-checked action is treated as unavailable and never as allowed. | FR-0419, FR-0414 |
+| TC-0394 | **Passing:** Matrix: for every role, kind, verb and scope the `SubjectAccessReview` result and the real request outcome agree with the catalog (15,900 real requests against a live kube-apiserver with RBAC); cross-namespace and cluster-scoped checks are included; every denied create leaves no object. | FR-0419, FR-0411, MVP-3 |
+| TC-0395 | **Partially passing:** `use` on workflow A is allowed and on B or another namespace denied when `resourceNames` names A; `approve` without `reject` works and the reverse; `reconcile` and the other custom verbs match the catalog for every role and kind. **Open:** a forged `approver` or `decidedBy` rejected for real authenticated principals moves to the kind tier (T-0459); the admission rules are unit-tested today. | FR-0414, FR-0413, MVP-3 |
+| TC-0396 | **Passing:** Escalation: an access-admin binds only the namespace-bound Kognition roles (not the cluster-bound ones), only in its own namespace, cannot bind a role that adds permissions it does not hold (`cluster-admin`, a privileged custom role) and cannot create cluster bindings or Roles; binding a role whose permissions it already holds is permitted (the subset case, recorded as native RBAC behavior); a builder, consumer, grant-admin or platform-admin cannot create bindings; no role reads Secrets, opens `pods/portforward` or lists namespaces, pods or nodes; viewer and auditor cannot read `SecretRef`; `kognition-platform-admin` is not cluster-admin. The aggregated built-ins (`admin`, `edit`, `view`) are empty in envtest and are proven on kind (T-0459). | FR-0419, FR-0413, MVP-3 |
+| TC-0397 | **Passing:** Revoking a binding takes effect on the next request (observed in about a millisecond); the runtime approval decision and reconcile endpoints treat a `SubjectAccessReview` evaluation error as unavailable and never as an allow, even when the review also says allowed. | FR-0419, FR-0414 |
 
 #### US-0117 - Separation-of-Duties Hardening - PLANNED
 
@@ -3701,7 +3701,7 @@ endpoints, non-CRD audit evidence) are stated, not hidden.
 
 | ID | Task | US |
 |---|---|---|
-| T-0459 | Add a kind end-to-end script and `make`/`make.ps1` target (`e2e-kubernetes-access`) that installs the chart, creates principals with distinct credential types (client certificate and ServiceAccount token), binds representative roles in two namespaces, and runs the allowed and denied matrix including cross-namespace, escalation and revocation cases, retaining an evidence record. Traces: FR-0419, FR-0412. | US-0120 |
+| T-0459 | Add a kind end-to-end script and `make`/`make.ps1` target (`e2e-kubernetes-access`) that installs the chart, creates principals with distinct credential types (client certificate and ServiceAccount token), binds representative roles in two namespaces, and runs the allowed and denied matrix including cross-namespace, escalation and revocation cases, retaining an evidence record. Include the checks envtest cannot make: binding the aggregated built-ins `admin`, `edit` and `view` is Forbidden for an access-admin, and a forged `ApprovalDecision.spec.approver` or `AutonomyReview.status.decidedBy` is rejected for real principals. Traces: FR-0419, FR-0412. | US-0120 |
 | T-0460 | Run it in the protected-branch or nightly kind tier and after chart upgrade; retain the evidence artifact; document the run in [testing](docs/testing.md). Traces: FR-0419. | US-0120 |
 
 | ID | Test | Traces |
@@ -3867,7 +3867,7 @@ only T-0458 with Studio work, which is the lowest priority and waits.
 |---|---|---|---|---|
 | 1 | P1 | US-0114: T-0440..T-0442 | Done in the first implementation PR of the stack. Design is [ADR-0031](docs/adr/0031-kubernetes-human-access-control.md) and the [plan](docs/development-plans/features/kubernetes-access-control/plan.md). | TC-0388..TC-0390 pass; every kind classified. The CI drift check that runs `tools/access-catalog --check` is T-0445 and starts once the template exists (US-0115). |
 | 2 | P1 | US-0115: T-0443, T-0445 | Done in the second implementation PR; T-0444 (opt-in aggregation) remains. OD-3 (install default) is implemented as the proposed default (enabled) and still needs maintainer confirmation. | TC-0391, TC-0392 pass in the Go chart tests; the regression suite and the CI drift step pass. |
-| 3 | P1 | US-0116: T-0446..T-0449 | After rank 2. Verify the envtest API server's authorization mode first. | TC-0394..TC-0397 pass in the `integration` tier against Kubernetes 1.30.x. |
+| 3 | P1 | US-0116: T-0446..T-0449 | Done in the third implementation PR except the forged-identity admission proof, which moves to the kind tier (T-0459). The envtest API server enforces RBAC. | TC-0394, TC-0396, TC-0397 pass and TC-0395 passes except the forgery part, in the `integration` tier against Kubernetes 1.30.x. |
 | 4 | P1 | US-0117: T-0450, T-0451, T-0467, T-0470, T-0472, T-0473 | Start after T-0446 (needs a real API server). T-0451, T-0467 and T-0470 begin with a failing characterization test; T-0470 is a prerequisite for shipping the consumer role's `agentjobs` permission. T-0472 and T-0473 are small, independent and ready now. T-0471 is optional (P3). T-0452 and T-0468 are blocked on the OD-2 and OD-1 decisions (see the ADR review section). | TC-0398, TC-0399, TC-0414, TC-0417, TC-0419, TC-0420 pass; the review record lists accepted residuals. |
 | 5 | P1 | US-0118: T-0453..T-0455 | After ranks 2 and 3, so documentation states only verified behavior. Needs Node 24 for website validation. | TC-0401, TC-0402 pass. |
 | 6 | P2 | US-0119: T-0456, T-0457 | After rank 3. | TC-0403, TC-0404 pass. |
